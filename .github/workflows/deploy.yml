@@ -18,8 +18,11 @@ jobs:
       with:
         node-version: '18.x'
 
-    - name: Install dependencies
-      run: npm ci
+    - name: Install dependencies (skip build scripts)
+      run: npm install --ignore-scripts
+      env:
+        # 跳过 rclnodejs 的构建
+        SKIP_RCLNODEJS_BUILD: true
 
     - name: Build frontend
       run: npm run build
