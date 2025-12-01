@@ -1,62 +1,63 @@
-name: Build and Deploy Frontend
+name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: [ main, master ]
+    branches:
+      - main
+      - master
   workflow_dispatch:
 
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: 'pages'
+  cancel-in-progress: true
+
 jobs:
-  build-and-deploy:
+  build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0  # 需要完整的 git 历史用于部署
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: '18.x'
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: npm
 
-    - name: Install dependencies (skip build scripts)
-      run: npm install --ignore-scripts
-      env:
-        # 跳过 rclnodejs 的构建
-        SKIP_RCLNODEJS_BUILD: true
+      - name: Install dependencies (skip build scripts)
+        run: npm ci --ignore-scripts
+        env:
+          # 跳过 rclnodejs 的构建
+          SKIP_RCLNODEJS_BUILD: true
 
-    - name: Build frontend
-      run: npm run build
-    
-    - name: Debug info
-      run: |
-        echo "=== Debug Information ==="
-        echo "Event name: ${{ github.event_name }}"
-        echo "Ref: ${{ github.ref }}"
-        echo "Branch: ${{ github.ref_name }}"
-        echo "Repository: ${{ github.repository }}"
-        echo ""
-    
-    - name: Check build output
-      run: |
-        echo "Build output directory contents:"
-        ls -la dist/ || echo "dist directory not found"
-        echo ""
-        echo "Dist directory size:"
-        du -sh dist/ || echo "Cannot calculate size"
-        echo ""
-        echo "First few files in dist:"
-        ls -la dist/ | head -20 || echo "Cannot list files"
-    
-    - name: Deploy to GitHub Pages
-      uses: peaceiris/actions-gh-pages@v3
-      with:
-        github_token: ${{ secrets.GITHUB_TOKEN }}
-        publish_dir: ./dist
-        cname: false
-        force_orphan: false
-        user_name: 'github-actions[bot]'
-        user_email: 'github-actions[bot]@users.noreply.github.com'
+      - name: Build
+        run: npm run build
+
+      - name: Check build output
+        run: |
+          echo "Build output directory contents:"
+          ls -la dist/ || echo "dist directory not found"
+          echo ""
+          echo "Dist directory size:"
+          du -sh dist/ || echo "Cannot calculate size"
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
