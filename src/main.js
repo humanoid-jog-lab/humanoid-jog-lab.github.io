@@ -7,6 +7,7 @@ import * as THREE from 'three';
 import { RobotVisualizer } from './visualizer.js';
 import { extractMDHFromURDF, createMDHTestSuite, FRANKA_PANDA_MDH_REFERENCE, formatMDHForDQ } from './urdf-to-mdh.js';
 import { URDFPackageManager, loadURDFFromPackage } from './urdf-loader.js';
+import ROS2Communicator from './ros2-communicator.js';
 
 const RAD_TO_DEG = 180 / Math.PI;
 const DEG_TO_RAD = Math.PI / 180;
@@ -50,6 +51,10 @@ let dualArmSystem = null;  // CooperativeDualArm对象（用于计算绝对位�
 let environmentObjects = [];
 let environmentObjectCounter = 0;
 
+// 关节位置发布定时器
+let jointPositionPublishTimer = null;
+const JOINT_POSITION_PUBLISH_INTERVAL = 50; // 50ms，即20Hz发布频率
+
 const DEFAULT_ENVIRONMENT_BOX_CM = {
     length: 41.5,
     width: 30.5,
@@ -57,6 +62,15 @@ const DEFAULT_ENVIRONMENT_BOX_CM = {
 };
 const DEFAULT_ENVIRONMENT_BOX_COLOR = 0xf97316;
 const ENVIRONMENT_BOX_BASE_OFFSET_X = 0.45; // 米
+
+// ROS 2 通讯
+let ros2Communicator = null;
+let ros2MessageLog = [];
+const ROS2_MAX_LOG_ENTRIES = 50;
+let ros2JointStateSubscribed = false;
+let ros2JointStateTopic = '/arm/joint_states';
+let ros2JointStateButton = null;
+let ros2JointStatusElement = null;
 
 if (typeof window !== 'undefined') {
     window.currentDualArmControlMode = window.currentDualArmControlMode || 'absolute';
@@ -1021,6 +1035,7 @@ function refreshJointControlDisplay() {
 async function initVisualizer() {
     const canvas = document.getElementById('robot-canvas');
     visualizer = new RobotVisualizer(canvas);
+    window.visualizer = visualizer;
     await visualizer.init();
     
     // 根据UI初始化点动乘法顺序
@@ -1539,6 +1554,20 @@ async function loadDualArmSystem(firstRobot, config) {
         // 保存URDF对象引用（用于更新关节角度）
         robot1URDF = robot1URDFObj;
         robot2URDF = robot2URDFObj;
+        
+        // 设置visualizer的URDF引用
+        if (visualizer) {
+            visualizer.robot1URDF = robot1URDFObj;
+            visualizer.robot2URDF = robot2URDFObj;
+            
+            // 初始化URDF坐标系显示（如果开关已打开）- 双臂模式同时初始化两个机器人
+            if (visualizer.showURDFFrames) {
+                // 双臂模式：同时初始化两个机器人的坐标系
+                const robot1Links = robot1URDFObj && robot1URDFObj.links ? Object.keys(robot1URDFObj.links) : [];
+                const robot2Links = robot2URDFObj && robot2URDFObj.links ? Object.keys(robot2URDFObj.links) : [];
+                visualizer.initURDFFrames(null, null, robot1URDFObj, robot2URDFObj);
+            }
+        }
         
         // 设置双臂模式标志
         dualArmMode = true;
@@ -2446,6 +2475,16 @@ function setupEventListeners() {
         });
     }
     
+    // URDF坐标系显示开关
+    const urdfFramesToggle = document.getElementById('show-urdf-frames-toggle');
+    if (urdfFramesToggle) {
+        urdfFramesToggle.addEventListener('change', (e) => {
+            if (visualizer) {
+                visualizer.toggleURDFFrames(e.target.checked);
+            }
+        });
+    }
+    
     const angleUnitToggle = document.getElementById('angle-unit-toggle');
     if (angleUnitToggle) {
         const updateAngleUnitToggleLabel = () => {
@@ -2830,6 +2869,13 @@ async function handleDrop(items) {
     console.log('═══════════════════════════════════════════\n');
     
     try {
+        // 在加载新模型前，先清理所有旧模型
+        if (visualizer && typeof visualizer.cleanupOldRobots === 'function') {
+            console.log('0️⃣ 清理旧模型...');
+            visualizer.cleanupOldRobots();
+            console.log('✓ 旧模型已清理');
+        }
+        
         console.log('1️⃣ 创建包管理器...');
         packageManager = new URDFPackageManager();
         await packageManager.addFiles(items);
@@ -3620,8 +3666,976 @@ function setupFloatingPanels() {
         });
     });
 
+    // ROS 2 通讯事件处理
+    setupROS2EventListeners();
+    setupInverseKinematicsControls();
+    setupDQCalculatorPanel();
+    
     initializeDock();
     refreshDockState();
+}
+
+/**
+ * 设置 ROS 2 事件监听器
+ */
+function setupROS2EventListeners() {
+    // ROS 2 WebSocket 地址设置
+    const websocketUrlInput = document.getElementById('ros2-websocket-url');
+    const saveUrlBtn = document.getElementById('ros2-save-url-btn');
+    
+    if (websocketUrlInput && saveUrlBtn) {
+        // 页面加载时，显示保存的地址
+        const savedUrl = localStorage.getItem('ros2-websocket-url');
+        if (savedUrl) {
+            websocketUrlInput.value = savedUrl;
+        }
+        
+        // 保存 URL 按钮
+        saveUrlBtn.addEventListener('click', () => {
+            const url = websocketUrlInput.value.trim();
+            
+            if (!url) {
+                addROS2LogEntry('请输入有效的地址', 'warn');
+                return;
+            }
+            
+            if (!url.startsWith('ws://') && !url.startsWith('wss://')) {
+                addROS2LogEntry('地址必须以 ws:// 或 wss:// 开头', 'warn');
+                return;
+            }
+            
+            // 如果已连接，先断开
+            if (ros2Communicator && ros2Communicator.isConnected) {
+                ros2Communicator.shutdown();
+            }
+            
+            // 保存新地址
+            if (ros2Communicator) {
+                ros2Communicator.setWebSocketUrl(url);
+            }
+            
+            localStorage.setItem('ros2-websocket-url', url);
+            addROS2LogEntry(`✓ 地址已保存: ${url}，请重新连接`, 'info');
+        });
+        
+        // 回车保存
+        websocketUrlInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                saveUrlBtn.click();
+            }
+        });
+    }
+
+    // ROS 2 连接按钮
+    const connectBtn = document.getElementById('ros2-connect-btn');
+    if (connectBtn) {
+        connectBtn.addEventListener('click', async () => {
+            if (!ros2Communicator) {
+                // 先读取 URL 输入框的值
+                const urlInput = document.getElementById('ros2-websocket-url');
+                const customUrl = urlInput ? urlInput.value.trim() : null;
+                
+                await initROS2Communication(customUrl);
+            } else if (ros2Communicator.getStatus() === 'connected') {
+                await ros2Communicator.shutdown();
+                updateROS2StatusDisplay('disconnected');
+            } else {
+                await ros2Communicator.init();
+            }
+        });
+    }
+
+    updateIKRobotSelection();
+    
+    // ROS 2 刷新话题按钮
+    const refreshTopicsBtn = document.getElementById('ros2-refresh-topics-btn');
+    if (refreshTopicsBtn) {
+        refreshTopicsBtn.addEventListener('click', async () => {
+            if (ros2Communicator && ros2Communicator.isInitialized) {
+                updateROS2ActiveTopics();
+                addROS2LogEntry('刷新话题列表', 'info');
+            }
+        });
+    }
+    
+    // ROS 2 订阅按钮
+    const subscribeBtn = document.getElementById('ros2-subscribe-btn');
+    if (subscribeBtn) {
+        subscribeBtn.addEventListener('click', async () => {
+            if (!ros2Communicator || !ros2Communicator.isInitialized) {
+                addROS2LogEntry('ROS 2 未连接', 'error');
+                return;
+            }
+            
+            const topicName = document.getElementById('ros2-topic-name').value.trim();
+            const messageType = document.getElementById('ros2-message-type').value;
+            
+            if (!topicName) {
+                addROS2LogEntry('请输入话题名称', 'warn');
+                return;
+            }
+            
+            try {
+                const result = await ros2Communicator.subscribe(topicName, messageType, (message) => {
+                    console.log(`收到消息从 ${topicName}:`, message);
+                    addROS2LogEntry(`收到: ${topicName}`, 'info');
+                });
+                
+                if (result) {
+                    updateROS2ActiveTopics();
+                    addROS2LogEntry(`成功订阅: ${topicName}`, 'info');
+                } else {
+                    addROS2LogEntry(`订阅失败: ${topicName}`, 'error');
+                }
+            } catch (error) {
+                addROS2LogEntry(`订阅异常: ${error.message}`, 'error');
+            }
+        });
+    }
+    
+    // ROS 2 发布按钮
+    const publishBtn = document.getElementById('ros2-publish-btn');
+    if (publishBtn) {
+        publishBtn.addEventListener('click', async () => {
+            if (!ros2Communicator || !ros2Communicator.isInitialized) {
+                addROS2LogEntry('ROS 2 未连接', 'error');
+                return;
+            }
+            
+            const topicName = document.getElementById('ros2-topic-name').value.trim();
+            const messageType = document.getElementById('ros2-message-type').value;
+            
+            if (!topicName) {
+                addROS2LogEntry('请输入话题名称', 'warn');
+                return;
+            }
+            
+            try {
+                // 这里创建一个空消息作为示例
+                const message = ros2Communicator.rclnodejs.createMessageObject(messageType);
+                const result = await ros2Communicator.publish(topicName, messageType, message);
+                
+                if (result) {
+                    updateROS2ActiveTopics();
+                    addROS2LogEntry(`成功发布: ${topicName}`, 'info');
+                } else {
+                    addROS2LogEntry(`发布失败: ${topicName}`, 'error');
+                }
+            } catch (error) {
+                addROS2LogEntry(`发布异常: ${error.message}`, 'error');
+            }
+        });
+    }
+    
+    // ROS 2 发送 Twist 消息按钮
+    const sendTwistBtn = document.getElementById('ros2-send-twist-btn');
+    if (sendTwistBtn) {
+        sendTwistBtn.addEventListener('click', async () => {
+            if (!ros2Communicator || !ros2Communicator.isInitialized) {
+                addROS2LogEntry('ROS 2 未连接', 'error');
+                return;
+            }
+            
+            const topicName = document.getElementById('ros2-topic-name').value.trim() || '/cmd_vel';
+            
+            try {
+                const linearX = parseFloat(document.getElementById('ros2-twist-linear-x').value) || 0;
+                const linearY = parseFloat(document.getElementById('ros2-twist-linear-y').value) || 0;
+                const linearZ = parseFloat(document.getElementById('ros2-twist-linear-z').value) || 0;
+                const angularZ = parseFloat(document.getElementById('ros2-twist-angular-z').value) || 0;
+                
+                const result = await ros2Communicator.publishTwist(
+                    topicName,
+                    { x: linearX, y: linearY, z: linearZ },
+                    { x: 0, y: 0, z: angularZ }
+                );
+                
+                if (result) {
+                    addROS2LogEntry(`Twist 消息已发送: ${topicName} (vx=${linearX}, vy=${linearY}, wz=${angularZ})`, 'info');
+                } else {
+                    addROS2LogEntry(`Twist 消息发送失败`, 'error');
+                }
+            } catch (error) {
+                addROS2LogEntry(`发送 Twist 异常: ${error.message}`, 'error');
+            }
+        });
+    }
+
+    setupRealJointStateControls();
+
+    // 关节位置发布控制（开关模式）
+    const jointPositionToggle = document.getElementById('ros2-joint-position-toggle');
+    if (jointPositionToggle) {
+        jointPositionToggle.addEventListener('change', (e) => {
+            const isEnabled = e.target.checked;
+            
+            if (isEnabled) {
+                // 开启持续发布
+                startJointPositionPublishing();
+            } else {
+                // 停止发布
+                stopJointPositionPublishing();
+            }
+        });
+    }
+}
+
+/**
+ * 更新关节位置发布状态显示
+ */
+function updateJointPositionStatus(message, type = 'info') {
+    const statusEl = document.getElementById('ros2-joint-position-status');
+    if (!statusEl) return;
+
+    statusEl.textContent = message;
+    statusEl.style.color = {
+        'success': '#10b981',
+        'error': '#ef4444',
+        'warn': '#f59e0b',
+        'info': '#94a3b8'
+    }[type] || '#94a3b8';
+}
+
+/**
+ * 发布关节位置消息（内部函数）
+ */
+async function publishJointPositionMessage() {
+    if (!ros2Communicator || !ros2Communicator.isInitialized) {
+        updateJointPositionStatus('ROS 2 未连接', 'error');
+        return false;
+    }
+
+    const topicName = document.getElementById('ros2-joint-position-topic')?.value.trim();
+    if (!topicName) {
+        updateJointPositionStatus('话题名称未设置', 'error');
+        return false;
+    }
+
+    try {
+        // 固定参数：运行模式=1，机器人电源=true，运行时间=0
+        const messageData = {
+            run_mode: 1,
+            robot_power: true,
+            run_time: 0
+        };
+
+        // 根据单臂/双臂模式填充关节角度
+        if (dualArmMode) {
+            // 双臂模式：根据URDF定义，robot1(panda_1)是右臂，robot2(panda_2)是左臂
+            const angles1 = jointAngles1 || [];  // robot1 (panda_1) = 右臂
+            const angles2 = jointAngles2 || [];  // robot2 (panda_2) = 左臂
+
+            // 填充左臂关节（robot2, panda_2）
+            messageData.ljoint1_position = angles2[0] ?? 0;
+            messageData.ljoint2_position = angles2[1] ?? 0;
+            messageData.ljoint3_position = angles2[2] ?? 0;
+            messageData.ljoint4_position = angles2[3] ?? 0;
+            messageData.ljoint5_position = angles2[4] ?? 0;
+            messageData.ljoint6_position = angles2[5] ?? 0;
+            messageData.ljoint7_position = angles2[6] ?? 0;
+
+            // 填充右臂关节（robot1, panda_1）
+            messageData.rjoint1_position = angles1[0] ?? 0;
+            messageData.rjoint2_position = angles1[1] ?? 0;
+            messageData.rjoint3_position = angles1[2] ?? 0;
+            messageData.rjoint4_position = angles1[3] ?? 0;
+            messageData.rjoint5_position = angles1[4] ?? 0;
+            messageData.rjoint6_position = angles1[5] ?? 0;
+            messageData.rjoint7_position = angles1[6] ?? 0;
+        } else {
+            // 单臂模式：作为右臂，左臂填充0
+            const angles = jointAngles || [];
+
+            // 左臂全部为0
+            messageData.ljoint1_position = 0;
+            messageData.ljoint2_position = 0;
+            messageData.ljoint3_position = 0;
+            messageData.ljoint4_position = 0;
+            messageData.ljoint5_position = 0;
+            messageData.ljoint6_position = 0;
+            messageData.ljoint7_position = 0;
+
+            // 填充右臂关节（7个）
+            messageData.rjoint1_position = angles[0] ?? 0;
+            messageData.rjoint2_position = angles[1] ?? 0;
+            messageData.rjoint3_position = angles[2] ?? 0;
+            messageData.rjoint4_position = angles[3] ?? 0;
+            messageData.rjoint5_position = angles[4] ?? 0;
+            messageData.rjoint6_position = angles[5] ?? 0;
+            messageData.rjoint7_position = angles[6] ?? 0;
+        }
+
+        // 发布消息
+        const result = await ros2Communicator.publishRobotArmServoMsg(topicName, messageData);
+        return result;
+    } catch (error) {
+        console.error('发布关节位置消息失败:', error);
+        return false;
+    }
+}
+
+/**
+ * 开始持续发布关节位置
+ */
+function startJointPositionPublishing() {
+    // 如果已经在发布，先停止
+    if (jointPositionPublishTimer !== null) {
+        clearInterval(jointPositionPublishTimer);
+    }
+
+    // 检查ROS2连接
+    if (!ros2Communicator || !ros2Communicator.isInitialized) {
+        updateJointPositionStatus('ROS 2 未连接，无法发布', 'error');
+        const toggle = document.getElementById('ros2-joint-position-toggle');
+        if (toggle) toggle.checked = false;
+        return;
+    }
+
+    const topicName = document.getElementById('ros2-joint-position-topic')?.value.trim();
+    if (!topicName) {
+        updateJointPositionStatus('请设置话题名称', 'error');
+        const toggle = document.getElementById('ros2-joint-position-toggle');
+        if (toggle) toggle.checked = false;
+        return;
+    }
+
+    // 立即发布一次
+    publishJointPositionMessage();
+
+    // 设置定时器持续发布
+    jointPositionPublishTimer = setInterval(() => {
+        publishJointPositionMessage();
+    }, JOINT_POSITION_PUBLISH_INTERVAL);
+
+    updateJointPositionStatus(`正在持续发布到: ${topicName} (${1000/JOINT_POSITION_PUBLISH_INTERVAL}Hz)`, 'success');
+    addROS2LogEntry(`开始持续发布关节位置到: ${topicName}`, 'info');
+}
+
+/**
+ * 停止持续发布关节位置
+ */
+function stopJointPositionPublishing() {
+    if (jointPositionPublishTimer !== null) {
+        clearInterval(jointPositionPublishTimer);
+        jointPositionPublishTimer = null;
+    }
+    updateJointPositionStatus('已停止发布', 'info');
+    addROS2LogEntry('已停止关节位置发布', 'info');
+}
+
+function setupDQCalculatorPanel() {
+    const loadBtn = document.getElementById('dq-calculator-load-current');
+    const applyBtn = document.getElementById('dq-calculator-apply');
+    const copyInputBtn = document.getElementById('dq-calculator-copy-input');
+    const copyOutputBtn = document.getElementById('dq-calculator-copy-output');
+    const statusEl = document.getElementById('dq-calculator-status');
+    const inputEl = document.getElementById('dq-calculator-input');
+    const outputEl = document.getElementById('dq-calculator-output');
+
+    if (!loadBtn && !applyBtn && !copyInputBtn && !copyOutputBtn) {
+        return;
+    }
+
+    updateDQCalculatorRobotSelection();
+
+    if (loadBtn) {
+        loadBtn.addEventListener('click', () => {
+            const robotChoice = document.getElementById('dq-calculator-robot')?.value || 'robot1';
+            const dqArray = getCurrentRobotDQ(robotChoice);
+            if (!dqArray) {
+                setDQCalculatorStatus('无法获取当前姿态的双四元数', 'error');
+                return;
+            }
+            if (inputEl) {
+                inputEl.value = formatDualQuaternion(dqArray);
+            }
+            setDQCalculatorStatus('已加载当前姿态的双四元数', 'success');
+        });
+    }
+
+    if (copyInputBtn && inputEl) {
+        copyInputBtn.addEventListener('click', async () => {
+            await copyTextToClipboard(inputEl.value || '', '输入双四元数');
+        });
+    }
+
+    if (copyOutputBtn && outputEl) {
+        copyOutputBtn.addEventListener('click', async () => {
+            await copyTextToClipboard(outputEl.value || '', '输出双四元数');
+        });
+    }
+
+    if (applyBtn) {
+        applyBtn.addEventListener('click', () => {
+            if (!inputEl || !outputEl) {
+                return;
+            }
+
+            const dqArray = parseDualQuaternionInput(inputEl.value || '');
+            if (!dqArray) {
+                setDQCalculatorStatus('请输入 8 个双四元数元素', 'error');
+                return;
+            }
+
+            const tx = parseFloat(document.getElementById('dq-calculator-translate-x')?.value || '0') || 0;
+            const ty = parseFloat(document.getElementById('dq-calculator-translate-y')?.value || '0') || 0;
+            const tz = parseFloat(document.getElementById('dq-calculator-translate-z')?.value || '0') || 0;
+            const mode = document.querySelector('input[name="dq-calculator-mode"]:checked')?.value || 'left';
+
+            if (!window.DQModule || !window.DQModule.DQWrapper) {
+                setDQCalculatorStatus('DQ 模块未加载，无法计算', 'error');
+                return;
+            }
+
+            try {
+                const dqWrapper = window.DQModule.DQWrapper;
+                const dqInput = dqWrapper.createFromArray(dqArray);
+                const dqTranslation = dqWrapper.translation(tx, ty, tz);
+                const { multiply } = dqWrapper;
+
+                const dqResult = mode === 'left'
+                    ? multiply(dqTranslation, dqInput)
+                    : multiply(dqInput, dqTranslation);
+
+                const dqResultArray = dqWrapper.toArray(dqResult);
+                const formatted = formatDualQuaternion(dqResultArray);
+                outputEl.value = formatted;
+                setDQCalculatorStatus('计算完成，可复制结果', 'success');
+            } catch (error) {
+                console.error('DQ 计算失败:', error);
+                setDQCalculatorStatus(`计算失败：${error.message}`, 'error');
+            }
+        });
+    }
+
+    // 从四元数和平移创建DQ的按钮
+    const createFromQuatBtn = document.getElementById('dq-calculator-create-from-quat');
+    const quatStatusEl = document.getElementById('dq-calculator-quat-status');
+    
+    if (createFromQuatBtn) {
+        createFromQuatBtn.addEventListener('click', () => {
+            if (!outputEl) {
+                return;
+            }
+
+            const qw = parseFloat(document.getElementById('dq-calculator-quat-w')?.value || '1') || 1;
+            const qx = parseFloat(document.getElementById('dq-calculator-quat-x')?.value || '0') || 0;
+            const qy = parseFloat(document.getElementById('dq-calculator-quat-y')?.value || '0') || 0;
+            const qz = parseFloat(document.getElementById('dq-calculator-quat-z')?.value || '0') || 0;
+            const tx = parseFloat(document.getElementById('dq-calculator-pos-x')?.value || '0') || 0;
+            const ty = parseFloat(document.getElementById('dq-calculator-pos-y')?.value || '0') || 0;
+            const tz = parseFloat(document.getElementById('dq-calculator-pos-z')?.value || '0') || 0;
+
+            if (!window.DQModule || !window.DQModule.DQWrapper) {
+                setDQCalculatorQuatStatus('DQ 模块未加载，无法计算', 'error');
+                return;
+            }
+
+            try {
+                const dqWrapper = window.DQModule.DQWrapper;
+                
+                // 尝试使用新函数，如果不存在则使用组合方式
+                let dqResult;
+                if (dqWrapper.fromQuaternionAndTranslation) {
+                    // 使用新的专用函数
+                    dqResult = dqWrapper.fromQuaternionAndTranslation(qw, qx, qy, qz, tx, ty, tz);
+                } else {
+                    // 后备方案：使用现有的函数组合
+                    // 从四元数创建旋转DQ（四元数需要归一化）
+                    const quatNorm = Math.sqrt(qw*qw + qx*qx + qy*qy + qz*qz);
+                    if (quatNorm < 1e-10) {
+                        throw new Error('四元数不能为零');
+                    }
+                    const normalizedQw = qw / quatNorm;
+                    const normalizedQx = qx / quatNorm;
+                    const normalizedQy = qy / quatNorm;
+                    const normalizedQz = qz / quatNorm;
+                    
+                    // 创建旋转DQ（实部是归一化的四元数，对偶部为0）
+                    const dqRotation = dqWrapper.createFromArray([normalizedQw, normalizedQx, normalizedQy, normalizedQz, 0, 0, 0, 0]);
+                    // 创建平移DQ
+                    const dqTranslation = dqWrapper.translation(tx, ty, tz);
+                    // DQ = translation * rotation（平移在左，旋转在右）
+                    dqResult = dqWrapper.multiply(dqTranslation, dqRotation);
+                }
+                
+                const dqResultArray = dqWrapper.toArray(dqResult);
+                const formatted = formatDualQuaternion(dqResultArray);
+                outputEl.value = formatted;
+                
+                // 验证：从结果中提取平移，检查是否与输入一致
+                try {
+                    const dqResultObj = dqWrapper.createFromArray(dqResultArray);
+                    const extractedTranslation = dqWrapper.getTranslation(dqResultObj);
+                    const extractedX = extractedTranslation[1];
+                    const extractedY = extractedTranslation[2];
+                    const extractedZ = extractedTranslation[3];
+                    
+                    const diffX = Math.abs(extractedX - tx);
+                    const diffY = Math.abs(extractedY - ty);
+                    const diffZ = Math.abs(extractedZ - tz);
+                    const maxDiff = Math.max(diffX, diffY, diffZ);
+                    
+                    if (maxDiff < 1e-6) {
+                        setDQCalculatorQuatStatus('计算完成，验证通过（平移一致）', 'success');
+                    } else {
+                        setDQCalculatorQuatStatus(`计算完成，但平移验证失败（差异: ${maxDiff.toFixed(6)}）`, 'error');
+                        console.log('输入平移:', tx, ty, tz);
+                        console.log('提取平移:', extractedX, extractedY, extractedZ);
+                    }
+                } catch (verifyError) {
+                    setDQCalculatorQuatStatus('计算完成，但验证失败', 'error');
+                    console.error('验证失败:', verifyError);
+                }
+            } catch (error) {
+                console.error('从四元数创建DQ失败:', error);
+                setDQCalculatorQuatStatus(`计算失败：${error.message}`, 'error');
+            }
+        });
+    }
+
+    function setDQCalculatorStatus(message, type) {
+        if (!statusEl) return;
+        statusEl.textContent = message;
+        statusEl.style.color = type === 'success' ? '#10b981' : '#f87171';
+    }
+
+    function setDQCalculatorQuatStatus(message, type) {
+        if (!quatStatusEl) return;
+        quatStatusEl.textContent = message;
+        quatStatusEl.style.color = type === 'success' ? '#10b981' : '#f87171';
+    }
+
+    async function copyTextToClipboard(text, label) {
+        if (!text) {
+            setDQCalculatorStatus(`没有可复制的${label}`, 'error');
+            return;
+        }
+        try {
+            if (navigator?.clipboard?.writeText) {
+                await navigator.clipboard.writeText(text);
+            } else {
+                const tempInput = document.createElement('textarea');
+                tempInput.value = text;
+                document.body.appendChild(tempInput);
+                tempInput.select();
+                document.execCommand('copy');
+                document.body.removeChild(tempInput);
+            }
+            setDQCalculatorStatus(`已复制${label}`, 'success');
+        } catch (error) {
+            console.error('复制失败:', error);
+            setDQCalculatorStatus(`复制失败：${error.message}`, 'error');
+        }
+    }
+}
+
+/**
+ * 解析双四元数输入（8个数）
+ * @param {string} text
+ * @returns {number[]|null}
+ */
+function parseDualQuaternionInput(text) {
+    if (!text) {
+        return null;
+    }
+
+    const parts = text
+        .trim()
+        .split(/[\s,]+/)
+        .map(value => Number(value))
+        .filter((value) => !Number.isNaN(value));
+
+    if (parts.length !== 8) {
+        return null;
+    }
+    return parts;
+}
+
+/**
+ * 获取当前选中机器人的双四元数
+ * @param {string} robotChoice 
+ * @returns {number[]|null}
+ */
+function getCurrentRobotDQ(robotChoice) {
+    if (!window.DQModule || !window.DQModule.DQWrapper) {
+        console.warn('DQ 模块未加载');
+        return null;
+    }
+
+    try {
+        if (dualArmMode) {
+            if (robotChoice === 'robot2') {
+                if (!window.robot2 || !window.jointAngles2?.length) {
+                    return null;
+                }
+                return window.robot2.fkm(window.jointAngles2);
+            }
+            if (!window.robot1 || !window.jointAngles1?.length) {
+                return null;
+            }
+            return window.robot1.fkm(window.jointAngles1);
+        }
+
+        if (!window.currentRobot || !window.jointAngles?.length) {
+            return null;
+        }
+        return window.currentRobot.fkm(window.jointAngles);
+    } catch (error) {
+        console.error('获取当前双四元数失败:', error);
+        return null;
+    }
+}
+
+function formatDualQuaternion(dqArray) {
+    if (!Array.isArray(dqArray)) {
+        return '';
+    }
+    return dqArray
+        .map((value) => {
+            const rounded = Number(value.toFixed(6));
+            return Number.isFinite(rounded) ? rounded : 0;
+        })
+        .join(',');
+}
+
+/**
+ * 更新 IK 机器人选择依据单/双臂
+ */
+function updateIKRobotSelection() {
+    const ikSelect = document.getElementById('ik-robot-select');
+    const ikStatus = document.getElementById('ik-status');
+    if (!ikSelect) return;
+
+    ikSelect.innerHTML = '';
+    const opt1 = document.createElement('option');
+    opt1.value = 'robot1';
+    opt1.textContent = dualArmMode ? '机器人1' : '机器人';
+    ikSelect.appendChild(opt1);
+
+    if (dualArmMode) {
+        const opt2 = document.createElement('option');
+        opt2.value = 'robot2';
+        opt2.textContent = '机器人2';
+        ikSelect.appendChild(opt2);
+        ikSelect.disabled = false;
+        if (ikStatus) {
+            ikStatus.textContent = '双臂模式：可选择机器人1或机器人2';
+        }
+    } else {
+        ikSelect.disabled = true;
+        if (ikStatus) {
+            ikStatus.textContent = '单臂模式：只控制机器人1';
+        }
+    }
+}
+
+function updateDQCalculatorRobotSelection() {
+    const select = document.getElementById('dq-calculator-robot');
+    if (!select) {
+        return;
+    }
+
+    select.innerHTML = '';
+    const opt1 = document.createElement('option');
+    opt1.value = 'robot1';
+    opt1.textContent = dualArmMode ? '机器人1' : '机器人';
+    select.appendChild(opt1);
+
+    if (dualArmMode) {
+        const opt2 = document.createElement('option');
+        opt2.value = 'robot2';
+        opt2.textContent = '机器人2';
+        select.appendChild(opt2);
+        select.disabled = false;
+    } else {
+        select.disabled = true;
+    }
+}
+
+/**
+ * 控制面板 - 逆运动学按钮
+ */
+function setupInverseKinematicsControls() {
+    const ikSolveBtn = document.getElementById('ik-solve-btn');
+    const copyDqBtn = document.getElementById('copy-dq-btn');
+    const ikStatus = document.getElementById('ik-status');
+    if (!ikSolveBtn && !copyDqBtn) {
+        return;
+    }
+
+    ikSolveBtn.addEventListener('click', () => {
+        const dqText = document.getElementById('ik-dq-input')?.value || '';
+        const dqArray = parseDualQuaternionInput(dqText);
+        if (!dqArray) {
+            addROS2LogEntry('请输入 8 个双四元数元素（逗号或空格分隔）', 'warn');
+            if (ikStatus) {
+                ikStatus.textContent = '请输入 8 个双四元数元素（逗号或空格分隔）';
+                ikStatus.style.color = '#f87171';
+            }
+            return;
+        }
+
+        const robotChoice = document.getElementById('ik-robot-select')?.value || 'robot1';
+        const vis = window.visualizer;
+        if (!vis) {
+            addROS2LogEntry('视觉器未初始化，无法求解逆运动学', 'error');
+            if (ikStatus) {
+                ikStatus.textContent = '视觉器未初始化，无法求解逆运动学';
+                ikStatus.style.color = '#f87171';
+            }
+            return;
+        }
+
+        try {
+            let success = false;
+            if (!dualArmMode) {
+                success = vis.updateSingleArmJointsWithPseudoInverse(dqArray) === true;
+            } else if (robotChoice === 'robot1') {
+                success = vis.updateRobot1JointsWithPseudoInverse(dqArray) === true;
+            } else {
+                success = vis.updateRobot2JointsWithPseudoInverse(dqArray) === true;
+            }
+            if (!success) {
+                addROS2LogEntry('逆运动学求解失败：伪逆求解未收敛', 'warn');
+                if (ikStatus) {
+                    ikStatus.textContent = '逆运动学求解失败：伪逆求解未收敛';
+                    ikStatus.style.color = '#f87171';
+                }
+                return;
+            }
+            if (typeof updateJointSlidersFromAngles === 'function') {
+                updateJointSlidersFromAngles();
+            }
+            if (typeof updateDualArmJointSlidersFromAngles === 'function') {
+                updateDualArmJointSlidersFromAngles();
+            }
+            addROS2LogEntry(`逆运动学求解成功，已更新 ${robotChoice === 'robot1' ? '机器人1' : '机器人2'} 角度`, 'info');
+            if (ikStatus) {
+                ikStatus.textContent = `逆运动学求解成功，已更新 ${robotChoice === 'robot1' ? '机器人1' : '机器人2'} 角度`;
+                ikStatus.style.color = '#10b981';
+            }
+        } catch (error) {
+            console.error('逆运动学求解失败:', error);
+            addROS2LogEntry(`逆运动学失败：${error.message}`, 'error');
+            if (ikStatus) {
+                ikStatus.textContent = `逆运动学失败：${error.message}`;
+                ikStatus.style.color = '#f87171';
+            }
+        }
+    });
+
+    updateIKRobotSelection();
+
+    if (copyDqBtn) {
+        copyDqBtn.addEventListener('click', async () => {
+            const robotChoice = document.getElementById('ik-robot-select')?.value || 'robot1';
+            const dqArray = getCurrentRobotDQ(robotChoice);
+            if (!dqArray) {
+                addROS2LogEntry('无法获取当前姿态的双四元数', 'warn');
+                if (ikStatus) {
+                    ikStatus.textContent = '无法获取当前姿态的双四元数';
+                    ikStatus.style.color = '#f87171';
+                }
+                return;
+            }
+
+            const formatted = dqArray.map((value) => {
+                const rounded = Number(value.toFixed(6));
+                return Number.isFinite(rounded) ? rounded : 0;
+            }).join(',');
+
+            try {
+                if (navigator?.clipboard?.writeText) {
+                    await navigator.clipboard.writeText(formatted);
+                } else {
+                    const tempInput = document.createElement('textarea');
+                    tempInput.value = formatted;
+                    document.body.appendChild(tempInput);
+                    tempInput.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(tempInput);
+                }
+                addROS2LogEntry(`已复制双四元数：${formatted}`, 'info');
+                if (ikStatus) {
+                    ikStatus.textContent = '已复制当前姿态的双四元数';
+                    ikStatus.style.color = '#10b981';
+                }
+            } catch (error) {
+                console.error('复制双四元数失败:', error);
+                addROS2LogEntry(`复制双四元数失败：${error.message}`, 'error');
+                if (ikStatus) {
+                    ikStatus.textContent = `复制失败：${error.message}`;
+                    ikStatus.style.color = '#f87171';
+                }
+            }
+        });
+    }
+}
+
+function setupRealJointStateControls() {
+    const subscribeBtn = document.getElementById('ros2-joint-subscribe-btn');
+    const topicInput = document.getElementById('ros2-joint-topic');
+    ros2JointStatusElement = document.getElementById('ros2-joint-status');
+    ros2JointStateButton = subscribeBtn;
+
+    if (!subscribeBtn) {
+        return;
+    }
+
+    updateJointStateSubscribeButton();
+    setRos2JointStatus(ros2JointStateSubscribed ? `已订阅 ${ros2JointStateTopic}` : '未订阅真机关节状态', 'info');
+
+    subscribeBtn.addEventListener('click', async () => {
+        if (!ros2Communicator || !ros2Communicator.isInitialized) {
+            setRos2JointStatus('请先连接 ROS 2', 'error');
+            return;
+        }
+
+        const topic = topicInput?.value.trim() || '/arm/joint_states';
+
+        if (!ros2JointStateSubscribed) {
+            const success = await ros2Communicator.subscribe(topic, 'sensor_msgs/msg/JointState', handleRealJointStateMessage);
+            if (success) {
+                ros2JointStateSubscribed = true;
+                ros2JointStateTopic = topic;
+                updateJointStateSubscribeButton();
+                setRos2JointStatus(`已订阅 ${topic}`, 'success');
+                addROS2LogEntry(`已订阅真机关节: ${topic}`, 'info');
+            } else {
+                setRos2JointStatus('订阅失败，请检查话题', 'error');
+            }
+        } else {
+            ros2Communicator.unsubscribe(ros2JointStateTopic);
+            ros2JointStateSubscribed = false;
+            updateJointStateSubscribeButton();
+            setRos2JointStatus('已取消订阅', 'warn');
+            addROS2LogEntry('已取消真机关节订阅', 'info');
+        }
+    });
+}
+
+function handleRealJointStateMessage(message) {
+    const names = Array.isArray(message?.name) ? message.name : null;
+    const positions = Array.isArray(message?.position) ? message.position : null;
+    if (!names || !positions || names.length === 0 || positions.length === 0) {
+        return;
+    }
+
+    const updated = applyJointStatesFromMessage(names, positions);
+    if (updated) {
+        if (typeof updateJointSlidersFromAngles === 'function') {
+            updateJointSlidersFromAngles();
+        }
+        if (typeof updateDualArmJointSlidersFromAngles === 'function') {
+            updateDualArmJointSlidersFromAngles();
+        }
+        if (window.updateGlobalVariables) {
+            window.updateGlobalVariables();
+        }
+        if (window.updateRobotPose) {
+            window.updateRobotPose();
+        }
+        setRos2JointStatus(`已接收 ${new Date().toLocaleTimeString()}`, 'success');
+    }
+}
+
+function applyJointStatesFromMessage(names, positions) {
+    if (dualArmMode) {
+        const updatedRight = updateRobotAnglesFromJointState(names, positions, 'robot1');
+        const updatedLeft = updateRobotAnglesFromJointState(names, positions, 'robot2');
+        return updatedRight || updatedLeft;
+    }
+    return updateRobotAnglesFromJointState(names, positions, 'single');
+}
+
+function updateRobotAnglesFromJointState(names, positions, robotKey) {
+    let jointAngles;
+    let jointOrder;
+    let urdf = null;
+    let config = null;
+
+    if (robotKey === 'single') {
+        jointAngles = window.jointAngles;
+        jointOrder = window.customRobotConfig?.joint_chain?.joints || null;
+        urdf = window.visualizer?.urdfRobot || null;
+        config = window.customRobotConfig || null;
+    } else if (robotKey === 'robot1') {
+        jointAngles = window.jointAngles1;
+        jointOrder = window.customRobotConfig?.robot1?.joint_chain?.joints || null;
+        urdf = window.visualizer?.robot1URDF || null;
+        config = window.customRobotConfig?.robot1 || null;
+    } else {
+        jointAngles = window.jointAngles2;
+        jointOrder = window.customRobotConfig?.robot2?.joint_chain?.joints || null;
+        urdf = window.visualizer?.robot2URDF || null;
+        config = window.customRobotConfig?.robot2 || null;
+    }
+
+    if (!jointAngles || jointAngles.length === 0) {
+        return false;
+    }
+
+    const newAngles = [...jointAngles];
+    let updated = false;
+
+    if (jointOrder && jointOrder.length === jointAngles.length) {
+        jointOrder.forEach((jointName, idx) => {
+            const nameIndex = names.indexOf(jointName);
+            if (nameIndex !== -1 && Number.isFinite(positions[nameIndex])) {
+                newAngles[idx] = positions[nameIndex];
+                updated = true;
+            }
+        });
+    } else {
+        let prefix = null;
+        if (dualArmMode) {
+            prefix = robotKey === 'robot2' ? 'l' : 'r';
+        }
+        let assignIndex = 0;
+        for (let i = 0; i < names.length && assignIndex < newAngles.length; i++) {
+            const value = positions[i];
+            if (!Number.isFinite(value)) {
+                continue;
+            }
+            if (!prefix || names[i]?.toLowerCase().startsWith(prefix)) {
+                newAngles[assignIndex] = value;
+                assignIndex += 1;
+                updated = true;
+            }
+        }
+    }
+
+    if (!updated) {
+        return false;
+    }
+
+    if (jointOrder && typeof window.clampJointAngles === 'function') {
+        const clamped = window.clampJointAngles(newAngles, jointOrder, urdf, config);
+        clamped.forEach((value, idx) => {
+            jointAngles[idx] = value;
+        });
+    } else {
+        newAngles.forEach((value, idx) => {
+            jointAngles[idx] = value;
+        });
+    }
+
+    return true;
+}
+
+function updateJointStateSubscribeButton() {
+    if (ros2JointStateButton) {
+        ros2JointStateButton.textContent = ros2JointStateSubscribed ? '取消订阅' : '订阅';
+    }
+}
+
+function setRos2JointStatus(message, type = 'info') {
+    if (!ros2JointStatusElement) {
+        return;
+    }
+    ros2JointStatusElement.textContent = message;
+    ros2JointStatusElement.style.color = type === 'success' ? '#10b981' : type === 'error' ? '#f87171' : '#94a3b8';
 }
 
 /**
@@ -3801,6 +4815,159 @@ function hidePanel(panelId) {
 }
 
 /**
+ * ROS 2 消息日志记录
+ */
+function addROS2LogEntry(message, type = 'info') {
+    const timestamp = new Date().toLocaleTimeString();
+    const logEntry = `[${timestamp}] ${message}`;
+    ros2MessageLog.push({ message: logEntry, type });
+    
+    if (ros2MessageLog.length > ROS2_MAX_LOG_ENTRIES) {
+        ros2MessageLog.shift();
+    }
+    
+    updateROS2LogDisplay();
+}
+
+/**
+ * 更新 ROS 2 消息日志显示
+ */
+function updateROS2LogDisplay() {
+    const logContainer = document.getElementById('ros2-message-log');
+    if (!logContainer) return;
+    
+    if (ros2MessageLog.length === 0) {
+        logContainer.innerHTML = '<div style="color: #94a3b8; font-size: 0.85rem;">暂无消息</div>';
+        return;
+    }
+    
+    logContainer.innerHTML = ros2MessageLog.map(entry => 
+        `<div class="ros2-message-log-entry ${entry.type}">${entry.message}</div>`
+    ).join('');
+    
+    // 滚动到底部
+    logContainer.scrollTop = logContainer.scrollHeight;
+}
+
+/**
+ * 更新 ROS 2 活跃话题列表
+ */
+function updateROS2ActiveTopics() {
+    const topicsContainer = document.getElementById('ros2-active-topics');
+    if (!topicsContainer || !ros2Communicator) return;
+    
+    const subscriptions = ros2Communicator.getActiveSubscriptions();
+    const publishers = ros2Communicator.getActivePublishers();
+    const allTopics = [...new Set([...subscriptions, ...publishers])];
+    
+    if (allTopics.length === 0) {
+        topicsContainer.innerHTML = '<div style="color: #94a3b8; font-size: 0.85rem;">暂无活跃话题</div>';
+        return;
+    }
+    
+    topicsContainer.innerHTML = allTopics.map(topic => {
+        const isSub = subscriptions.includes(topic);
+        const isPub = publishers.includes(topic);
+        const type = isSub && isPub ? '收/发' : isSub ? '订阅' : '发布';
+        
+        return `
+            <div class="ros2-topic-item active">
+                <div>
+                    <span class="ros2-topic-item-name">${topic}</span>
+                    <span class="ros2-topic-item-type">${type}</span>
+                </div>
+                <button class="ros2-topic-remove-btn" onclick="removeROS2Topic('${topic}')">✕</button>
+            </div>
+        `;
+    }).join('');
+}
+
+/**
+ * 移除 ROS 2 话题
+ */
+function removeROS2Topic(topicName) {
+    if (ros2Communicator) {
+        ros2Communicator.unsubscribe(topicName);
+        updateROS2ActiveTopics();
+        addROS2LogEntry(`取消订阅: ${topicName}`, 'info');
+    }
+}
+
+/**
+ * 初始化 ROS 2 通讯
+ */
+async function initROS2Communication(customUrl = null) {
+    try {
+        // 如果提供了自定义 URL，使用它；否则让构造函数从本地存储读取
+        ros2Communicator = new ROS2Communicator(customUrl);
+        
+        // 注册状态变化回调
+        ros2Communicator.onStatusChange((status) => {
+            updateROS2StatusDisplay(status);
+            const statusText = {
+                'disconnected': '未连接',
+                'connecting': '连接中...',
+                'connected': '已连接',
+                'error': '错误'
+            }[status] || status;
+            addROS2LogEntry(`状态: ${statusText}`, 'info');
+            if (status === 'disconnected' && ros2JointStateSubscribed) {
+                ros2JointStateSubscribed = false;
+                updateJointStateSubscribeButton();
+                setRos2JointStatus('连接断开，已停止订阅', 'error');
+            }
+            // 如果断开连接，停止关节位置发布
+            if (status === 'disconnected' || status === 'error') {
+                if (jointPositionPublishTimer !== null) {
+                    stopJointPositionPublishing();
+                    const toggle = document.getElementById('ros2-joint-position-toggle');
+                    if (toggle) toggle.checked = false;
+                }
+            }
+        });
+        
+        // 显示连接的 URL
+        addROS2LogEntry(`连接地址: ${ros2Communicator.getWebSocketUrl()}`, 'info');
+        
+        // 尝试初始化
+        const result = await ros2Communicator.init();
+        if (result) {
+            addROS2LogEntry('ROS 2 初始化成功', 'info');
+        } else {
+            addROS2LogEntry('ROS 2 初始化失败', 'error');
+        }
+    } catch (error) {
+        console.error('ROS 2 初始化异常:', error);
+        addROS2LogEntry(`初始化异常: ${error.message}`, 'error');
+    }
+}
+
+/**
+ * 更新 ROS 2 状态显示
+ */
+function updateROS2StatusDisplay(status) {
+    const indicator = document.getElementById('ros2-status-indicator');
+    const text = document.getElementById('ros2-status-text');
+    
+    if (!indicator || !text) return;
+    
+    // 移除旧状态类
+    ['disconnected', 'connecting', 'connected', 'error'].forEach(s => {
+        indicator.classList.remove(s);
+    });
+    
+    indicator.classList.add(status);
+    
+    const statusMap = {
+        'disconnected': '未连接',
+        'connecting': '连接中...',
+        'connected': '已连接',
+        'error': '错误'
+    };
+    text.textContent = statusMap[status] || status;
+}
+
+/**
  * 切换到双臂UI显示
  */
 function switchToDualArmUI() {
@@ -3859,6 +5026,8 @@ function switchToDualArmUI() {
     }
 
     renderEnvironmentObjectList();
+    updateIKRobotSelection();
+    updateDQCalculatorRobotSelection();
 }
 
 /**
@@ -3889,6 +5058,8 @@ function switchToSingleArmUI() {
     }
 
     renderEnvironmentObjectList();
+    updateIKRobotSelection();
+    updateDQCalculatorRobotSelection();
 }
 
 // 页面加载完成后初始化

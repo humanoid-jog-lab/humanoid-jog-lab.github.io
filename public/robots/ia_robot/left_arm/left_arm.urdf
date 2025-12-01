@@ -78,7 +78,7 @@
     <parent link="llink1" />
     <child link="llink2" />
     <axis xyz="0 0 1" />
-    <limit lower="-0.1" upper="3.14" effort="200" velocity="1" />
+    <limit lower="0.0" upper="3.14" effort="200" velocity="1" />
   </joint>
   <link name="llink3">
     <inertial>

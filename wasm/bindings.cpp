@@ -123,6 +123,26 @@ public:
         return r * t;
     }
     
+    static DQ fromQuaternionAndTranslation(double qw, double qx, double qy, double qz,
+                                            double tx, double ty, double tz) {
+        // 从四元数和平移创建对偶四元数
+        // DQ = translation_dq * rotation_quaternion
+        // 其中 translation_dq = 1 + 0.5 * E * (0, tx, ty, tz)
+        // 首先归一化四元数
+        double quatNorm = std::sqrt(qw*qw + qx*qx + qy*qy + qz*qz);
+        if (quatNorm < 1e-10) {
+            throw std::runtime_error("四元数不能为零");
+        }
+        qw /= quatNorm;
+        qx /= quatNorm;
+        qy /= quatNorm;
+        qz /= quatNorm;
+        
+        DQ r = DQ(qw, qx, qy, qz);  // 归一化的旋转四元数
+        DQ t = DQ(1) + 0.5 * DQ::E * DQ(0, tx, ty, tz);  // 平移对偶四元数
+        return t * r;  // 注意顺序：先平移再旋转
+    }
+    
     static val getTranslation(const DQ& dq) {
         DQ t = ::translation(dq);  // 使用全局函数
         val result = val::array();
@@ -611,6 +631,7 @@ EMSCRIPTEN_BINDINGS(dqrobotics_module) {
         .class_function("rotation", &DQ_Wrapper::rotation)
         .class_function("translation", &DQ_Wrapper::translation)
         .class_function("pose", &DQ_Wrapper::pose)
+        .class_function("fromQuaternionAndTranslation", &DQ_Wrapper::fromQuaternionAndTranslation)
         .class_function("getTranslation", &DQ_Wrapper::getTranslation)
         .class_function("getRotation", &DQ_Wrapper::getRotation)
         .class_function("getRotationMatrix", &DQ_Wrapper::getRotationMatrix);

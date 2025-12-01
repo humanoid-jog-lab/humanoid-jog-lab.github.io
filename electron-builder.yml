@@ -1,0 +1,73 @@
+# Electron Builder 配置文件
+# 用于打包 Electron 应用
+
+appId: com.dq-robotics.vizlab
+productName: DQ Robotics Vizlab
+directories:
+  buildResources: public
+  output: dist/electron
+
+files:
+  - dist/**/*
+  - src/**/*
+  - server/**/*
+  - node_modules/**/*
+  - package.json
+
+# Windows 配置
+win:
+  target:
+    - nsis
+    - portable
+  icon: public/icon.png
+  certificateFile: null
+  certificatePassword: null
+  signingHashAlgorithms:
+    - sha256
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: DQ Robotics Vizlab
+
+# macOS 配置
+mac:
+  target:
+    - dmg
+    - zip
+  icon: public/icon.png
+  category: public.app-category.utilities
+
+dmg:
+  contents:
+    - x: 130
+      y: 220
+      type: file
+    - x: 438
+      y: 220
+      type: link
+      path: /Applications
+
+# Linux 配置
+linux:
+  target:
+    - AppImage
+    - deb
+  icon: public/icon.png
+  category: Science
+
+deb:
+  depends:
+    - libnotify4
+
+# 通用设置
+publish:
+  provider: github
+  owner: yourusername
+  repo: dq-vizlab
+
+# 代码签名（可选）
+afterSign: null
+

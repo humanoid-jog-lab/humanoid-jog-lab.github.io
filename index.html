@@ -40,6 +40,32 @@
                 </div>
 
                 <div class="panel-section">
+                    <h3>逆运动学求解</h3>
+                    <div style="margin-bottom: 0.75rem;">
+                        <label style="font-size: 0.85rem; color: #cbd5e1; display: block; margin-bottom: 0.25rem;">
+                            目标双四元数（8个数，空格/逗号分隔）：
+                        </label>
+                        <input 
+                            type="text" 
+                            id="ik-dq-input" 
+                            placeholder="qw qx qy qz qw' qx' qy' qz'" 
+                            style="width: 100%; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;"
+                        >
+                    </div>
+                    <div style="display: flex; gap: 0.5rem; margin-bottom: 0.5rem;">
+                        <select id="ik-robot-select" style="flex: 1; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;">
+                            <option value="robot1">机器人1</option>
+                            <option value="robot2">机器人2</option>
+                        </select>
+                    <button id="ik-solve-btn" class="demo-btn" style="flex: 1;">求解逆运动学</button>
+                    <button id="copy-dq-btn" class="demo-btn" style="flex: 1;">复制当前双四元数</button>
+                    </div>
+                    <div id="ik-status" style="font-size: 0.75rem; color: #94a3b8;">
+                        使用雅可比伪逆更新当前机器人角度
+                    </div>
+                </div>
+
+                <div class="panel-section">
                     <h2>预设位姿</h2>
                     <div class="preset-buttons">
                         <button class="preset-btn" data-preset="home">初始位置</button>
@@ -76,6 +102,13 @@
                             <input type="checkbox" id="show-mdh-frames-toggle">
                             <span class="toggle-slider"></span>
                             <span class="toggle-label">显示MDH坐标系</span>
+                        </label>
+                    </div>
+                    <div style="margin-top: 1rem;">
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="show-urdf-frames-toggle">
+                            <span class="toggle-slider"></span>
+                            <span class="toggle-label">显示URDF坐标系</span>
                         </label>
                     </div>
                     <div style="margin-top: 1rem;">
@@ -361,6 +394,325 @@
         </div>
     </div>
 
+    <!-- DQ 计算器面板（默认隐藏） -->
+    <div class="floating-panel dq-calculator-panel hidden" id="dq-calculator-panel">
+        <div class="panel-header">
+            <h2>DQ 计算器</h2>
+            <button class="panel-toggle" id="dq-calculator-toggle">+</button>
+        </div>
+        <div class="panel-body">
+            <div class="panel-section">
+                <h3>双四元数输入</h3>
+                <div style="display: flex; gap: 0.5rem; margin-bottom: 0.5rem;">
+                    <select id="dq-calculator-robot" style="flex: 1; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;">
+                        <option value="robot1">机器人</option>
+                    </select>
+                    <button id="dq-calculator-load-current" class="demo-btn" style="flex: 1;">加载当前姿态</button>
+                </div>
+                <textarea id="dq-calculator-input" placeholder="1,0,0,0,0,0,0,0" style="width: 100%; min-height: 70px; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px; margin-bottom: 0.5rem;"></textarea>
+                <button id="dq-calculator-copy-input" class="demo-btn" style="width: 100%;">复制输入</button>
+            </div>
+
+            <div class="panel-section">
+                <h3>从四元数和平移创建DQ</h3>
+                <div style="margin-bottom: 0.75rem;">
+                    <label style="font-size: 0.85rem; color: #cbd5e1; display: block; margin-bottom: 0.25rem;">
+                        四元数 (w, x, y, z)：
+                    </label>
+                    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.5rem; margin-bottom: 0.5rem;">
+                        <input type="number" id="dq-calculator-quat-w" placeholder="W" value="1" step="0.001" style="padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;">
+                        <input type="number" id="dq-calculator-quat-x" placeholder="X" value="0" step="0.001" style="padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;">
+                        <input type="number" id="dq-calculator-quat-y" placeholder="Y" value="0" step="0.001" style="padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;">
+                        <input type="number" id="dq-calculator-quat-z" placeholder="Z" value="0" step="0.001" style="padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;">
+                    </div>
+                </div>
+                <div style="margin-bottom: 0.75rem;">
+                    <label style="font-size: 0.85rem; color: #cbd5e1; display: block; margin-bottom: 0.25rem;">
+                        位置 (x, y, z)：
+                    </label>
+                    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem; margin-bottom: 0.5rem;">
+                        <input type="number" id="dq-calculator-pos-x" placeholder="X (m)" value="0" step="0.001" style="padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;">
+                        <input type="number" id="dq-calculator-pos-y" placeholder="Y (m)" value="0" step="0.001" style="padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;">
+                        <input type="number" id="dq-calculator-pos-z" placeholder="Z (m)" value="0" step="0.001" style="padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;">
+                    </div>
+                </div>
+                <button id="dq-calculator-create-from-quat" class="demo-btn" style="width: 100%;">计算对偶四元数</button>
+                <div id="dq-calculator-quat-status" style="font-size: 0.75rem; color: #94a3b8; margin-top: 0.5rem;">
+                    从四元数和平移创建对偶四元数
+                </div>
+            </div>
+
+            <div class="panel-section">
+                <h3>平移操作</h3>
+                <div style="display: flex; gap: 0.75rem; margin-bottom: 0.5rem;">
+                    <label style="display: flex; align-items: center; gap: 0.3rem; font-size: 0.85rem;">
+                        <input type="radio" name="dq-calculator-mode" value="left" checked>
+                        左乘
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 0.3rem; font-size: 0.85rem;">
+                        <input type="radio" name="dq-calculator-mode" value="right">
+                        右乘
+                    </label>
+                </div>
+                <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem; margin-bottom: 0.5rem;">
+                    <input type="number" id="dq-calculator-translate-x" placeholder="X (m)" value="0" step="0.001" style="padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;">
+                    <input type="number" id="dq-calculator-translate-y" placeholder="Y (m)" value="0" step="0.001" style="padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;">
+                    <input type="number" id="dq-calculator-translate-z" placeholder="Z (m)" value="0" step="0.001" style="padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;">
+                </div>
+                <button id="dq-calculator-apply" class="demo-btn" style="width: 100%;">计算新双四元数</button>
+            </div>
+
+            <div class="panel-section">
+                <h3>结果输出</h3>
+                <textarea id="dq-calculator-output" placeholder="结果将在此显示" readonly style="width: 100%; min-height: 70px; padding: 0.4rem; font-size: 0.85rem; background: #0f172a; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px; margin-bottom: 0.5rem;"></textarea>
+                <button id="dq-calculator-copy-output" class="demo-btn" style="width: 100%;">复制结果</button>
+                <div id="dq-calculator-status" style="font-size: 0.75rem; color: #94a3b8; margin-top: 0.5rem;">
+                    使用左乘/右乘与平移组合当前双四元数
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ROS 2 通讯和控制面板（默认隐藏） -->
+    <!-- DQ 计算器面板（默认隐藏） -->
+    <div class="floating-panel dq-calculator-panel hidden" id="dq-calculator-panel">
+        <div class="panel-header">
+            <h2>DQ 计算器</h2>
+            <button class="panel-toggle" id="dq-calculator-toggle">+</button>
+        </div>
+        <div class="panel-body">
+            <div class="panel-section">
+                <h3>双四元数输入</h3>
+                <div style="display: flex; gap: 0.5rem; margin-bottom: 0.5rem;">
+                    <select id="dq-calculator-robot" style="flex: 1; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;">
+                        <option value="robot1">机器人</option>
+                    </select>
+                    <button id="dq-calculator-load-current" class="demo-btn" style="flex: 1;">加载当前姿态</button>
+                </div>
+                <textarea id="dq-calculator-input" placeholder="1,0,0,0,0,0,0,0" style="width: 100%; min-height: 70px; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px; margin-bottom: 0.5rem;"></textarea>
+                <button id="dq-calculator-copy-input" class="demo-btn" style="width: 100%;">复制输入</button>
+            </div>
+
+            <div class="panel-section">
+                <h3>平移操作</h3>
+                <div style="display: flex; gap: 0.75rem; margin-bottom: 0.5rem;">
+                    <label style="display: flex; align-items: center; gap: 0.3rem; font-size: 0.85rem;">
+                        <input type="radio" name="dq-calculator-mode" value="left" checked>
+                        左乘
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 0.3rem; font-size: 0.85rem;">
+                        <input type="radio" name="dq-calculator-mode" value="right">
+                        右乘
+                    </label>
+                </div>
+                <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem; margin-bottom: 0.5rem;">
+                    <input type="number" id="dq-calculator-translate-x" placeholder="X (m)" value="0" step="0.001" style="padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;">
+                    <input type="number" id="dq-calculator-translate-y" placeholder="Y (m)" value="0" step="0.001" style="padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;">
+                    <input type="number" id="dq-calculator-translate-z" placeholder="Z (m)" value="0" step="0.001" style="padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;">
+                </div>
+                <button id="dq-calculator-apply" class="demo-btn" style="width: 100%;">计算新双四元数</button>
+            </div>
+
+            <div class="panel-section">
+                <h3>结果输出</h3>
+                <textarea id="dq-calculator-output" placeholder="结果将在此显示" readonly style="width: 100%; min-height: 70px; padding: 0.4rem; font-size: 0.85rem; background: #0f172a; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px; margin-bottom: 0.5rem;"></textarea>
+                <button id="dq-calculator-copy-output" class="demo-btn" style="width: 100%;">复制结果</button>
+                <div id="dq-calculator-status" style="font-size: 0.75rem; color: #94a3b8; margin-top: 0.5rem;">
+                    使用左乘/右乘与平移组合当前双四元数
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ROS 2 通讯和控制面板（默认隐藏） -->
+    <div class="floating-panel ros2-panel hidden" id="ros2-panel">
+        <div class="panel-header">
+            <h2>ROS 2 通讯和控制</h2>
+            <button class="panel-toggle" id="ros2-toggle">+</button>
+        </div>
+        <div class="panel-body">
+            <div class="panel-section">
+                <h3>连接状态</h3>
+                <div class="ros2-status-container">
+                    <div class="status-indicator" id="ros2-status-indicator"></div>
+                    <span id="ros2-status-text">未连接</span>
+                    <button id="ros2-connect-btn" class="demo-btn" style="margin-left: auto;">连接</button>
+                </div>
+            </div>
+
+            <div class="panel-section">
+                <h3>服务地址设置</h3>
+                <div style="margin-bottom: 0.75rem;">
+                    <label style="font-size: 0.85rem; color: #cbd5e1; display: block; margin-bottom: 0.25rem;">
+                        WebSocket 地址：
+                    </label>
+                    <div style="display: flex; gap: 0.5rem;">
+                        <input 
+                            type="text" 
+                            id="ros2-websocket-url" 
+                            placeholder="ws://localhost:8081" 
+                            value="ws://localhost:8081"
+                            style="flex: 1; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;"
+                        >
+                        <button id="ros2-save-url-btn" class="demo-btn" style="padding: 0.35rem 0.75rem; font-size: 0.85rem;">保存</button>
+                    </div>
+                    <div style="font-size: 0.75rem; color: #94a3b8; margin-top: 0.25rem;">
+                        提示：修改地址后需要重新连接
+                    </div>
+                </div>
+            </div>
+
+            <div class="panel-section">
+                <h3>话题管理</h3>
+                <div style="margin-bottom: 0.75rem;">
+                    <label style="font-size: 0.85rem; color: #cbd5e1; display: block; margin-bottom: 0.25rem;">
+                        话题名称：
+                    </label>
+                    <div style="display: flex; gap: 0.5rem;">
+                        <input 
+                            type="text" 
+                            id="ros2-topic-name" 
+                            placeholder="/cmd_vel" 
+                            style="flex: 1; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;"
+                        >
+                        <button id="ros2-refresh-topics-btn" class="demo-btn" style="padding: 0.35rem 0.75rem; font-size: 0.85rem;">刷新</button>
+                    </div>
+                </div>
+                <div style="margin-bottom: 0.75rem;">
+                    <label style="font-size: 0.85rem; color: #cbd5e1; display: block; margin-bottom: 0.25rem;">
+                        消息类型：
+                    </label>
+                    <select 
+                        id="ros2-message-type" 
+                        style="width: 100%; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;"
+                    >
+                        <option value="geometry_msgs/msg/Twist">geometry_msgs/Twist (速度)</option>
+                        <option value="std_msgs/msg/Float64MultiArray">std_msgs/Float64MultiArray (关节命令)</option>
+                        <option value="geometry_msgs/msg/PoseStamped">geometry_msgs/PoseStamped (位姿)</option>
+                    </select>
+                </div>
+                <div style="display: flex; gap: 0.5rem;">
+                    <button id="ros2-subscribe-btn" class="demo-btn" style="flex: 1;">订阅</button>
+                    <button id="ros2-publish-btn" class="demo-btn" style="flex: 1;">发布</button>
+                </div>
+            </div>
+
+            <div class="panel-section">
+                <h3>活跃话题</h3>
+                <div id="ros2-active-topics" class="ros2-topics-list">
+                    <div style="color: #94a3b8; font-size: 0.85rem;">暂无活跃话题</div>
+                </div>
+            </div>
+
+            <div class="panel-section">
+                <h3>真机关节状态</h3>
+                <div style="margin-bottom: 0.5rem;">
+                    <label style="font-size: 0.85rem; color: #cbd5e1; display: block; margin-bottom: 0.25rem;">
+                        JointState 话题：
+                    </label>
+                    <div style="display: flex; gap: 0.5rem;">
+                        <input 
+                            type="text" 
+                            id="ros2-joint-topic" 
+                            value="/arm/joint_states"
+                            placeholder="/arm/joint_states" 
+                            style="flex: 1; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;"
+                        >
+                        <button id="ros2-joint-subscribe-btn" class="demo-btn" style="padding: 0.35rem 0.75rem; font-size: 0.85rem;">订阅</button>
+                    </div>
+                    <div style="font-size: 0.75rem; color: #94a3b8; margin-top: 0.25rem;">
+                        优先写入右臂，再写入左臂
+                    </div>
+                </div>
+                <div id="ros2-joint-status" style="font-size: 0.75rem; color: #94a3b8;">
+                    未订阅真机关节状态
+                </div>
+            </div>
+
+            <div class="panel-section">
+                <h3>Twist 消息编辑</h3>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin-bottom: 0.75rem;">
+                    <div>
+                        <label style="font-size: 0.8rem; color: #94a3b8;">线速度 X (m/s)</label>
+                        <input 
+                            type="number" 
+                            id="ros2-twist-linear-x" 
+                            value="0" 
+                            step="0.1" 
+                            style="width: 100%; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;"
+                        >
+                    </div>
+                    <div>
+                        <label style="font-size: 0.8rem; color: #94a3b8;">线速度 Y (m/s)</label>
+                        <input 
+                            type="number" 
+                            id="ros2-twist-linear-y" 
+                            value="0" 
+                            step="0.1" 
+                            style="width: 100%; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;"
+                        >
+                    </div>
+                    <div>
+                        <label style="font-size: 0.8rem; color: #94a3b8;">线速度 Z (m/s)</label>
+                        <input 
+                            type="number" 
+                            id="ros2-twist-linear-z" 
+                            value="0" 
+                            step="0.1" 
+                            style="width: 100%; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;"
+                        >
+                    </div>
+                    <div>
+                        <label style="font-size: 0.8rem; color: #94a3b8;">角速度 Z (rad/s)</label>
+                        <input 
+                            type="number" 
+                            id="ros2-twist-angular-z" 
+                            value="0" 
+                            step="0.1" 
+                            style="width: 100%; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;"
+                        >
+                    </div>
+                </div>
+                <button id="ros2-send-twist-btn" class="demo-btn" style="width: 100%;">发送 Twist 消息</button>
+            </div>
+
+            <div class="panel-section">
+                <h3>关节位置发布 (RobotArmServoMsg)</h3>
+                <div style="margin-bottom: 0.75rem;">
+                    <label style="font-size: 0.85rem; color: #cbd5e1; display: block; margin-bottom: 0.25rem;">
+                        话题名称：
+                    </label>
+                    <input 
+                        type="text" 
+                        id="ros2-joint-position-topic" 
+                        placeholder="/robot_arm_control" 
+                        value="/robot_arm_control"
+                        style="width: 100%; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;"
+                    >
+                </div>
+                <div style="margin-bottom: 0.75rem; display: flex; align-items: center; justify-content: space-between;">
+                    <label style="font-size: 0.85rem; color: #cbd5e1;">
+                        持续发布关节位置
+                    </label>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="ros2-joint-position-toggle">
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                <div id="ros2-joint-position-status" style="font-size: 0.75rem; color: #94a3b8;">
+                    开关关闭，未发布消息
+                </div>
+            </div>
+
+            <div class="panel-section">
+                <h3>消息日志</h3>
+                <div id="ros2-message-log" class="ros2-message-log">
+                    <div style="color: #94a3b8; font-size: 0.8rem;">暂无消息</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- 底部功能栏 -->
     <div id="bottom-dock" class="bottom-dock">
         <button class="dock-item" data-panel="control-panel">
@@ -374,6 +726,14 @@
         <button class="dock-item" data-panel="environment-panel">
             <span class="dock-icon">🌿</span>
             <span class="dock-label">环境管理</span>
+        </button>
+        <button class="dock-item" data-panel="dq-calculator-panel">
+            <span class="dock-icon">🧮</span>
+            <span class="dock-label">DQ 计算器</span>
+        </button>
+        <button class="dock-item" data-panel="ros2-panel">
+            <span class="dock-icon">🤖</span>
+            <span class="dock-label">ROS 2 通讯</span>
         </button>
     </div>
 

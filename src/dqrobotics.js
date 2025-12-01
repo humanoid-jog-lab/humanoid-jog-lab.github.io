@@ -186,6 +186,23 @@ export class DQ {
     }
     
     /**
+     * 从四元数和平移创建对偶四元数
+     * @param {number} qw - 四元数 w 分量
+     * @param {number} qx - 四元数 x 分量
+     * @param {number} qy - 四元数 y 分量
+     * @param {number} qz - 四元数 z 分量
+     * @param {number} tx - 平移 x
+     * @param {number} ty - 平移 y
+     * @param {number} tz - 平移 z
+     * @returns {DQ}
+     */
+    static fromQuaternionAndTranslation(qw, qx, qy, qz, tx, ty, tz) {
+        const result = new DQ();
+        result._dq = DQModule.DQWrapper.fromQuaternionAndTranslation(qw, qx, qy, qz, tx, ty, tz);
+        return result;
+    }
+    
+    /**
      * 获取平移部分
      * @returns {number[]}
      */

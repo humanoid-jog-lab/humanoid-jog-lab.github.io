@@ -36,6 +36,14 @@ export class RobotVisualizer {
         this.showMDHFrames = false;
         this.lastMDHFrameOrigin = null; // 最后一个MDH坐标系的原点位置
         
+        // URDF坐标系显示
+        this.urdfFramesGroup = null;
+        this.showURDFFrames = false;
+        this.urdfFrameObjects = new Map(); // robotPrefix_linkName -> frameObject (例如 "robot1_link1" 或 "link1")
+        this.urdfFrameLinkNames = []; // 存储要显示的link名称列表（单臂模式）
+        this.urdfFrameRobot1Links = []; // 存储机器人1的link名称列表（双臂模式）
+        this.urdfFrameRobot2Links = []; // 存储机器人2的link名称列表（双臂模式）
+        
         // 鼠标控制
         this.isLeftDragging = false;  // 左键拖动标志（旋转视角）
         this.isRightDragging = false; // 右键拖动标志（平移位置）
@@ -672,53 +680,173 @@ export class RobotVisualizer {
     }
     
     /**
+     * 彻底清理旧机器人模型（包括释放资源）
+     * @param {THREE.Object3D} object - 要清理的对象
+     */
+    disposeRobotObject(object) {
+        if (!object) return;
+        
+        // 先收集所有需要清理的子对象
+        const objectsToDispose = [];
+        object.traverse((child) => {
+            objectsToDispose.push(child);
+        });
+        
+        // 遍历所有子对象并释放资源
+        objectsToDispose.forEach((child) => {
+            if (child instanceof THREE.Mesh || child instanceof THREE.Line || child instanceof THREE.Points) {
+                // 释放几何体
+                if (child.geometry) {
+                    child.geometry.dispose();
+                }
+                // 释放材质
+                if (child.material) {
+                    if (Array.isArray(child.material)) {
+                        child.material.forEach(mat => {
+                            if (mat.map) mat.map.dispose();
+                            if (mat.normalMap) mat.normalMap.dispose();
+                            if (mat.bumpMap) mat.bumpMap.dispose();
+                            if (mat.roughnessMap) mat.roughnessMap.dispose();
+                            if (mat.metalnessMap) mat.metalnessMap.dispose();
+                            if (mat.aoMap) mat.aoMap.dispose();
+                            if (mat.emissiveMap) mat.emissiveMap.dispose();
+                            if (mat.dispose) mat.dispose();
+                        });
+                    } else {
+                        if (child.material.map) child.material.map.dispose();
+                        if (child.material.normalMap) child.material.normalMap.dispose();
+                        if (child.material.bumpMap) child.material.bumpMap.dispose();
+                        if (child.material.roughnessMap) child.material.roughnessMap.dispose();
+                        if (child.material.metalnessMap) child.material.metalnessMap.dispose();
+                        if (child.material.aoMap) child.material.aoMap.dispose();
+                        if (child.material.emissiveMap) child.material.emissiveMap.dispose();
+                        if (child.material.dispose) child.material.dispose();
+                    }
+                }
+            }
+        });
+        
+        // 从场景中移除（如果还在场景中）
+        if (object.parent) {
+            object.parent.remove(object);
+        } else if (this.scene && this.scene.children.includes(object)) {
+            this.scene.remove(object);
+        }
+    }
+    
+    /**
+     * 清理所有旧机器人模型
+     */
+    cleanupOldRobots() {
+        // 确保先解除环境物体的附着，以免随旧锚点一起被移除
+        this.detachAllEnvironmentObjects();
+
+        // 清理单臂模型
+        if (this.urdfRobot) {
+            this.disposeRobotObject(this.urdfRobot);
+            this.urdfRobot = null;
+        }
+        if (this.robot) {
+            this.disposeRobotObject(this.robot);
+            this.robot = null;
+        }
+        
+        // 清理双臂模型
+        if (this.robot1URDF) {
+            this.disposeRobotObject(this.robot1URDF);
+            this.robot1URDF = null;
+        }
+        if (this.robot2URDF) {
+            this.disposeRobotObject(this.robot2URDF);
+            this.robot2URDF = null;
+        }
+        
+        // 清理末端执行器标记
+        if (this.endEffector) {
+            this.disposeRobotObject(this.endEffector);
+            this.endEffector = null;
+        }
+        if (this.robot1EndEffector) {
+            this.disposeRobotObject(this.robot1EndEffector);
+            this.robot1EndEffector = null;
+        }
+        if (this.robot2EndEffector) {
+            this.disposeRobotObject(this.robot2EndEffector);
+            this.robot2EndEffector = null;
+        }
+        
+        // 清理双臂可视化元素
+        if (this.absolutePoseMarker) {
+            this.disposeRobotObject(this.absolutePoseMarker);
+            this.absolutePoseMarker = null;
+        }
+        if (this.relativePoseLine) {
+            this.disposeRobotObject(this.relativePoseLine);
+            this.relativePoseLine = null;
+        }
+        
+        // 清理拖动控制
+        if (this.endEffectorGizmo) {
+            this.disposeRobotObject(this.endEffectorGizmo);
+            this.endEffectorGizmo = null;
+        }
+        
+        // 额外检查：遍历场景，移除任何可能残留的机器人相关对象
+        // 通过检查对象的类型或名称来识别
+        const objectsToRemove = [];
+        const processedObjects = new Set(); // 避免重复处理
+        
+        // 先检查场景的直接子对象
+        this.scene.children.forEach((object) => {
+            if (processedObjects.has(object)) return;
+            
+            // 检查是否是URDF相关的对象
+            const isURDFRobot = object && typeof object === 'object' && 
+                (object.joints || object.links || 
+                 (object.name && (object.name.toLowerCase().includes('robot') || 
+                                  object.name.toLowerCase().includes('urdf') || 
+                                  object.name.toLowerCase().includes('panda') ||
+                                  object.name.toLowerCase().includes('franka'))));
+            
+            // 确保不是环境物体、坐标系、网格、光源、相机等
+            if (isURDFRobot && 
+                object !== this.environmentGroup && 
+                object !== this.mdhFramesGroup && 
+                object !== this.urdfFramesGroup &&
+                object !== this.axesScene &&
+                object !== this.camera &&
+                !object.isGridHelper &&
+                !object.isAxesHelper &&
+                !object.isLight &&
+                !object.isAmbientLight &&
+                !object.isDirectionalLight &&
+                object.parent === this.scene) {
+                objectsToRemove.push(object);
+                processedObjects.add(object);
+            }
+        });
+        
+        // 移除找到的残留对象
+        objectsToRemove.forEach(obj => {
+            console.log(`  清理残留对象: ${obj.name || obj.type || obj.constructor.name || 'unknown'}`);
+            this.disposeRobotObject(obj);
+        });
+        
+        if (objectsToRemove.length > 0) {
+            console.log(`✓ 已清理 ${objectsToRemove.length} 个残留的机器人对象`);
+        }
+        
+        console.log('✓ 已清理所有旧机器人模型');
+    }
+    
+    /**
      * 加载单臂 URDF 模型
      * @param {Object} robot - urdf-loader 加载的机器人对象
      * @param {Object} config - 配置对象，包含基座位姿等
      */
     async loadSingleArmURDF(robot, config = null) {
-        // 确保先解除环境物体的附着，以免随旧锚点一起被移除
-        this.detachAllEnvironmentObjects();
-
-        // 移除旧的机器人模型
-        if (this.urdfRobot) {
-            this.scene.remove(this.urdfRobot);
-            this.urdfRobot = null;
-        }
-        if (this.robot) {
-            this.scene.remove(this.robot);
-            this.robot = null;
-        }
-        
-        // 移除双臂相关对象
-        if (this.robot1URDF) {
-            this.scene.remove(this.robot1URDF);
-            this.robot1URDF = null;
-        }
-        if (this.robot2URDF) {
-            this.scene.remove(this.robot2URDF);
-            this.robot2URDF = null;
-        }
-        
-        // 移除双臂末端执行器标记
-        if (this.robot1EndEffector) {
-            this.scene.remove(this.robot1EndEffector);
-            this.robot1EndEffector = null;
-        }
-        if (this.robot2EndEffector) {
-            this.scene.remove(this.robot2EndEffector);
-            this.robot2EndEffector = null;
-        }
-        
-        // 移除双臂可视化元素（绝对位姿、相对位姿）
-        if (this.absolutePoseMarker) {
-            this.scene.remove(this.absolutePoseMarker);
-            this.absolutePoseMarker = null;
-        }
-        if (this.relativePoseLine) {
-            this.scene.remove(this.relativePoseLine);
-            this.relativePoseLine = null;
-        }
+        // 彻底清理所有旧模型
+        this.cleanupOldRobots();
         
         // 设置双臂模式为false
         this.dualArmMode = false;
@@ -789,6 +917,12 @@ export class RobotVisualizer {
             this.createEndEffectorMarker();
         }
         
+        // 初始化URDF坐标系显示（如果开关已打开）
+        if (this.showURDFFrames && robot && robot.links) {
+            const linkNames = Object.keys(robot.links);
+            this.initURDFFrames(robot, linkNames, null, null);
+        }
+        
         console.log('✓ 单臂 URDF 加载完成');
         return true;
     }
@@ -801,24 +935,11 @@ export class RobotVisualizer {
      * @param {string} dualArmType - 双臂格式类型：'two_urdf' 或 'single_urdf'
      */
     async loadDualArmURDF(robot1, robot2, config, dualArmType = 'two_urdf') {
-        // 先解除环境物体附着，避免随着旧锚点被移除
-        this.detachAllEnvironmentObjects();
+        // 彻底清理所有旧模型
+        this.cleanupOldRobots();
 
-        // 移除旧的机器人模型
-        if (this.urdfRobot) {
-            this.scene.remove(this.urdfRobot);
-            this.urdfRobot = null;
-        }
-        if (this.robot) {
-            this.scene.remove(this.robot);
-            this.robot = null;
-        }
-        
-        // 移除旧的末端执行器
-        if (this.endEffector) {
-            this.scene.remove(this.endEffector);
-            this.endEffector = null;
-        }
+        // 设置双臂模式为true
+        this.dualArmMode = true;
         
         if (dualArmType === 'single_urdf') {
             // 单URDF格式：只添加一个URDF对象（包含两条链）
@@ -1006,6 +1127,7 @@ export class RobotVisualizer {
             axes1.material.opacity = 0.95;
         }
         this.robot1EndEffector.add(axes1);
+        this.keepMeshWorldScale(this.robot1EndEffector);
         this.scene.add(this.robot1EndEffector);
         
         // 机器人2末端执行器
@@ -1029,6 +1151,7 @@ export class RobotVisualizer {
             axes2.material.opacity = 0.95;
         }
         this.robot2EndEffector.add(axes2);
+        this.keepMeshWorldScale(this.robot2EndEffector);
         this.scene.add(this.robot2EndEffector);
     }
     
@@ -1118,6 +1241,22 @@ export class RobotVisualizer {
             this.scene.add(this.relativePoseLine);
         }
     }
+
+    keepMeshWorldScale(mesh) {
+        if (!mesh) {
+            return;
+        }
+        mesh.scale.set(1, 1, 1);
+        mesh.onBeforeRender = () => {
+            const worldScale = new THREE.Vector3();
+            mesh.getWorldScale(worldScale);
+            mesh.scale.set(
+                worldScale.x ? 1 / worldScale.x : 1,
+                worldScale.y ? 1 / worldScale.y : 1,
+                worldScale.z ? 1 / worldScale.z : 1
+            );
+        };
+    }
     
     /**
      * 更新机器人位姿（支持单臂和双臂模式）
@@ -1177,6 +1316,11 @@ export class RobotVisualizer {
                 this.updateURDFJoints(this.urdfRobot, jointAngles, jointNamesOrder);
             }
             
+            // 更新URDF坐标系显示
+            if (this.showURDFFrames) {
+                this.updateAllURDFFrames();
+            }
+            
             // 更新拖动控制位置（确保一直跟随末端执行器）
             if (this.dragEndEffectorMode) {
                 this.updateGizmoPosition();
@@ -1213,6 +1357,10 @@ export class RobotVisualizer {
                 if (this.robot1URDF && jointAngles) {
                     this.updateURDFJoints(this.robot1URDF, jointAngles, jointNamesOrder);
                 }
+                // 更新所有URDF坐标系显示
+                if (this.showURDFFrames) {
+                    this.updateAllURDFFrames();
+                }
             } else if (robotIndex === 1) {
                 // 更新机器人2
                 if (this.robot2EndEffector) {
@@ -1222,6 +1370,7 @@ export class RobotVisualizer {
                 if (this.robot2URDF && jointAngles) {
                     this.updateURDFJoints(this.robot2URDF, jointAngles, jointNamesOrder);
                 }
+                // 更新所有URDF坐标系显示（已在上面统一更新）
             }
         } catch (error) {
             console.error(`更新机器人${robotIndex + 1}位姿失败:`, error);
@@ -1355,6 +1504,16 @@ export class RobotVisualizer {
                     urdfRobot.joints[name].setJointValue(jointAngles[i]);
                 }
             });
+        }
+        
+        // 更新URDF变换矩阵
+        if (typeof urdfRobot.updateMatrixWorld === 'function') {
+            urdfRobot.updateMatrixWorld(true);
+        }
+        
+        // 更新URDF坐标系显示（更新所有坐标系，因为可能影响两个机器人）
+        if (this.showURDFFrames) {
+            this.updateAllURDFFrames();
         }
     }
     
@@ -1527,6 +1686,313 @@ export class RobotVisualizer {
         } else {
             console.warn('MDH坐标系组不存在，无法切换显示');
             console.warn('提示：请先提取MDH参数以创建坐标系');
+        }
+    }
+    
+    /**
+     * 初始化URDF坐标系显示（支持单臂和双臂模式）
+     * @param {Object} urdfRobot - URDF机器人对象（单臂模式）或null（双臂模式）
+     * @param {Array<string>} linkNames - 要显示的link名称列表（单臂模式，可选）
+     * @param {Object} robot1URDF - 机器人1的URDF对象（双臂模式，可选）
+     * @param {Object} robot2URDF - 机器人2的URDF对象（双臂模式，可选）
+     */
+    initURDFFrames(urdfRobot = null, linkNames = null, robot1URDF = null, robot2URDF = null) {
+        // 先移除旧的坐标系
+        if (this.urdfFramesGroup) {
+            this.scene.remove(this.urdfFramesGroup);
+            this.urdfFramesGroup = null;
+        }
+        this.urdfFrameObjects.clear();
+        
+        // 创建URDF坐标系组
+        this.urdfFramesGroup = new THREE.Group();
+        this.urdfFramesGroup.name = 'URDFFrames';
+        this.urdfFramesGroup.renderOrder = 1000;
+        
+        const axisLength = 0.08; // 坐标轴长度
+        
+        // 判断是单臂还是双臂模式
+        const isDualArm = this.dualArmMode && (robot1URDF || this.robot1URDF) && (robot2URDF || this.robot2URDF);
+        
+        if (isDualArm) {
+            // 双臂模式：同时初始化两个机器人的坐标系
+            const r1URDF = robot1URDF || this.robot1URDF;
+            const r2URDF = robot2URDF || this.robot2URDF;
+            
+            if (!r1URDF || !r1URDF.links || !r2URDF || !r2URDF.links) {
+                console.warn('双臂模式下URDF机器人对象无效，无法创建坐标系');
+                return;
+            }
+            
+            // 获取两个机器人的link列表
+            const robot1Links = Object.keys(r1URDF.links);
+            const robot2Links = Object.keys(r2URDF.links);
+            
+            this.urdfFrameRobot1Links = robot1Links.slice();
+            this.urdfFrameRobot2Links = robot2Links.slice();
+            
+            // 创建机器人1的坐标系（使用robot1前缀）
+            robot1Links.forEach((linkName) => {
+                const link = r1URDF.links[linkName];
+                if (!link) return;
+                
+                const frameKey = `robot1_${linkName}`;
+                const frameGroup = this.createFrameGroup(frameKey, linkName, axisLength, '#3b82f6'); // 蓝色
+                this.urdfFrameObjects.set(frameKey, frameGroup);
+                this.urdfFramesGroup.add(frameGroup);
+            });
+            
+            // 创建机器人2的坐标系（使用robot2前缀）
+            robot2Links.forEach((linkName) => {
+                const link = r2URDF.links[linkName];
+                if (!link) return;
+                
+                const frameKey = `robot2_${linkName}`;
+                const frameGroup = this.createFrameGroup(frameKey, linkName, axisLength, '#10b981'); // 绿色
+                this.urdfFrameObjects.set(frameKey, frameGroup);
+                this.urdfFramesGroup.add(frameGroup);
+            });
+            
+            console.log(`✓ 已创建双臂URDF坐标系: 机器人1(${robot1Links.length}个), 机器人2(${robot2Links.length}个)`);
+        } else {
+            // 单臂模式
+            const robot = urdfRobot || this.urdfRobot;
+            if (!robot || !robot.links) {
+                console.warn('URDF机器人对象无效，无法创建坐标系');
+                return;
+            }
+            
+            // 确定要显示的link列表
+            let linksToDisplay = [];
+            if (linkNames && Array.isArray(linkNames) && linkNames.length > 0) {
+                linksToDisplay = linkNames;
+            } else {
+                linksToDisplay = Object.keys(robot.links);
+            }
+            
+            this.urdfFrameLinkNames = linksToDisplay.slice();
+            
+            linksToDisplay.forEach((linkName) => {
+                const link = robot.links[linkName];
+                if (!link) {
+                    console.warn(`Link ${linkName} 未找到`);
+                    return;
+                }
+                
+                const frameGroup = this.createFrameGroup(linkName, linkName, axisLength, '#ffffff'); // 白色
+                this.urdfFrameObjects.set(linkName, frameGroup);
+                this.urdfFramesGroup.add(frameGroup);
+            });
+            
+            console.log(`✓ 已创建 ${linksToDisplay.length} 个URDF坐标系`);
+        }
+        
+        // 根据显示状态决定是否添加到场景
+        if (this.showURDFFrames) {
+            this.scene.add(this.urdfFramesGroup);
+        }
+        
+        // 初始化时更新一次位置
+        this.updateAllURDFFrames();
+    }
+    
+    /**
+     * 创建单个坐标系组
+     * @param {string} frameKey - 坐标系键名（用于存储）
+     * @param {string} labelText - 标签文本
+     * @param {number} axisLength - 坐标轴长度
+     * @param {string} labelColor - 标签颜色（可选，默认白色）
+     * @returns {THREE.Group} 坐标系组
+     */
+    createFrameGroup(frameKey, labelText, axisLength, labelColor = '#ffffff') {
+        const frameGroup = new THREE.Group();
+        frameGroup.name = `URDFFrame_${frameKey}`;
+        frameGroup.renderOrder = 1000;
+        
+        // 使用AxesHelper创建坐标轴
+        const axesHelper = new THREE.AxesHelper(axisLength);
+        axesHelper.material.linewidth = 2;
+        axesHelper.material.depthTest = false;
+        axesHelper.material.depthWrite = false;
+        axesHelper.renderOrder = 1000;
+        frameGroup.add(axesHelper);
+        
+        // 添加标签
+        const canvas = document.createElement('canvas');
+        const context = canvas.getContext('2d');
+        canvas.width = 512;
+        canvas.height = 128;
+        
+        context.clearRect(0, 0, canvas.width, canvas.height);
+        context.fillStyle = labelColor;
+        context.font = 'Bold 64px Arial';
+        context.textAlign = 'center';
+        context.textBaseline = 'middle';
+        context.fillText(labelText, canvas.width / 2, canvas.height / 2);
+        
+        const texture = new THREE.CanvasTexture(canvas);
+        texture.needsUpdate = true;
+        const spriteMaterial = new THREE.SpriteMaterial({
+            map: texture,
+            depthTest: false,
+            depthWrite: false,
+            transparent: true
+        });
+        const sprite = new THREE.Sprite(spriteMaterial);
+        sprite.position.set(0, -axisLength - 0.03, 0);
+        sprite.scale.set(0.1, 0.05, 1);
+        sprite.renderOrder = 1001;
+        frameGroup.add(sprite);
+        
+        return frameGroup;
+    }
+    
+    /**
+     * 更新所有URDF坐标系位置（当关节移动时调用）
+     * 自动判断单臂或双臂模式
+     */
+    updateAllURDFFrames() {
+        if (!this.urdfFramesGroup) {
+            return;
+        }
+        
+        if (this.dualArmMode && this.robot1URDF && this.robot2URDF) {
+            // 双臂模式：同时更新两个机器人的坐标系
+            this.updateURDFFramesForRobot(this.robot1URDF, 'robot1', this.urdfFrameRobot1Links);
+            this.updateURDFFramesForRobot(this.robot2URDF, 'robot2', this.urdfFrameRobot2Links);
+        } else {
+            // 单臂模式
+            const urdfRobot = this.urdfRobot;
+            if (urdfRobot && urdfRobot.links) {
+                this.updateURDFFramesForRobot(urdfRobot, null, this.urdfFrameLinkNames);
+            }
+        }
+    }
+    
+    /**
+     * 更新指定机器人的URDF坐标系位置
+     * @param {Object} urdfRobot - URDF机器人对象
+     * @param {string} robotPrefix - 机器人前缀（'robot1', 'robot2' 或 null表示单臂）
+     * @param {Array<string>} linkNames - 要更新的link名称列表
+     */
+    updateURDFFramesForRobot(urdfRobot, robotPrefix, linkNames) {
+        if (!urdfRobot || !urdfRobot.links || !linkNames || linkNames.length === 0) {
+            return;
+        }
+        
+        // 确保变换矩阵是最新的
+        if (typeof urdfRobot.updateMatrixWorld === 'function') {
+            urdfRobot.updateMatrixWorld(true);
+        }
+        
+        // 更新每个link的坐标系位置
+        linkNames.forEach((linkName) => {
+            const link = urdfRobot.links[linkName];
+            if (!link) {
+                return;
+            }
+            
+            // 构建frame key
+            const frameKey = robotPrefix ? `${robotPrefix}_${linkName}` : linkName;
+            const frameGroup = this.urdfFrameObjects.get(frameKey);
+            
+            if (!frameGroup) {
+                return;
+            }
+            
+            // 获取link的世界变换矩阵
+            if (link.matrixWorld) {
+                // 提取位置和旋转
+                const position = new THREE.Vector3();
+                const quaternion = new THREE.Quaternion();
+                const scale = new THREE.Vector3();
+                
+                link.matrixWorld.decompose(position, quaternion, scale);
+                
+                // 更新坐标系的位置和旋转
+                frameGroup.position.copy(position);
+                frameGroup.quaternion.copy(quaternion);
+            } else {
+                // 如果matrixWorld不存在，尝试使用position和quaternion
+                if (link.position) {
+                    frameGroup.position.copy(link.position);
+                }
+                if (link.quaternion) {
+                    frameGroup.quaternion.copy(link.quaternion);
+                }
+            }
+        });
+    }
+    
+    /**
+     * 更新URDF坐标系位置（当关节移动时调用，保持向后兼容）
+     * @param {Object} urdfRobot - URDF机器人对象
+     */
+    updateURDFFrames(urdfRobot) {
+        // 向后兼容：如果提供了urdfRobot，更新对应的坐标系
+        // 但更推荐使用updateAllURDFFrames()来自动处理所有坐标系
+        if (!this.urdfFramesGroup) {
+            return;
+        }
+        
+        if (this.dualArmMode) {
+            // 双臂模式：根据提供的urdfRobot判断是哪个机器人
+            if (urdfRobot === this.robot1URDF) {
+                this.updateURDFFramesForRobot(urdfRobot, 'robot1', this.urdfFrameRobot1Links);
+            } else if (urdfRobot === this.robot2URDF) {
+                this.updateURDFFramesForRobot(urdfRobot, 'robot2', this.urdfFrameRobot2Links);
+            }
+        } else {
+            // 单臂模式
+            if (urdfRobot && urdfRobot.links) {
+                this.updateURDFFramesForRobot(urdfRobot, null, this.urdfFrameLinkNames);
+            }
+        }
+    }
+    
+    /**
+     * 切换URDF坐标系显示
+     * @param {boolean} show - 是否显示
+     */
+    toggleURDFFrames(show) {
+        this.showURDFFrames = show !== undefined ? show : !this.showURDFFrames;
+        console.log('toggleURDFFrames 被调用，新状态:', this.showURDFFrames);
+        
+        if (this.showURDFFrames) {
+            // 如果坐标系还没有初始化，尝试初始化
+            if (!this.urdfFramesGroup) {
+                // 判断是单臂还是双臂模式
+                if (this.dualArmMode && this.robot1URDF && this.robot2URDF) {
+                    // 双臂模式：同时初始化两个机器人
+                    this.initURDFFrames(null, null, this.robot1URDF, this.robot2URDF);
+                    console.log('URDF坐标系已自动初始化（双臂模式）');
+                } else {
+                    // 单臂模式
+                    const urdfRobot = this.urdfRobot;
+                    if (urdfRobot && urdfRobot.links) {
+                        const linkNames = Object.keys(urdfRobot.links);
+                        this.initURDFFrames(urdfRobot, linkNames, null, null);
+                        console.log('URDF坐标系已自动初始化（单臂模式）');
+                    } else {
+                        console.warn('无法自动初始化URDF坐标系：URDF机器人对象无效');
+                        return;
+                    }
+                }
+            }
+            
+            // 检查是否已经在场景中
+            if (this.urdfFramesGroup && !this.scene.getObjectByName('URDFFrames')) {
+                this.scene.add(this.urdfFramesGroup);
+                console.log('URDF坐标系已添加到场景');
+            }
+            
+            // 更新一次位置（更新所有坐标系）
+            this.updateAllURDFFrames();
+        } else {
+            if (this.urdfFramesGroup) {
+                this.scene.remove(this.urdfFramesGroup);
+                console.log('URDF坐标系已从场景移除');
+            }
         }
     }
     
@@ -3117,7 +3583,7 @@ export class RobotVisualizer {
      * @param {number[]} dqTargetArray - 目标位姿（8元素双四元数）
      */
     updateRobot1JointsWithPseudoInverse(dqTargetArray) {
-        if (!window.robot1 || !window.jointAngles1 || window.jointAngles1.length === 0) return;
+        if (!window.robot1 || !window.jointAngles1 || window.jointAngles1.length === 0) return false;
         
         const epsilon = 0.00001;
         const maxIterations = 50;
@@ -3140,7 +3606,7 @@ export class RobotVisualizer {
             const jacobian = window.robot1.poseJacobian(q);
             if (!jacobian || jacobian.length !== 8) {
                 console.error('雅可比矩阵维度错误');
-                return;
+                return false;
             }
             
             const jacobianPseudoInv = this.pseudoInverse(jacobian);
@@ -3173,6 +3639,7 @@ export class RobotVisualizer {
         
         if (window.updateGlobalVariables) window.updateGlobalVariables();
         if (window.updateRobotPose) window.updateRobotPose();
+        return errNorm <= epsilon;
     }
     
     /**
@@ -3180,7 +3647,7 @@ export class RobotVisualizer {
      * @param {number[]} dqTargetArray - 目标位姿（8元素双四元数）
      */
     updateRobot2JointsWithPseudoInverse(dqTargetArray) {
-        if (!window.robot2 || !window.jointAngles2 || window.jointAngles2.length === 0) return;
+        if (!window.robot2 || !window.jointAngles2 || window.jointAngles2.length === 0) return false;
         
         const epsilon = 0.00001;
         const maxIterations = 50;
@@ -3203,7 +3670,7 @@ export class RobotVisualizer {
             const jacobian = window.robot2.poseJacobian(q);
             if (!jacobian || jacobian.length !== 8) {
                 console.error('雅可比矩阵维度错误');
-                return;
+                return false;
             }
             
             const jacobianPseudoInv = this.pseudoInverse(jacobian);
@@ -3236,6 +3703,66 @@ export class RobotVisualizer {
         
         if (window.updateGlobalVariables) window.updateGlobalVariables();
         if (window.updateRobotPose) window.updateRobotPose();
+        return errNorm <= epsilon;
+    }
+
+    /**
+     * 单臂模式下，使用伪逆更新关节角度
+     * @param {number[]} dqTargetArray
+     */
+    updateSingleArmJointsWithPseudoInverse(dqTargetArray) {
+        if (!window.currentRobot || !window.jointAngles || window.jointAngles.length === 0) {
+            return false;
+        }
+
+        const epsilon = 0.00001;
+        const maxIterations = 50;
+        const damping = 0.5;
+
+        let q = [...window.jointAngles];
+        let errNorm = epsilon + 1;
+        let iteration = 0;
+
+        while (errNorm > epsilon && iteration < maxIterations) {
+            const dqCurrentIterArray = window.currentRobot.fkm(q);
+            const err = [];
+            for (let i = 0; i < 8; i++) {
+                err.push(dqTargetArray[i] - dqCurrentIterArray[i]);
+            }
+
+            errNorm = Math.sqrt(err.reduce((sum, e) => sum + e * e, 0));
+            if (errNorm <= epsilon) break;
+
+            const jacobian = window.currentRobot.poseJacobian(q);
+            if (!jacobian || jacobian.length !== 8) {
+                console.error('雅可比矩阵维度错误');
+                return false;
+            }
+
+            const jacobianPseudoInv = this.pseudoInverse(jacobian);
+            const deltaJoints = [];
+            for (let i = 0; i < jacobianPseudoInv.length; i++) {
+                let sum = 0;
+                for (let j = 0; j < err.length; j++) {
+                    sum += jacobianPseudoInv[i][j] * err[j] * damping;
+                }
+                deltaJoints.push(sum);
+            }
+
+            for (let i = 0; i < q.length && i < deltaJoints.length; i++) {
+                q[i] += deltaJoints[i];
+            }
+
+            iteration++;
+        }
+
+        for (let i = 0; i < window.jointAngles.length && i < q.length; i++) {
+            window.jointAngles[i] = q[i];
+        }
+
+        if (window.updateGlobalVariables) window.updateGlobalVariables();
+        if (window.updateRobotPose) window.updateRobotPose();
+        return errNorm <= epsilon;
     }
     
     /**

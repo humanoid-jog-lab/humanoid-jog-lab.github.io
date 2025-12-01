@@ -956,3 +956,146 @@ body {
     cursor: not-allowed;
     transform: none;
 }
+
+/* ROS 2 通讯面板样式 */
+.ros2-panel {
+    bottom: 4rem;
+    right: 1rem;
+    width: 380px;
+}
+
+.ros2-status-container {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem;
+    background: rgba(30, 41, 59, 0.8);
+    border-radius: 0.5rem;
+    border: 1px solid rgba(51, 65, 85, 0.5);
+}
+
+.status-indicator {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    animation: pulse 2s infinite;
+}
+
+.status-indicator.disconnected {
+    background-color: #6b7280;
+}
+
+.status-indicator.connecting {
+    background-color: #f59e0b;
+    animation: pulse 1s infinite;
+}
+
+.status-indicator.connected {
+    background-color: #10b981;
+}
+
+.status-indicator.error {
+    background-color: #ef4444;
+    animation: pulse 0.5s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.5;
+    }
+}
+
+.ros2-topics-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    max-height: 150px;
+    overflow-y: auto;
+    padding: 0.5rem;
+    background: rgba(30, 41, 59, 0.5);
+    border-radius: 0.5rem;
+}
+
+.ros2-topic-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.5rem;
+    background: rgba(51, 65, 85, 0.5);
+    border-radius: 0.35rem;
+    font-size: 0.8rem;
+    color: #cbd5e1;
+}
+
+.ros2-topic-item.active {
+    border-left: 3px solid var(--primary-color);
+}
+
+.ros2-topic-item-name {
+    flex: 1;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ros2-topic-item-type {
+    font-size: 0.7rem;
+    color: #94a3b8;
+    margin-left: 0.5rem;
+}
+
+.ros2-topic-remove-btn {
+    background: transparent;
+    border: none;
+    color: #ef4444;
+    cursor: pointer;
+    padding: 0.2rem 0.4rem;
+    border-radius: 0.25rem;
+    font-size: 0.8rem;
+    transition: all 0.2s ease;
+}
+
+.ros2-topic-remove-btn:hover {
+    background: rgba(239, 68, 68, 0.2);
+}
+
+.ros2-message-log {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    max-height: 200px;
+    overflow-y: auto;
+    padding: 0.5rem;
+    background: rgba(15, 23, 42, 0.8);
+    border-radius: 0.5rem;
+    font-size: 0.75rem;
+    color: #94a3b8;
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+}
+
+.ros2-message-log-entry {
+    padding: 0.35rem;
+    border-left: 2px solid transparent;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: 0.7rem;
+}
+
+.ros2-message-log-entry.info {
+    border-left-color: var(--primary-color);
+    color: #93c5fd;
+}
+
+.ros2-message-log-entry.warn {
+    border-left-color: var(--warning-color);
+    color: #fcd34d;
+}
+
+.ros2-message-log-entry.error {
+    border-left-color: var(--danger-color);
+    color: #fca5a5;
+}

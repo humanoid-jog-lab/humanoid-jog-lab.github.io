@@ -7,7 +7,15 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "build:wasm": "./build.sh"
+    "build:wasm": "./build.sh",
+    "ros2-backend": "node server/ros2-backend.js",
+    "dev:full": "concurrently \"npm run dev\" \"npm run ros2-backend\"",
+    "electron-dev": "VITE_DEV_SERVER_URL=http://localhost:5173 concurrently \"npm run dev\" \"wait-on http://localhost:5173 && electron server/electron-main.js\"",
+    "electron-build": "npm run build && electron-builder",
+    "electron-build-win": "npm run build && electron-builder --win",
+    "electron-build-mac": "npm run build && electron-builder --mac",
+    "electron-build-linux": "npm run build && electron-builder --linux",
+    "electron-release": "npm run build && electron-builder -p always"
   },
   "keywords": [
     "robotics",
@@ -20,12 +28,20 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "express": "^4.18.2",
     "js-yaml": "^4.1.0",
+    "rclnodejs": "^1.6.0",
     "three": "^0.160.1",
     "three-stdlib": "^2.36.0",
-    "urdf-loader": "^0.12.6"
+    "urdf-loader": "^0.12.6",
+    "ws": "^8.14.0"
   },
   "devDependencies": {
-    "vite": "^5.0.0"
-  }
+    "concurrently": "^8.2.0",
+    "electron": "^28.3.3",
+    "electron-builder": "^24.6.4",
+    "vite": "^5.0.0",
+    "wait-on": "^7.0.0"
+  },
+  "main": "server/electron-main.js"
 }

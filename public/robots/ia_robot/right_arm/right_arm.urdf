@@ -58,7 +58,7 @@
     <parent link="rlink1" />
     <child link="rlink2" />
     <axis xyz="0 0 1" />
-    <limit lower="-3.14" upper="0.1" effort="200" velocity="1" />
+    <limit lower="-3.14" upper="0.0" effort="200" velocity="1" />
   </joint>
   <link name="rlink3">
     <inertial>
