@@ -31,6 +31,15 @@ jobs:
     - name: Build frontend
       run: npm run build
     
+    - name: Debug info
+      run: |
+        echo "=== Debug Information ==="
+        echo "Event name: ${{ github.event_name }}"
+        echo "Ref: ${{ github.ref }}"
+        echo "Branch: ${{ github.ref_name }}"
+        echo "Repository: ${{ github.repository }}"
+        echo ""
+    
     - name: Check build output
       run: |
         echo "Build output directory contents:"
@@ -38,12 +47,16 @@ jobs:
         echo ""
         echo "Dist directory size:"
         du -sh dist/ || echo "Cannot calculate size"
+        echo ""
+        echo "First few files in dist:"
+        ls -la dist/ | head -20 || echo "Cannot list files"
     
     - name: Deploy to GitHub Pages
-      if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
       uses: peaceiris/actions-gh-pages@v3
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         publish_dir: ./dist
         cname: false
         force_orphan: false
+        user_name: 'github-actions[bot]'
+        user_email: 'github-actions[bot]@users.noreply.github.com'
