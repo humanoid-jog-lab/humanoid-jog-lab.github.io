@@ -1,32 +1,28 @@
-name: Build and Deploy
+name: Build and Deploy Frontend
 
 on:
   push:
     branches: [ main, master ]
-  pull_request:
-    branches: [ main, master ]
+  workflow_dispatch:
 
 jobs:
-  build:
+  build-and-deploy:
     runs-on: ubuntu-latest
     
-    strategy:
-      matrix:
-        node-version: [18.x]
-
     steps:
-    - uses: actions/checkout@v3
+    - name: Checkout repository
+      uses: actions/checkout@v4
 
-    - name: Setup Node.js ${{ matrix.node-version }}
-      uses: actions/setup-node@v3
-        with:
-        node-version: ${{ matrix.node-version }}
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18.x'
 
-      - name: Install dependencies
-      run: npm install
+    - name: Install dependencies
+      run: npm ci
 
-      - name: Build
-        run: npm run build
+    - name: Build frontend
+      run: npm run build
 
     - name: Deploy to GitHub Pages
       if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
@@ -34,60 +30,3 @@ jobs:
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         publish_dir: ./dist
-
-  build-electron:
-    runs-on: ${{ matrix.os }}
-    
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-
-    steps:
-    - uses: actions/checkout@v3
-    
-    - name: Setup Node.js
-      uses: actions/setup-node@v3
-        with:
-        node-version: 18.x
-    
-    - name: Install dependencies
-      run: npm install
-    
-    - name: Build frontend
-      run: npm run build
-    
-    - name: Build Electron (Windows)
-      if: matrix.os == 'windows-latest'
-      run: npm run electron-build-win
-    
-    - name: Build Electron (macOS)
-      if: matrix.os == 'macos-latest'
-      run: npm run electron-build-mac
-    
-    - name: Build Electron (Linux)
-      if: matrix.os == 'ubuntu-latest'
-      run: npm run electron-build-linux
-    
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v3
-      with:
-        name: electron-${{ matrix.os }}
-        path: dist/electron/
-
-  release:
-    needs: build-electron
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
-
-    steps:
-    - uses: actions/download-artifact@v3
-    
-    - name: Create Release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        tag_name: ${{ github.ref }}
-        release_name: Release ${{ github.ref }}
-        draft: false
-        prerelease: false
