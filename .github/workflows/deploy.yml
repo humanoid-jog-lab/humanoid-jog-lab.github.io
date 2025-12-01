@@ -30,10 +30,20 @@ jobs:
 
     - name: Build frontend
       run: npm run build
-
+    
+    - name: Check build output
+      run: |
+        echo "Build output directory contents:"
+        ls -la dist/ || echo "dist directory not found"
+        echo ""
+        echo "Dist directory size:"
+        du -sh dist/ || echo "Cannot calculate size"
+    
     - name: Deploy to GitHub Pages
-      if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+      if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
       uses: peaceiris/actions-gh-pages@v3
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         publish_dir: ./dist
+        cname: false
+        force_orphan: false
