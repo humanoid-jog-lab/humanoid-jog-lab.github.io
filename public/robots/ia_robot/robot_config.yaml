@@ -15,7 +15,7 @@ robot1:
   
   joint_chain:
     base_link: "base_link"
-    end_link: "ee_link"
+    end_link: "ree_link"
     joints:
       - "rjoint1"
       - "rjoint2"
@@ -45,7 +45,7 @@ robot2:
   
   joint_chain:
     base_link: "base_link"
-    end_link: "ee_link"
+    end_link: "lee_link"
     joints:
       - "ljoint1"
       - "ljoint2"
@@ -55,7 +55,7 @@ robot2:
       - "ljoint6"
       - "ljoint7"
   
-  effector_offset: [0.0765,  0,  -0.041131]
+  effector_offset: [0.0765000000000002, 0, 0.041131]
   # MDH参数（自动提取）
   mdh_extraction:
     enabled: true

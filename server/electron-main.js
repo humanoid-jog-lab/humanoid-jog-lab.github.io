@@ -37,12 +37,12 @@ function createWindow() {
         // 开发模式：从 Vite 开发服务器加载
         mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
         mainWindow.webDevTools.openDevTools();
-        console.log('📱 Electron 以开发模式启动');
+        console.log('Electron 以开发模式启动');
     } else {
         // 生产模式：从打包的文件加载
         const indexPath = path.join(__dirname, '../dist/index.html');
         mainWindow.loadFile(indexPath);
-        console.log('📱 Electron 以生产模式启动');
+        console.log('Electron 以生产模式启动');
     }
 
     mainWindow.on('closed', () => {
@@ -54,10 +54,10 @@ function createWindow() {
  * Electron 应用启动
  */
 app.on('ready', async () => {
-    console.log('\n🚀 Electron 应用启动中...');
+    console.log('\nElectron 应用启动中...');
     
     // 1. 启动后端 ROS 2 服务
-    console.log('🔌 正在启动 ROS 2 后端服务...');
+    console.log('正在启动 ROS 2 后端服务...');
     ros2Server = createROS2Server(8081);
     ros2Server.httpServer.listen(8081, () => {
         console.log('✓ ROS 2 后端已启动 (端口 8081)');

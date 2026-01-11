@@ -1,14 +1,22 @@
 import { defineConfig } from 'vite';
 
-const isProd = process.env.NODE_ENV === 'production';
-const isElectron = process.env.VITE_DEV_SERVER_URL?.includes('electron');
+// 构建目标：
+// - 默认本地分发 dist/（静态服务器根目录）：base 必须是相对路径 ./，否则会去根路径找 /xxx/assets 导致资源 404
+// - Dev Server：base = /
+// - GitHub Pages（或任何子路径部署）：通过 VITE_BASE 显式指定，如 /dq_vizlab/
+const isElectronBuild = process.env.VITE_TARGET === 'electron';
 
-export default defineConfig({
-  // Electron 应用使用 / 路径，GitHub Pages 使用 /dq_vizlab/
-  base: isElectron || !isProd ? '/' : '/dq_vizlab/',
+export default defineConfig(({ command }) => {
+  const isBuild = command === 'build';
+  const base =
+    process.env.VITE_BASE ??
+    (isElectronBuild ? './' : (isBuild ? './' : '/'));
+
+  return {
+  base,
   server: {
     port: 5173,
-    open: !isElectron, // Electron 模式下不自动打开浏览器
+    open: true,
     headers: {
       // 确保 WASM 文件可以被正确加载
       'Cross-Origin-Opener-Policy': 'same-origin',
@@ -22,5 +30,6 @@ export default defineConfig({
   },
   publicDir: 'public',
   assetsInclude: ['**/*.wasm']
+  };
 });
 

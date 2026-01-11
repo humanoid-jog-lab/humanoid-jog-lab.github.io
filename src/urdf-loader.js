@@ -59,6 +59,66 @@ export class URDFPackageManager {
         // 设置包路径
         this.setupPackagePaths();
     }
+
+    /**
+     * 从远程 URL 批量加载文件（用于内置 public/robots 资源的默认加载）
+     *
+     * @param {Array<{path: string, url: string}>} entries - path 用作包内相对路径（会作为 webkitRelativePath），url 用于 fetch
+     */
+    async addRemoteFiles(entries) {
+        if (!Array.isArray(entries) || entries.length === 0) {
+            throw new Error('addRemoteFiles: entries 不能为空');
+        }
+
+        const fetchedFiles = await Promise.all(entries.map(async ({ path, url }) => {
+            if (!path || !url) {
+                throw new Error(`addRemoteFiles: 无效条目: path=${path}, url=${url}`);
+            }
+
+            const response = await fetch(url);
+            if (!response.ok) {
+                throw new Error(`无法加载远程文件: ${url} (HTTP ${response.status})`);
+            }
+
+            const blob = await response.blob();
+            const filename = (path.split('/').pop() || 'file');
+
+            // 浏览器环境下使用 File；若 File 不存在则退化为 Blob（仍提供 text()/arrayBuffer()）
+            let fileLike;
+            if (typeof File !== 'undefined') {
+                fileLike = new File([blob], filename, { type: blob.type || response.headers.get('content-type') || '' });
+            } else {
+                fileLike = blob;
+                fileLike.name = filename;
+            }
+
+            // 关键：让后续逻辑把它当成“拖拽目录结构”里的文件
+            try {
+                Object.defineProperty(fileLike, 'webkitRelativePath', {
+                    value: path,
+                    writable: false
+                });
+            } catch (e) {
+                // 某些环境可能不允许 defineProperty（极少见）；退化为普通属性
+                fileLike.webkitRelativePath = path;
+            }
+
+            return fileLike;
+        }));
+
+        for (const file of fetchedFiles) {
+            const key = file.webkitRelativePath || file.name;
+            this.files.set(key, file);
+        }
+
+        console.log(`✓ 已从远程加载 ${this.files.size} 个文件`);
+
+        // 查找并解析 YAML 配置
+        await this.findAndParseConfig();
+
+        // 设置包路径
+        this.setupPackagePaths();
+    }
     
     /**
      * 遍历文件树（处理文件夹）

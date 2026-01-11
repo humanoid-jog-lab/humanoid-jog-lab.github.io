@@ -310,12 +310,14 @@ export class RobotVisualizer {
             const loader = new URDFLoader();
             const baseUrl = import.meta.env.BASE_URL || '/';
             loader.packages = {
-                'franka_description': `${baseUrl}robots/franka`
+                // 默认改为 ia_robot（同时保留常见别名映射）
+                'ia_robot': `${baseUrl}robots/ia_robot`,
+                'robot_arm_description': `${baseUrl}robots/ia_robot`
             };
             
             this.urdfRobot = await new Promise((resolve, reject) => {
                 loader.load(
-                    `${baseUrl}robots/franka/panda_simplified.urdf`,
+                    `${baseUrl}robots/ia_robot/right_arm/right_arm.urdf`,
                     (robot) => {
                         console.log('✓ URDF 加载成功');
                         console.log('关节数:', Object.keys(robot.joints).length);

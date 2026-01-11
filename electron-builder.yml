@@ -57,6 +57,8 @@ linux:
     - deb
   icon: public/icon.png
   category: Science
+  # 解决 Linux deb 打包要求 maintainer/email 的报错（可按需改成你的邮箱）
+  maintainer: "DQ Vizlab <vizlab@local.invalid>"
 
 deb:
   depends:

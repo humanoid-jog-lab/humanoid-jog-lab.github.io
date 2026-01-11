@@ -18,7 +18,7 @@ let frankaConfigCache = null;
 
 // 全局状态
 let currentRobot = null;
-let currentRobotType = 'franka';
+let currentRobotType = 'ia_robot';
 let visualizer = null;
 let jointAngles = [];
 let extractedMDH = null; // 从 URDF 提取的 MDH 参数
@@ -410,10 +410,10 @@ async function init() {
         // 设置事件监听器
         setupEventListeners();
         
-        // 默认加载Franka机器人（如果没有自定义机器人）
+        // 默认加载 ia_robot（如果没有自定义机器人）
         // 延迟一点执行，确保UI已准备好
         setTimeout(() => {
-            initDefaultFranka();
+            initDefaultIARobot();
         }, 100);
         
         console.log('✓ 应用初始化完成');
@@ -432,14 +432,138 @@ async function init() {
 }
 
 /**
- * 默认初始化Franka机器人（如果未加载自定义机器人）
+ * 默认初始化 ia_robot（如果未加载自定义机器人）
  */
-async function initDefaultFranka() {
-    // 只有在非双臂模式且没有当前机器人时才加载Franka
-    if (!dualArmMode && !currentRobot) {
+async function initDefaultIARobot() {
+    // 如果用户已经通过拖拽加载/或已经有机器人，则不覆盖
+    if (customRobotConfig || dualArmMode || currentRobot) {
+        return;
+    }
+
+    try {
+        await loadBuiltInRobotFromPublic('ia_robot');
+        updateRobotPose();
+    } catch (error) {
+        console.warn('⚠ 默认加载 ia_robot 失败，将回退到内置 Franka:', error);
         await initRobot('franka');
         updateRobotPose();
     }
+}
+
+/**
+ * 从 public/robots/<robotDir>/ 自动加载内置 URDF 机器人（复用拖拽加载逻辑）
+ * 目前用于默认加载 ia_robot。
+ */
+async function loadBuiltInRobotFromPublic(robotDir) {
+    if (!visualizer) {
+        throw new Error('可视化器未初始化');
+    }
+
+    // 在加载新模型前，先清理所有旧模型
+    if (visualizer && typeof visualizer.cleanupOldRobots === 'function') {
+        visualizer.cleanupOldRobots();
+    }
+
+    const baseUrl = import.meta.env.BASE_URL || '/';
+
+    // ia_robot 是双臂包：这里显式列出其 public 资源（URDF/YAML/mesh）
+    // 注意：path 必须以包名（ia_robot）作为第一级目录，以便 package://ia_robot/... 能正确匹配。
+    if (robotDir !== 'ia_robot') {
+        throw new Error(`暂不支持的内置机器人: ${robotDir}`);
+    }
+
+    const filesInPackage = [
+        'robot_config.yaml',
+        'right_arm/right_arm.urdf',
+        'left_arm/left_arm.urdf',
+        // meshes
+        'meshes/arm_right.STL',
+        'meshes/base_link_arm.STL',
+        'meshes/base_link_body.STL',
+        'meshes/base_link.STL',
+        'meshes/baselink.obj',
+        'meshes/body_link.STL',
+        'meshes/car_link.STL',
+        'meshes/leftlink1.obj',
+        'meshes/leftlink2.obj',
+        'meshes/leftlink3.obj',
+        'meshes/leftlink4.obj',
+        'meshes/leftlink5.obj',
+        'meshes/leftlink6.obj',
+        'meshes/leftlink7.obj',
+        'meshes/link1.STL',
+        'meshes/link2.STL',
+        'meshes/link3.STL',
+        'meshes/llink1.STL',
+        'meshes/llink2.STL',
+        'meshes/llink3.STL',
+        'meshes/llink4.STL',
+        'meshes/llink5.STL',
+        'meshes/llink6.STL',
+        'meshes/llink7.STL',
+        'meshes/low_leg.STL',
+        'meshes/ree_link.STL',
+        'meshes/rightlink1.obj',
+        'meshes/rightlink2.obj',
+        'meshes/rightlink3.obj',
+        'meshes/rightlink4.obj',
+        'meshes/rightlink5.obj',
+        'meshes/rightlink6.obj',
+        'meshes/rightlink7.obj',
+        'meshes/rlink1.STL',
+        'meshes/rlink2.STL',
+        'meshes/rlink3.STL',
+        'meshes/rlink4.STL',
+        'meshes/rlink5.STL',
+        'meshes/rlink6.STL',
+        'meshes/rlink7.STL',
+        'meshes/up_leg.STL'
+    ];
+
+    packageManager = new URDFPackageManager();
+    const remoteEntries = filesInPackage.map((rel) => {
+        const path = `${robotDir}/${rel}`;
+        const url = `${baseUrl}robots/${robotDir}/${rel}`;
+        return { path, url };
+    });
+    await packageManager.addRemoteFiles(remoteEntries);
+
+    // 读取配置
+    customRobotConfig = packageManager.getConfig();
+    if (!customRobotConfig) {
+        throw new Error('未找到 robot_config.yaml 配置文件');
+    }
+
+    currentRobotType = robotDir;
+
+    // 为了复用现有流程，仍然 load 一次（dualArmSystem 内部会按 config 再次加载指定 URDF）
+    const robot = await loadURDFFromPackage(packageManager);
+
+    const isDualArm = customRobotConfig?.dual_arm === true;
+    dualArmMode = isDualArm;
+
+    if (isDualArm) {
+        const jointControlsContainer = document.getElementById('joint-controls');
+        if (jointControlsContainer) {
+            jointControlsContainer.innerHTML = '';
+        }
+
+        await loadDualArmSystem(robot, customRobotConfig);
+        switchToDualArmUI();
+        createDualArmJointControls(customRobotConfig);
+    } else {
+        const loaded = await visualizer.loadCustomURDF(robot, null, customRobotConfig);
+        if (!loaded) {
+            throw new Error('可视化器加载失败');
+        }
+        switchToSingleArmUI();
+
+        if (customRobotConfig.mdh_extraction?.auto_extract) {
+            await extractMDHFromCustomRobot(robot, customRobotConfig);
+        }
+    }
+
+    refreshDockState();
 }
 
 /**
