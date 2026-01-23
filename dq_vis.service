@@ -1,0 +1,19 @@
+[Unit]
+Description=DQ Robot Vision
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=user
+Group=user
+WorkingDirectory=/home/user/dq_src
+ExecStart=/home/user/dq_src/start.sh
+ExecStop=/home/user/dq_src/stop.sh
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
