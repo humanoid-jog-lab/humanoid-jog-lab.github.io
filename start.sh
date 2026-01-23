@@ -1,5 +1,9 @@
 #!/bin/bash
 
+export ROS_DOMAIN_ID=55
+source /opt/ros/humble/setup.bash
+source /home/user/joint_controller/install/setup.bash
+
 # 启动第一个服务（HTTP服务器）
 echo "启动 HTTP 服务器..."
 cd /home/user/dq_src/dist || { echo "目录不存在: /home/user/dq_src/dist"; exit 1; }

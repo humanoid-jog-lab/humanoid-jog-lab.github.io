@@ -18,6 +18,17 @@ from typing import Dict, Set, Optional
 from datetime import datetime
 import os
 
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+
+# 使用logger
+logger = logging.getLogger(__name__)
+
+logger.info(f"ROS_DOMAIN_ID: {os.environ['ROS_DOMAIN_ID']}")
+
 try:
     import rclpy
     from rclpy.node import Node

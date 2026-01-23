@@ -10,7 +10,6 @@ Group=user
 RemainAfterExit=yes
 Environment=LD_LIBRARY_PATH=/opt/ros/humble/lib:/usr/lib/x86_64-linux-gnu
 Environment=PYTHONPATH=/opt/ros/humble/lib/python3.10/site-packages
-Environment=ROS_DOMAIN_ID=55
 WorkingDirectory=/home/user/dq_src
 ExecStart=/bin/bash -c 'source /opt/ros/humble/setup.bash && /home/user/dq_src/start.sh'
 ExecStop=/home/user/dq_src/stop.sh
