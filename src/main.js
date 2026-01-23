@@ -3831,6 +3831,9 @@ function setupFloatingPanels() {
  * 设置 ROS 2 事件监听器
  */
 function setupROS2EventListeners() {
+    // 按钮状态跟踪变量
+    let switchModeBtnProcessing = false;
+
     // ROS 2 WebSocket 地址设置
     const websocketUrlInput = document.getElementById('ros2-websocket-url');
     const saveUrlBtn = document.getElementById('ros2-save-url-btn');
@@ -3899,6 +3902,53 @@ function setupROS2EventListeners() {
 
     updateIKRobotSelection();
     
+    // ROS 2 切换控制模式按钮
+    const switchModeBtn = document.getElementById('ros2-switch-mode-btn');
+    if (switchModeBtn) {
+        switchModeBtn.addEventListener('click', async () => {
+            // 防止快速多次点击
+            if (switchModeBtnProcessing) {
+                return;
+            }
+
+            if (!ros2Communicator || !ros2Communicator.isInitialized) {
+                addROS2LogEntry('ROS 2 未连接', 'error');
+                return;
+            }
+
+            const controlModeSelect = document.getElementById('ros2-control-mode');
+            const selectedMode = controlModeSelect ? controlModeSelect.value : 'manual';
+
+            // 设置处理中状态
+            switchModeBtnProcessing = true;
+            const originalText = switchModeBtn.textContent;
+            switchModeBtn.textContent = '切换中...';
+            switchModeBtn.disabled = true;
+            switchModeBtn.style.opacity = '0.6';
+
+            try {
+                await ros2Communicator.switchMode(selectedMode);
+                addROS2LogEntry(`切换控制模式: ${selectedMode}`, 'info');
+
+                // 更新状态显示
+                const modeStatusEl = document.getElementById('ros2-mode-status');
+                if (modeStatusEl) {
+                    const modeText = selectedMode === 'manual' ? '手动模式 - 可直接控制机器人关节' :
+                                   selectedMode === 'teleop' ? '遥操作模式 - 通过输入设备控制' : '未知模式';
+                    modeStatusEl.textContent = `当前模式：${modeText}`;
+                }
+            } catch (error) {
+                addROS2LogEntry(`切换模式失败: ${error.message}`, 'error');
+            } finally {
+                // 重置按钮状态
+                switchModeBtnProcessing = false;
+                switchModeBtn.textContent = originalText;
+                switchModeBtn.disabled = false;
+                switchModeBtn.style.opacity = '1';
+            }
+        });
+    }
+
     // ROS 2 刷新话题按钮
     const refreshTopicsBtn = document.getElementById('ros2-refresh-topics-btn');
     if (refreshTopicsBtn) {
@@ -4125,6 +4175,7 @@ async function publishJointPositionMessage() {
         return false;
     }
 }
+
 
 /**
  * 开始持续发布关节位置
@@ -5187,6 +5238,12 @@ async function initROS2Communication(customUrl = null) {
                 }
             }
         });
+
+        // 注册模式变化回调
+        ros2Communicator.onModeChange((mode) => {
+            updateROS2ControlModeDisplay(mode);
+            addROS2LogEntry(`当前控制模式: ${mode}`, 'info');
+        });
         
         // 显示连接的 URL
         addROS2LogEntry(`连接地址: ${ros2Communicator.getWebSocketUrl()}`, 'info');
@@ -5195,6 +5252,12 @@ async function initROS2Communication(customUrl = null) {
         const result = await ros2Communicator.init();
         if (result) {
             addROS2LogEntry('ROS 2 初始化成功', 'info');
+            // 查询当前控制模式
+            try {
+                await ros2Communicator.getMode();
+            } catch (error) {
+                console.warn('查询当前模式失败:', error);
+            }
         } else {
             addROS2LogEntry('ROS 2 初始化失败', 'error');
         }
@@ -5322,6 +5385,24 @@ function switchToSingleArmUI() {
     renderEnvironmentObjectList();
     updateIKRobotSelection();
     updateDQCalculatorRobotSelection();
+}
+
+/**
+ * 更新 ROS 2 控制模式显示
+ */
+function updateROS2ControlModeDisplay(mode) {
+    const controlModeSelect = document.getElementById('ros2-control-mode');
+    if (controlModeSelect) {
+        controlModeSelect.value = mode;
+
+        // 更新状态显示
+        const modeStatusEl = document.getElementById('ros2-mode-status');
+        if (modeStatusEl) {
+            const modeText = mode === 'manual' ? '手动模式 - 可直接控制机器人关节' :
+                           mode === 'teleop' ? '遥操作模式 - 通过VR设备控制' : '未知模式';
+            modeStatusEl.textContent = `当前模式：${modeText}`;
+        }
+    }
 }
 
 // 页面加载完成后初始化

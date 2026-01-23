@@ -571,7 +571,24 @@
                     </div>
                 </div>
             </div>
-
+            <div class="panel-section">
+                <h3>操作模式</h3>
+                <div style="margin-bottom: 0.75rem;">
+                    <label style="font-size: 0.85rem; color: #cbd5e1; display: block; margin-bottom: 0.25rem;">
+                        控制模式：
+                    </label>
+                    <div>
+                        <select id="ros2-control-mode" style="width: 80%; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;">
+                            <option value="manual">手动模式</option>
+                            <option value="teleop">遥操作模式</option>
+                        </select>
+                        <button id="ros2-switch-mode-btn" class="demo-btn" style="padding: 0.35rem 0.75rem; font-size: 0.85rem;">确定</button>
+                    </div>
+                </div>
+                <div id="ros2-mode-status" style="font-size: 0.75rem; color: #94a3b8;">
+                    当前模式：手动模式 - 可直接控制机器人关节
+                </div>
+            </div>
             <div class="panel-section">
                 <h3>话题管理</h3>
                 <div style="margin-bottom: 0.75rem;">

@@ -19,6 +19,7 @@ export class ROS2Communicator {
         this.isInitialized = false;
         this.ros2Status = 'disconnected'; // disconnected, connecting, connected, error
         this.statusCallbacks = [];
+        this.modeCallbacks = [];
         this.messageCallbacks = new Map();
         this.subscriptions = new Set();
         this.publishers = new Set();
@@ -204,6 +205,15 @@ export class ROS2Communicator {
                 console.log('话题列表:', data ?? topics);
                 break;
 
+            case 'mode':
+                // 处理获取当前模式的响应
+                console.log('当前模式:', message.mode);
+                // 触发模式更新回调
+                if (this.modeCallbacks && this.modeCallbacks.length > 0) {
+                    this.modeCallbacks.forEach(callback => callback(message.mode));
+                }
+                break;
+
             default:
                 console.warn('未知的消息类型:', type);
         }
@@ -384,6 +394,13 @@ export class ROS2Communicator {
     }
 
     /**
+     * 注册模式变化回调
+     */
+    onModeChange(callback) {
+        this.modeCallbacks.push(callback);
+    }
+
+    /**
      * 注册消息回调
      */
     onMessage(topicName, callback) {
@@ -425,6 +442,37 @@ export class ROS2Communicator {
      */
     getStatus() {
         return this.ros2Status;
+    }
+
+    /**
+     * 切换控制模式
+     */
+    async switchMode(mode) {
+        if (!this.isConnected || !this.ws) {
+            throw new Error('WebSocket 未连接');
+        }
+
+        const message = {
+            type: 'switchMode',
+            data: mode
+        };
+
+        this.ws.send(JSON.stringify(message));
+    }
+
+    /**
+     * 获取当前控制模式
+     */
+    async getMode() {
+        if (!this.isConnected || !this.ws) {
+            throw new Error('WebSocket 未连接');
+        }
+
+        const message = {
+            type: 'getMode'
+        };
+
+        this.ws.send(JSON.stringify(message));
     }
 }
 

@@ -16,6 +16,7 @@ import json
 import logging
 from typing import Dict, Set, Optional
 from datetime import datetime
+import os
 
 try:
     import rclpy
@@ -134,6 +135,7 @@ class ROS2Node(Node):
                 else:
                     logger.error("robot_control_msg 不可用")
                     return None
+            
             else:
                 logger.error(f"不支持的消息类型: {message_type}")
                 return None
@@ -161,6 +163,7 @@ class ROS2BackendServer:
         self.client_subscriptions: Dict[WebSocketServerProtocol, Set[str]] = {}
         self.topic_subscribers: Dict[str, int] = {}
         self.event_loop: Optional[asyncio.AbstractEventLoop] = None
+        self.robot_control_mode = "manual"
     
     async def broadcast_to_all(self, message: dict):
         """向所有客户端广播消息"""
@@ -787,6 +790,17 @@ class ROS2BackendServer:
                 }))
             elif msg_type == 'getTopics':
                 await self.handle_get_topics(ws)
+            elif msg_type == "switchMode":
+                logger.info(f"switch mode ===> {data}")
+                self.robot_control_mode = data
+                result =  await self.handle_cotrol_mode_switch(data)
+                await ws.send(json.dumps(result))
+            elif msg_type == "getMode":
+                logger.info(f"get current mode: {self.robot_control_mode}")
+                await ws.send(json.dumps({
+                    'type': 'mode',
+                    "mode": self.robot_control_mode
+                }))
             else:
                 logger.warning(f'未知的消息类型: {msg_type}')
         except Exception as e:
@@ -797,6 +811,25 @@ class ROS2BackendServer:
                 'originalType': msg_type
             }))
     
+
+    async def handle_cotrol_mode_switch(self, mode):
+        try:
+            if mode == "manual":
+                logger.info("切换manual模式...")
+                os.system("/home/user/joint_controller/stop_tele_op.sh") 
+                logger.info("已切换manual模式...")
+            elif mode == "teleop":
+                logger.info("切换teleop模式...")
+                os.system("/home/user/joint_controller/start_tele_op.sh")
+                logger.info("已切换teleop模式...")
+            else:
+                raise ValueError(f"未知的模式: {mode}") 
+            return {"type": "success", "message": f"切换到模式 {mode} 成功"}
+        except Exception as ex:
+            logger.error(f"模式切换失败: {ex}")
+            return {"type": "error", "message": f"模式切换失败: {ex}"}
+
+
     async def handle_client(self, ws: WebSocketServerProtocol, path: str):
         """处理客户端连接"""
         logger.info("✓ 新客户端连接")
@@ -829,7 +862,7 @@ class ROS2BackendServer:
         self.event_loop = asyncio.get_running_loop()
         
         logger.info(f"启动 WebSocket 服务器，端口: {self.port}")
-        async with serve(self.handle_client, "localhost", self.port):
+        async with serve(self.handle_client, "0.0.0.0", self.port):
             await asyncio.Future()  # 永久运行
 
 
