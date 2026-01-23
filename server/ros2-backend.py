@@ -155,7 +155,7 @@ class ROS2Node(Node):
 class ROS2BackendServer:
     """ROS2 后端服务器，处理 WebSocket 连接"""
     
-    def __init__(self, port: int = 8081):
+    def __init__(self, port: int = 8082):
         self.port = port
         self.ros2_node: Optional[ROS2Node] = None
         self.ros2_initialized = False
@@ -868,7 +868,7 @@ class ROS2BackendServer:
 
 def main():
     """主函数"""
-    server = ROS2BackendServer(port=8082)
+    server = ROS2BackendServer(port=8081)
     try:
         asyncio.run(server.start())
     except KeyboardInterrupt:
