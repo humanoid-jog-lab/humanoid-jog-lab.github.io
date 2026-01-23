@@ -53,7 +53,7 @@ let environmentObjectCounter = 0;
 
 // 关节位置发布定时器
 let jointPositionPublishTimer = null;
-const JOINT_POSITION_PUBLISH_INTERVAL = 50; // 50ms，即20Hz发布频率
+const JOINT_POSITION_PUBLISH_INTERVAL = 10; // 10ms，即100Hz发布频率
 
 const DEFAULT_ENVIRONMENT_BOX_CM = {
     length: 41.5,
@@ -2743,6 +2743,34 @@ function setupEventListeners() {
             applyTeachOrder(isDeltaFirst);
         });
     }
+
+    // 示教器速度百分比（影响每步增量）
+    const teachSpeedSlider = document.getElementById('teach-speed-percent');
+    const teachSpeedValue = document.getElementById('teach-speed-value');
+    const TEACH_SPEED_STORAGE_KEY = 'teach-speed-percent';
+    const clampInt = (v, min, max) => Math.max(min, Math.min(max, Number.parseInt(v, 10) || min));
+    const applyTeachSpeedPercent = (percent) => {
+        const p = clampInt(percent, 1, 100);
+        if (teachSpeedSlider) teachSpeedSlider.value = String(p);
+        if (teachSpeedValue) teachSpeedValue.textContent = String(p);
+        try {
+            localStorage.setItem(TEACH_SPEED_STORAGE_KEY, String(p));
+        } catch (_) {}
+        if (visualizer?.setTeachSpeedPercent) {
+            visualizer.setTeachSpeedPercent(p);
+        } else if (visualizer) {
+            visualizer.teachSpeedPercent = p;
+        }
+    };
+    if (teachSpeedSlider) {
+        const saved = (() => {
+            try { return localStorage.getItem(TEACH_SPEED_STORAGE_KEY); } catch (_) { return null; }
+        })();
+        applyTeachSpeedPercent(saved ?? teachSpeedSlider.value ?? 100);
+        teachSpeedSlider.addEventListener('input', (e) => {
+            applyTeachSpeedPercent(e.target?.value);
+        });
+    }
     
     // 示教器控制按钮（移除拖动末端执行器模式）
     const teachButtons = document.querySelectorAll('.teach-btn');
@@ -4389,6 +4417,22 @@ function getCurrentRobotDQ(robotChoice) {
 
     try {
         if (dualArmMode) {
+            // 双臂：支持机器人1/2 + 绝对/相对位姿
+            const da = window.dualArmSystem || dualArmSystem;
+            if (robotChoice === 'absolute') {
+                if (!da || !window.jointAngles1?.length || !window.jointAngles2?.length) {
+                    return null;
+                }
+                const allJointAngles = [...window.jointAngles1, ...window.jointAngles2];
+                return da.getAbsolutePose(allJointAngles);
+            }
+            if (robotChoice === 'relative') {
+                if (!da || !window.jointAngles1?.length || !window.jointAngles2?.length) {
+                    return null;
+                }
+                const allJointAngles = [...window.jointAngles1, ...window.jointAngles2];
+                return da.getRelativePose(allJointAngles);
+            }
             if (robotChoice === 'robot2') {
                 if (!window.robot2 || !window.jointAngles2?.length) {
                     return null;
@@ -4431,6 +4475,7 @@ function updateIKRobotSelection() {
     const ikStatus = document.getElementById('ik-status');
     if (!ikSelect) return;
 
+    const prevValue = ikSelect.value;
     ikSelect.innerHTML = '';
     const opt1 = document.createElement('option');
     opt1.value = 'robot1';
@@ -4442,14 +4487,33 @@ function updateIKRobotSelection() {
         opt2.value = 'robot2';
         opt2.textContent = '机器人2';
         ikSelect.appendChild(opt2);
+
+        const optAbs = document.createElement('option');
+        optAbs.value = 'absolute';
+        optAbs.textContent = '绝对位姿';
+        ikSelect.appendChild(optAbs);
+
+        const optRel = document.createElement('option');
+        optRel.value = 'relative';
+        optRel.textContent = '相对位姿';
+        ikSelect.appendChild(optRel);
+
         ikSelect.disabled = false;
         if (ikStatus) {
-            ikStatus.textContent = '双臂模式：可选择机器人1或机器人2';
+            ikStatus.textContent = '双臂模式：可选择机器人1/机器人2/绝对位姿/相对位姿';
         }
     } else {
         ikSelect.disabled = true;
         if (ikStatus) {
             ikStatus.textContent = '单臂模式：只控制机器人1';
+        }
+    }
+
+    // 尽量保留之前的选择
+    if (prevValue) {
+        const hasPrev = Array.from(ikSelect.options).some(opt => opt.value === prevValue);
+        if (hasPrev) {
+            ikSelect.value = prevValue;
         }
     }
 }
@@ -4460,6 +4524,7 @@ function updateDQCalculatorRobotSelection() {
         return;
     }
 
+    const prevValue = select.value;
     select.innerHTML = '';
     const opt1 = document.createElement('option');
     opt1.value = 'robot1';
@@ -4471,9 +4536,27 @@ function updateDQCalculatorRobotSelection() {
         opt2.value = 'robot2';
         opt2.textContent = '机器人2';
         select.appendChild(opt2);
+
+        const optAbs = document.createElement('option');
+        optAbs.value = 'absolute';
+        optAbs.textContent = '绝对位姿';
+        select.appendChild(optAbs);
+
+        const optRel = document.createElement('option');
+        optRel.value = 'relative';
+        optRel.textContent = '相对位姿';
+        select.appendChild(optRel);
+
         select.disabled = false;
     } else {
         select.disabled = true;
+    }
+
+    if (prevValue) {
+        const hasPrev = Array.from(select.options).some(opt => opt.value === prevValue);
+        if (hasPrev) {
+            select.value = prevValue;
+        }
     }
 }
 
@@ -4487,6 +4570,32 @@ function setupInverseKinematicsControls() {
     if (!ikSolveBtn && !copyDqBtn) {
         return;
     }
+
+    const ikSelect = document.getElementById('ik-robot-select');
+    const updateIkSolveAvailability = () => {
+        // 双臂模式下也允许求解 absolute/relative：
+        // - absolute：保持相对位姿不变
+        // - relative：保持绝对位姿不变
+        if (!ikStatus) return;
+        if (!dualArmMode) {
+            ikStatus.textContent = '单臂模式：使用雅可比伪逆更新当前机器人角度';
+            ikStatus.style.color = '#94a3b8';
+            return;
+        }
+        const choice = ikSelect?.value || 'robot1';
+        if (choice === 'absolute') {
+            ikStatus.textContent = '双臂绝对位姿：求解绝对位姿，保持相对位姿不变';
+            ikStatus.style.color = '#94a3b8';
+            return;
+        }
+        if (choice === 'relative') {
+            ikStatus.textContent = '双臂相对位姿：求解相对位姿，保持绝对位姿不变';
+            ikStatus.style.color = '#94a3b8';
+            return;
+        }
+        ikStatus.textContent = '双臂单臂求解：仅更新机器人1或机器人2角度';
+        ikStatus.style.color = '#94a3b8';
+    };
 
     ikSolveBtn.addEventListener('click', () => {
         const dqText = document.getElementById('ik-dq-input')?.value || '';
@@ -4517,8 +4626,22 @@ function setupInverseKinematicsControls() {
                 success = vis.updateSingleArmJointsWithPseudoInverse(dqArray) === true;
             } else if (robotChoice === 'robot1') {
                 success = vis.updateRobot1JointsWithPseudoInverse(dqArray) === true;
-            } else {
+            } else if (robotChoice === 'robot2') {
                 success = vis.updateRobot2JointsWithPseudoInverse(dqArray) === true;
+            } else if (robotChoice === 'absolute') {
+                const allJointAngles = [...(window.jointAngles1 || []), ...(window.jointAngles2 || [])];
+                success = vis.updateDualArmJointsFromAbsolutePoseTarget?.(dqArray, allJointAngles) === true;
+            } else if (robotChoice === 'relative') {
+                const allJointAngles = [...(window.jointAngles1 || []), ...(window.jointAngles2 || [])];
+                success = vis.updateDualArmJointsFromRelativePoseTarget?.(dqArray, allJointAngles) === true;
+            } else {
+                // 兜底：防止误选 absolute/relative 时错误调用 robot2
+                addROS2LogEntry('当前逆运动学求解仅支持机器人1/机器人2', 'warn');
+                if (ikStatus) {
+                    ikStatus.textContent = '当前逆运动学求解仅支持机器人1/机器人2';
+                    ikStatus.style.color = '#f59e0b';
+                }
+                return;
             }
             if (!success) {
                 addROS2LogEntry('逆运动学求解失败：伪逆求解未收敛', 'warn');
@@ -4534,9 +4657,18 @@ function setupInverseKinematicsControls() {
             if (typeof updateDualArmJointSlidersFromAngles === 'function') {
                 updateDualArmJointSlidersFromAngles();
             }
-            addROS2LogEntry(`逆运动学求解成功，已更新 ${robotChoice === 'robot1' ? '机器人1' : '机器人2'} 角度`, 'info');
+            const label = robotChoice === 'robot1'
+                ? '机器人1'
+                : robotChoice === 'robot2'
+                    ? '机器人2'
+                    : robotChoice === 'absolute'
+                        ? '绝对位姿（保持相对不变）'
+                        : robotChoice === 'relative'
+                            ? '相对位姿（保持绝对不变）'
+                            : robotChoice;
+            addROS2LogEntry(`逆运动学求解成功，已更新 ${label}`, 'info');
             if (ikStatus) {
-                ikStatus.textContent = `逆运动学求解成功，已更新 ${robotChoice === 'robot1' ? '机器人1' : '机器人2'} 角度`;
+                ikStatus.textContent = `逆运动学求解成功，已更新 ${label}`;
                 ikStatus.style.color = '#10b981';
             }
         } catch (error) {
@@ -4550,6 +4682,12 @@ function setupInverseKinematicsControls() {
     });
 
     updateIKRobotSelection();
+    updateIkSolveAvailability();
+    if (ikSelect) {
+        ikSelect.addEventListener('change', () => {
+            updateIkSolveAvailability();
+        });
+    }
 
     if (copyDqBtn) {
         copyDqBtn.addEventListener('click', async () => {

@@ -835,7 +835,7 @@ class ROS2BackendServer:
 
 def main():
     """主函数"""
-    server = ROS2BackendServer(port=8081)
+    server = ROS2BackendServer(port=8082)
     try:
         asyncio.run(server.start())
     except KeyboardInterrupt:

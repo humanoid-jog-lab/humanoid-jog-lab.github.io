@@ -88,6 +88,9 @@ export class RobotVisualizer {
 
         // 示教器乘法顺序（默认局部增量：Δ × 当前）
         this.teachMultiplicationOrder = 'delta-first';
+
+        // 示教器速度百分比（影响“每一步”的平移/旋转增量，不改变按键重复频率）
+        this.teachSpeedPercent = 100;
     }
     
     /**
@@ -218,6 +221,29 @@ export class RobotVisualizer {
         }
         this.teachMultiplicationOrder = order;
         console.log(`示教器乘法顺序已设置为: ${order === 'delta-first' ? 'Δ × 当前' : '当前 × Δ'}`);
+    }
+
+    /**
+     * 设置示教器速度百分比（1-100）
+     * @param {number} percent
+     */
+    setTeachSpeedPercent(percent) {
+        const p = Math.max(1, Math.min(100, Number(percent) || 100));
+        this.teachSpeedPercent = p;
+    }
+
+    getTeachSpeedScale() {
+        return (this.teachSpeedPercent || 100) / 100;
+    }
+
+    getTeachTranslationStep() {
+        // 默认每步 5mm，按速度百分比缩放
+        return 0.005 * this.getTeachSpeedScale();
+    }
+
+    getTeachRotationAngle() {
+        // 默认每步 π/128 rad，按速度百分比缩放
+        return (Math.PI / 128) * this.getTeachSpeedScale();
     }
 
     /**
@@ -2621,7 +2647,7 @@ export class RobotVisualizer {
         }
         
         try {
-            const stepSize = 0.005;
+            const stepSize = this.getTeachTranslationStep();
             const directionSign = direction === 'positive' ? 1 : -1;
             const delta = this.getTranslationDirection(axis).multiplyScalar(stepSize * directionSign);
             const allJointAngles = [...window.jointAngles1, ...window.jointAngles2];
@@ -2660,7 +2686,7 @@ export class RobotVisualizer {
         
         try {
             // 旋转角度（弧度）
-            const angle = Math.PI / 128;
+            const angle = this.getTeachRotationAngle();
             const directionSign = direction === 'positive' ? 1 : -1;
             const rotationAngle = angle * directionSign;
             
@@ -2751,7 +2777,7 @@ export class RobotVisualizer {
      * @param {number[]} dqRelativeCurrentArray - 当前相对位姿（可选，如果不提供则从当前关节角度计算）
      */
     updateDualArmJointsFromAbsolutePoseTarget(dqAbsoluteTargetArray, currentJointAngles, dqRelativeCurrentArray = null) {
-        if (!window.dualArmSystem || !currentJointAngles || currentJointAngles.length === 0) return;
+        if (!window.dualArmSystem || !currentJointAngles || currentJointAngles.length === 0) return false;
         
         try {
             // 获取当前相对位姿（如果未提供）
@@ -2871,8 +2897,10 @@ export class RobotVisualizer {
             if (window.updateRobotPose) {
                 window.updateRobotPose();
             }
+            return true;
         } catch (error) {
             console.error('更新双臂关节角度失败:', error);
+            return false;
         }
     }
     
@@ -2905,7 +2933,7 @@ export class RobotVisualizer {
         }
         
         try {
-            const stepSize = 0.005;
+            const stepSize = this.getTeachTranslationStep();
             const directionSign = direction === 'positive' ? 1 : -1;
             const delta = this.getTranslationDirection(axis).multiplyScalar(stepSize * directionSign);
             const allJointAngles = [...window.jointAngles1, ...window.jointAngles2];
@@ -2944,7 +2972,7 @@ export class RobotVisualizer {
         
         try {
             // 旋转角度（弧度）
-            const angle = Math.PI / 128;
+            const angle = this.getTeachRotationAngle();
             const directionSign = direction === 'positive' ? 1 : -1;
             const rotationAngle = angle * directionSign;
             
@@ -3031,7 +3059,7 @@ export class RobotVisualizer {
      * @param {number[]} dqAbsoluteCurrentArray - 当前绝对位姿（可选，如果不提供则从当前关节角度计算）
      */
     updateDualArmJointsFromRelativePoseTarget(dqRelativeTargetArray, currentJointAngles, dqAbsoluteCurrentArray = null) {
-        if (!window.dualArmSystem || !currentJointAngles || currentJointAngles.length === 0) return;
+        if (!window.dualArmSystem || !currentJointAngles || currentJointAngles.length === 0) return false;
         
         try {
             // 获取当前绝对位姿（如果未提供）
@@ -3151,8 +3179,10 @@ export class RobotVisualizer {
             if (window.updateRobotPose) {
                 window.updateRobotPose();
             }
+            return true;
         } catch (error) {
             console.error('更新双臂关节角度失败:', error);
+            return false;
         }
     }
     
@@ -3178,7 +3208,7 @@ export class RobotVisualizer {
         }
         
         try {
-            const stepSize = 0.005;
+            const stepSize = this.getTeachTranslationStep();
             const directionSign = direction === 'positive' ? 1 : -1;
             const rotationArray = window.currentRobot?.getEndEffectorPose
                 ? window.currentRobot.getEndEffectorPose(window.jointAngles).rotation
@@ -3221,7 +3251,7 @@ export class RobotVisualizer {
         
         try {
             // 旋转角度（弧度），pi/16 ≈ 11.25度
-            const angle = Math.PI / 128;
+            const angle = this.getTeachRotationAngle();
             const directionSign = direction === 'positive' ? 1 : -1;
             const rotationAngle = angle * directionSign;
             
@@ -3361,7 +3391,7 @@ export class RobotVisualizer {
         }
         
         try {
-            const stepSize = 0.005;
+            const stepSize = this.getTeachTranslationStep();
             const directionSign = direction === 'positive' ? 1 : -1;
             const delta = this.getTranslationDirection(axis).multiplyScalar(stepSize * directionSign);
             this.updateRobot1JointsFromEndEffectorDelta(delta);
@@ -3387,7 +3417,7 @@ export class RobotVisualizer {
         }
         
         try {
-            const angle = Math.PI / 128;
+            const angle = this.getTeachRotationAngle();
             const directionSign = direction === 'positive' ? 1 : -1;
             const rotationAngle = angle * directionSign;
             
@@ -3432,7 +3462,7 @@ export class RobotVisualizer {
         }
         
         try {
-            const stepSize = 0.005;
+            const stepSize = this.getTeachTranslationStep();
             const directionSign = direction === 'positive' ? 1 : -1;
             const delta = this.getTranslationDirection(axis).multiplyScalar(stepSize * directionSign);
             this.updateRobot2JointsFromEndEffectorDelta(delta);
@@ -3458,7 +3488,7 @@ export class RobotVisualizer {
         }
         
         try {
-            const angle = Math.PI / 128;
+            const angle = this.getTeachRotationAngle();
             const directionSign = direction === 'positive' ? 1 : -1;
             const rotationAngle = angle * directionSign;
             
