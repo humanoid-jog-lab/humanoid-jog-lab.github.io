@@ -55,8 +55,8 @@ if [ -z "$HTTP_RUNNING" ] && [ -z "$ROS2_RUNNING" ]; then
 else
     echo "警告：仍有进程在运行，尝试强制终止..."
     # 强制终止
-    pkill -f "python3 -m http.server 5173"
-    pkill -f "python3 ros2-backend.py"
+    pkill -9 -f "python3 -m http.server 5173"
+    pkill -9 -f "python3 ros2-backend.py"
     sleep 1
     echo "强制终止完成"
 fi
