@@ -97,6 +97,14 @@ class ROS2Node(Node):
                     callback,
                     self.qos_profile
                 )
+            elif message_type == 'sensor_msgs/msg/BatteryState':
+                from sensor_msgs.msg import BatteryState
+                sub = self.create_subscription(
+                    BatteryState,
+                    topic_name,
+                    callback,
+                    self.qos_profile
+                )
             elif message_type == 'std_msgs/msg/String':
                 sub = self.create_subscription(
                     String,

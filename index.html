@@ -190,6 +190,25 @@
             <h2>机器人状态</h2>
             <button class="panel-toggle" id="info-toggle">−</button>
         </div>
+        <div class="battery-info" style="padding: 0.75rem; border-bottom: 1px solid #334155;">
+            <div class="info-item">
+                <label>电池状态</label>
+                <div class="value-display" style="flex-direction: column; gap: 0.5rem;">
+                    <div style="display: flex; align-items: center; gap: 0.75rem;">
+                        <span>电量:</span>
+                        <code id="battery-percentage">--</code>
+                        <div id="battery-bar-container" style="flex: 1; height: 20px; background: #1e293b; border-radius: 4px; overflow: hidden; border: 1px solid #334155;">
+                            <div id="battery-bar" style="height: 100%; width: 0%; background: linear-gradient(90deg, #ef4444 0%, #f59e0b 50%, #10b981 100%); transition: width 0.3s ease, background 0.3s ease;"></div>
+                        </div>
+                    </div>
+                    <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
+                        <span>电压: <code id="battery-voltage">--</code> V</span>
+                        <span>电流: <code id="battery-current">--</code> A</span>
+                        <span>状态: <code id="battery-status">--</code></span>
+                    </div>
+                </div>
+            </div>
+        </div>
         <div class="panel-body">
             <div class="info-panel-content">
                     <div class="info-tabs">
