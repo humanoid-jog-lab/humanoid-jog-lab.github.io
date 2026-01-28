@@ -706,6 +706,10 @@ body {
     letter-spacing: 0.05em;
 }
 
+.battery-info {
+    height: 200px;
+}
+
 .value-display {
     display: flex;
     gap: 0.875rem;
