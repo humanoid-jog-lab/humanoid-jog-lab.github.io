@@ -2942,6 +2942,48 @@ export class RobotVisualizer {
             console.error('移动双臂相对位姿失败:', error);
         }
     }
+
+    /**
+     * 调整双臂末端相对距离（示教器模式）
+     * 约束：
+     * - 绝对位姿保持不变
+     * - 相对姿态（相对旋转四元数）保持不变
+     *
+     * @param {string} direction - 'positive'（distance+）或 'negative'（distance-）
+     */
+    moveDualArmRelativeDistance(direction) {
+        if (!this.dualArmMode) {
+            console.warn('相对距离控制仅支持双臂模式');
+            return;
+        }
+        if (!window.dualArmSystem) {
+            console.warn('双臂系统未初始化');
+            return;
+        }
+        if (!window.jointAngles1 || !window.jointAngles2 ||
+            window.jointAngles1.length === 0 || window.jointAngles2.length === 0) {
+            console.warn('关节角度未初始化');
+            return;
+        }
+        if (!window.DQModule || !window.DQModule.DQWrapper) {
+            console.error('DQ Robotics 模块未加载');
+            return;
+        }
+        if (!window.DQModule.Kinematics || typeof window.DQModule.Kinematics.distanceJacobian !== 'function') {
+            console.error('WASM 未导出 Kinematics.distanceJacobian；请先运行 npm run build:wasm 重新生成 public/wasm/dqrobotics.js');
+            return;
+        }
+
+        try {
+            const stepSize = this.getTeachTranslationStep(); // 复用速度百分比
+            const directionSign = direction === 'positive' ? 1 : -1;
+            const deltaDistance = stepSize * directionSign;
+            const allJointAngles = [...window.jointAngles1, ...window.jointAngles2];
+            this.updateDualArmJointsFromRelativeDistanceDelta(deltaDistance, allJointAngles);
+        } catch (error) {
+            console.error('调整双臂相对距离失败:', error);
+        }
+    }
     
     /**
      * 绕指定轴旋转双臂相对位姿（示教器模式，使用零空间保持绝对位姿不变）
@@ -3182,6 +3224,140 @@ export class RobotVisualizer {
             return true;
         } catch (error) {
             console.error('更新双臂关节角度失败:', error);
+            return false;
+        }
+    }
+
+    /**
+     * 使用雅可比法调整相对距离（保持绝对位姿 + 相对姿态不变）
+     *
+     * 误差向量：
+     * - 绝对位姿（8）
+     * - 相对旋转（4，取 relativePose 的前 4 个分量）
+     * - 相对距离平方（1，使用 WASM distanceJacobian，对应 dot(d^2)）
+     *
+     * @param {number} deltaDistance - 距离增量（米）
+     * @param {number[]} currentJointAngles - 当前关节角度 [robot1..., robot2...]
+     */
+    updateDualArmJointsFromRelativeDistanceDelta(deltaDistance, currentJointAngles) {
+        if (!window.dualArmSystem || !currentJointAngles || currentJointAngles.length === 0) return false;
+        if (!window.DQModule?.Kinematics || typeof window.DQModule.Kinematics.distanceJacobian !== 'function') return false;
+
+        try {
+            // 固定约束目标：绝对位姿（8）+ 相对姿态（4）
+            const dqAbsoluteTargetArray = window.dualArmSystem.getAbsolutePose(currentJointAngles);
+            const dqRelativeStartArray = window.dualArmSystem.getRelativePose(currentJointAngles);
+            const relativeRotTarget = dqRelativeStartArray.slice(0, 4);
+
+            // 目标距离（用平移向量范数）
+            const dqRelStart = window.DQModule.DQWrapper.createFromArray(dqRelativeStartArray);
+            const tStart = window.DQModule.DQWrapper.getTranslation(dqRelStart); // [0,x,y,z]
+            const dStart = Math.sqrt((tStart[1] || 0) ** 2 + (tStart[2] || 0) ** 2 + (tStart[3] || 0) ** 2);
+            const dTarget = Math.max(0.0, dStart + deltaDistance);
+            const d2Target = dTarget * dTarget;
+
+            if (dStart < 1e-10 && Math.abs(deltaDistance) > 0) {
+                console.warn('当前相对距离接近 0，distanceJacobian 可能退化，无法可靠调整距离');
+            }
+
+            // 迭代求解参数
+            const epsilon = 0.000001;
+            const maxIterations = 50;
+            const damping = 0.5;
+
+            let q = [...currentJointAngles];
+            let errNorm = epsilon + 1;
+            let iteration = 0;
+
+            while (errNorm > epsilon && iteration < maxIterations) {
+                const dqAbsoluteIterArray = window.dualArmSystem.getAbsolutePose(q);
+                const dqRelativeIterArray = window.dualArmSystem.getRelativePose(q);
+
+                // 绝对位姿误差（8）
+                const errAbsolute = [];
+                for (let i = 0; i < 8; i++) {
+                    errAbsolute.push(dqAbsoluteTargetArray[i] - dqAbsoluteIterArray[i]);
+                }
+
+                // 相对旋转误差（4）
+                const errRelRot = [];
+                for (let i = 0; i < 4; i++) {
+                    errRelRot.push(relativeRotTarget[i] - dqRelativeIterArray[i]);
+                }
+
+                // 相对距离平方误差（1）
+                const dqRelIter = window.DQModule.DQWrapper.createFromArray(dqRelativeIterArray);
+                const tIter = window.DQModule.DQWrapper.getTranslation(dqRelIter);
+                const d2Iter = ((tIter[1] || 0) ** 2 + (tIter[2] || 0) ** 2 + (tIter[3] || 0) ** 2);
+                const errD2 = d2Target - d2Iter;
+
+                const err = [...errAbsolute, ...errRelRot, errD2];
+                errNorm = Math.sqrt(err.reduce((sum, e) => sum + e * e, 0));
+                if (errNorm <= epsilon) break;
+
+                // 雅可比：J_abs(8xN) + J_rel_rot(4xN) + J_d2(1xN)
+                const jacobianAbsolute = window.dualArmSystem.getAbsolutePoseJacobian(q);
+                const jacobianRelative = window.dualArmSystem.getRelativePoseJacobian(q);
+
+                // 相对旋转雅可比：取相对位姿雅可比的前 4 行
+                const jacobianRelRot = jacobianRelative.slice(0, 4).map(row => [...row]);
+
+                // 距离平方雅可比：由 WASM distanceJacobian 从相对位姿雅可比 + 相对位姿计算
+                const Jd2 = window.DQModule.Kinematics.distanceJacobian(jacobianRelative, dqRelativeIterArray);
+                const jacobianD2Row = Array.isArray(Jd2) && Array.isArray(Jd2[0]) ? [...Jd2[0]] : null;
+                if (!jacobianD2Row) {
+                    console.error('distanceJacobian 返回值格式错误');
+                    return false;
+                }
+
+                const jacobian = [];
+                for (let i = 0; i < jacobianAbsolute.length; i++) jacobian.push([...jacobianAbsolute[i]]);
+                for (let i = 0; i < jacobianRelRot.length; i++) jacobian.push([...jacobianRelRot[i]]);
+                jacobian.push(jacobianD2Row);
+
+                const jacobianPseudoInv = this.pseudoInverse(jacobian);
+                const deltaJoints = [];
+                for (let i = 0; i < jacobianPseudoInv.length; i++) {
+                    let sum = 0;
+                    for (let j = 0; j < err.length; j++) {
+                        sum += jacobianPseudoInv[i][j] * err[j] * damping;
+                    }
+                    deltaJoints.push(sum);
+                }
+                for (let i = 0; i < q.length && i < deltaJoints.length; i++) {
+                    q[i] += deltaJoints[i];
+                }
+                iteration++;
+            }
+
+            // 分离关节角度
+            const robot1JointCount = window.jointAngles1.length;
+            const robot2JointCount = window.jointAngles2.length;
+
+            // 限制关节角度
+            if (window.customRobotConfig) {
+                const jointNames1 = window.customRobotConfig?.robot1?.joint_chain?.joints || [];
+                const jointNames2 = window.customRobotConfig?.robot2?.joint_chain?.joints || [];
+                const q1raw = q.slice(0, robot1JointCount);
+                const q2raw = q.slice(robot1JointCount, robot1JointCount + robot2JointCount);
+                if (window.clampJointAngles) {
+                    const clampedQ1 = window.clampJointAngles(q1raw, jointNames1, this.robot1URDF, window.customRobotConfig?.robot1);
+                    const clampedQ2 = window.clampJointAngles(q2raw, jointNames2, this.robot2URDF, window.customRobotConfig?.robot2);
+                    q = [...clampedQ1, ...clampedQ2];
+                }
+            }
+
+            // 更新全局关节角度
+            const q1 = q.slice(0, robot1JointCount);
+            const q2 = q.slice(robot1JointCount, robot1JointCount + robot2JointCount);
+            for (let i = 0; i < window.jointAngles1.length && i < q1.length; i++) window.jointAngles1[i] = q1[i];
+            for (let i = 0; i < window.jointAngles2.length && i < q2.length; i++) window.jointAngles2[i] = q2[i];
+
+            if (window.updateGlobalVariables) window.updateGlobalVariables();
+            if (window.updateRobotPose) window.updateRobotPose();
+            return true;
+        } catch (error) {
+            console.error('更新双臂关节角度（相对距离）失败:', error);
             return false;
         }
     }

@@ -8,6 +8,7 @@
 #include <dqrobotics/DQ.h>
 #include <dqrobotics/utils/DQ_Geometry.h>
 #include <dqrobotics/utils/DQ_LinearAlgebra.h>
+#include <dqrobotics/robot_modeling/DQ_Kinematics.h>
 #include <dqrobotics/robot_modeling/DQ_SerialManipulatorDH.h>
 #include <dqrobotics/robot_modeling/DQ_SerialManipulatorMDH.h>
 #include <dqrobotics/robot_modeling/DQ_CooperativeDualTaskSpace.h>
@@ -50,6 +51,24 @@ val matrixXdToJsArray(const MatrixXd& mat) {
         jsArray.call<void>("push", row);
     }
     return jsArray;
+}
+
+// 辅助函数：将 JavaScript 二维数组转换为 MatrixXd
+MatrixXd jsArrayToMatrixXd(const val& jsArray2d) {
+    int rows = jsArray2d["length"].as<int>();
+    if (rows <= 0) {
+        return MatrixXd(0, 0);
+    }
+    val first_row = jsArray2d[0];
+    int cols = first_row["length"].as<int>();
+    MatrixXd mat(rows, cols);
+    for (int i = 0; i < rows; i++) {
+        val row = jsArray2d[i];
+        for (int j = 0; j < cols; j++) {
+            mat(i, j) = row[j].as<double>();
+        }
+    }
+    return mat;
 }
 
 // DQ 类的包装器，提供更友好的 JavaScript 接口
@@ -175,6 +194,29 @@ public:
         mat(2,2) = 1 - 2*(x*x + y*y);
         
         return matrixXdToJsArray(mat);
+    }
+};
+
+// 运动学工具包装器（静态方法）
+class Kinematics_Wrapper {
+public:
+    /**
+     * 距离雅可比（对应 DQ_Kinematics::distance_jacobian）
+     * 给定 vec8(pose_dot)=J_pose*q_dot，返回满足 dot(d^2)=Jd*q_dot 的 Jd（1xN）
+     *
+     * @param pose_jacobian_js 8xN 的位姿雅可比（二维数组）
+     * @param pose_dq_js 8 元素位姿双四元数（数组）
+     * @return 1xN 的距离雅可比（二维数组，只有一行）
+     */
+    static val distance_jacobian(const val& pose_jacobian_js, const val& pose_dq_js) {
+        MatrixXd J_pose = jsArrayToMatrixXd(pose_jacobian_js);
+        VectorXd pose_vec = jsArrayToVectorXd(pose_dq_js);
+        if (pose_vec.size() != 8) {
+            throw std::runtime_error("pose_dq must be an 8-element array");
+        }
+        DQ pose(pose_vec);
+        MatrixXd Jd = DQ_Kinematics::distance_jacobian(J_pose, pose);
+        return matrixXdToJsArray(Jd);
     }
 };
 
@@ -635,6 +677,10 @@ EMSCRIPTEN_BINDINGS(dqrobotics_module) {
         .class_function("getTranslation", &DQ_Wrapper::getTranslation)
         .class_function("getRotation", &DQ_Wrapper::getRotation)
         .class_function("getRotationMatrix", &DQ_Wrapper::getRotationMatrix);
+
+    // 运动学工具（静态函数）
+    class_<Kinematics_Wrapper>("Kinematics")
+        .class_function("distanceJacobian", &Kinematics_Wrapper::distance_jacobian);
     
     // 串联机械臂
     class_<SerialManipulator_Wrapper>("SerialManipulator")
