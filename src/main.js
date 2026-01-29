@@ -71,6 +71,8 @@ let ros2JointStateSubscribed = false;
 let ros2JointStateTopic = '/arm/joint_states';
 let ros2JointStateButton = null;
 let ros2JointStatusElement = null;
+let ros2BatteryStateSubscribed = false;
+const ROS2_BATTERY_STATE_TOPIC = '/battery_state';
 
 if (typeof window !== 'undefined') {
     window.currentDualArmControlMode = window.currentDualArmControlMode || 'absolute';
@@ -3852,6 +3854,9 @@ function setupFloatingPanels() {
  * 设置 ROS 2 事件监听器
  */
 function setupROS2EventListeners() {
+    // 按钮状态跟踪变量
+    let switchModeBtnProcessing = false;
+
     // ROS 2 WebSocket 地址设置
     const websocketUrlInput = document.getElementById('ros2-websocket-url');
     const saveUrlBtn = document.getElementById('ros2-save-url-btn');
@@ -3920,6 +3925,53 @@ function setupROS2EventListeners() {
 
     updateIKRobotSelection();
     
+    // ROS 2 切换控制模式按钮
+    const switchModeBtn = document.getElementById('ros2-switch-mode-btn');
+    if (switchModeBtn) {
+        switchModeBtn.addEventListener('click', async () => {
+            // 防止快速多次点击
+            if (switchModeBtnProcessing) {
+                return;
+            }
+
+            if (!ros2Communicator || !ros2Communicator.isInitialized) {
+                addROS2LogEntry('ROS 2 未连接', 'error');
+                return;
+            }
+
+            const controlModeSelect = document.getElementById('ros2-control-mode');
+            const selectedMode = controlModeSelect ? controlModeSelect.value : 'manual';
+
+            // 设置处理中状态
+            switchModeBtnProcessing = true;
+            const originalText = switchModeBtn.textContent;
+            switchModeBtn.textContent = '切换中...';
+            switchModeBtn.disabled = true;
+            switchModeBtn.style.opacity = '0.6';
+
+            try {
+                await ros2Communicator.switchMode(selectedMode);
+                addROS2LogEntry(`切换控制模式: ${selectedMode}`, 'info');
+
+                // 更新状态显示
+                const modeStatusEl = document.getElementById('ros2-mode-status');
+                if (modeStatusEl) {
+                    const modeText = selectedMode === 'manual' ? '手动模式 - 可直接控制机器人关节' :
+                                   selectedMode === 'teleop' ? '遥操作模式 - 通过输入设备控制' : '未知模式';
+                    modeStatusEl.textContent = `当前模式：${modeText}`;
+                }
+            } catch (error) {
+                addROS2LogEntry(`切换模式失败: ${error.message}`, 'error');
+            } finally {
+                // 重置按钮状态
+                switchModeBtnProcessing = false;
+                switchModeBtn.textContent = originalText;
+                switchModeBtn.disabled = false;
+                switchModeBtn.style.opacity = '1';
+            }
+        });
+    }
+
     // ROS 2 刷新话题按钮
     const refreshTopicsBtn = document.getElementById('ros2-refresh-topics-btn');
     if (refreshTopicsBtn) {
@@ -4146,6 +4198,7 @@ async function publishJointPositionMessage() {
         return false;
     }
 }
+
 
 /**
  * 开始持续发布关节位置
@@ -4922,6 +4975,138 @@ function setRos2JointStatus(message, type = 'info') {
 }
 
 /**
+ * 订阅电池状态话题
+ */
+async function subscribeBatteryState() {
+    if (!ros2Communicator || !ros2Communicator.isInitialized) {
+        console.warn('ROS 2 未初始化，无法订阅电池状态');
+        return false;
+    }
+
+    if (ros2BatteryStateSubscribed) {
+        console.log('电池状态已订阅');
+        return true;
+    }
+
+    try {
+        const success = await ros2Communicator.subscribe(
+            ROS2_BATTERY_STATE_TOPIC,
+            'sensor_msgs/msg/BatteryState',
+            handleBatteryStateMessage
+        );
+        
+        if (success) {
+            ros2BatteryStateSubscribed = true;
+            console.log(`✓ 已订阅电池状态话题: ${ROS2_BATTERY_STATE_TOPIC}`);
+            return true;
+        } else {
+            console.warn('订阅电池状态失败');
+            return false;
+        }
+    } catch (error) {
+        console.error('订阅电池状态异常:', error);
+        return false;
+    }
+}
+
+/**
+ * 处理电池状态消息
+ */
+function handleBatteryStateMessage(message) {
+    if (!message) {
+        return;
+    }
+
+    // 更新显示
+    updateBatteryStateDisplay(message);
+}
+
+/**
+ * 更新电池状态显示
+ */
+function updateBatteryStateDisplay(batteryState) {
+    console.log(batteryState)
+    // 电量百分比 (0-1 转换为 0-100%)
+    const percentage = batteryState.percentage;
+    const percentageElement = document.getElementById('battery-percentage');
+    const batteryBar = document.getElementById('battery-bar');
+    
+    if (percentageElement && batteryBar) {
+        if (typeof percentage === 'number' && !isNaN(percentage)) {
+            const percentValue = Math.max(0, Math.min(100, percentage * 100));
+            percentageElement.textContent = `${percentValue.toFixed(1)}%`;
+            batteryBar.style.width = `${percentValue}%`;
+            
+            // 根据电量设置颜色
+            if (percentValue < 20) {
+                batteryBar.style.background = '#ef4444'; // 红色
+            } else if (percentValue < 50) {
+                batteryBar.style.background = '#f59e0b'; // 橙色
+            } else {
+                batteryBar.style.background = '#10b981'; // 绿色
+            }
+        } else {
+            percentageElement.textContent = '--';
+            batteryBar.style.width = '0%';
+        }
+    }
+
+    // 电压
+    const voltage = batteryState.voltage;
+    const voltageElement = document.getElementById('battery-voltage');
+    if (voltageElement) {
+        if (typeof voltage === 'number' && !isNaN(voltage)) {
+            voltageElement.textContent = voltage.toFixed(2);
+        } else {
+            voltageElement.textContent = '--';
+        }
+    }
+
+    // 电流
+    const current = batteryState.current;
+    const currentElement = document.getElementById('battery-current');
+    if (currentElement) {
+        if (typeof current === 'number' && !isNaN(current)) {
+            currentElement.textContent = current.toFixed(2);
+        } else {
+            currentElement.textContent = '--';
+        }
+    }
+
+    // 充电状态
+    const statusElement = document.getElementById('battery-status');
+    if (statusElement) {
+        const powerSupplyStatus = batteryState.power_supply_status;
+        if (typeof powerSupplyStatus === 'number') {
+            // power_supply_status 枚举值:
+            // 0 = UNKNOWN, 1 = CHARGING, 2 = DISCHARGING, 3 = NOT_CHARGING, 4 = FULL
+            const statusMap = {
+                0: '未知',
+                1: '充电中',
+                2: '放电中',
+                3: '未充电',
+                4: '已充满'
+            };
+            statusElement.textContent = statusMap[powerSupplyStatus] || '未知';
+            
+            // 根据状态设置颜色
+            if (powerSupplyStatus === 1) {
+                statusElement.style.color = '#10b981'; // 绿色 - 充电中
+            } else if (powerSupplyStatus === 2) {
+                statusElement.style.color = '#f59e0b'; // 橙色 - 放电中
+            } else if (powerSupplyStatus === 4) {
+                statusElement.style.color = '#3b82f6'; // 蓝色 - 已充满
+            } else {
+                statusElement.style.color = '#94a3b8'; // 灰色 - 其他状态
+            }
+        } else {
+            statusElement.textContent = '--';
+            statusElement.style.color = '#94a3b8';
+        }
+    }
+}
+
+/**
  * 使面板可拖动
  */
 function makePanelDraggable(panel) {
@@ -5199,6 +5384,10 @@ async function initROS2Communication(customUrl = null) {
                 updateJointStateSubscribeButton();
                 setRos2JointStatus('连接断开，已停止订阅', 'error');
             }
+            // 如果断开连接，停止电池状态订阅
+            if (status === 'disconnected' && ros2BatteryStateSubscribed) {
+                ros2BatteryStateSubscribed = false;
+            }
             // 如果断开连接，停止关节位置发布
             if (status === 'disconnected' || status === 'error') {
                 if (jointPositionPublishTimer !== null) {
@@ -5208,6 +5397,12 @@ async function initROS2Communication(customUrl = null) {
                 }
             }
         });
+
+        // 注册模式变化回调
+        ros2Communicator.onModeChange((mode) => {
+            updateROS2ControlModeDisplay(mode);
+            addROS2LogEntry(`当前控制模式: ${mode}`, 'info');
+        });
         
         // 显示连接的 URL
         addROS2LogEntry(`连接地址: ${ros2Communicator.getWebSocketUrl()}`, 'info');
@@ -5216,6 +5411,18 @@ async function initROS2Communication(customUrl = null) {
         const result = await ros2Communicator.init();
         if (result) {
             addROS2LogEntry('ROS 2 初始化成功', 'info');
+            // 查询当前控制模式
+            try {
+                await ros2Communicator.getMode();
+            } catch (error) {
+                console.warn('查询当前模式失败:', error);
+            }
+            // 自动订阅电池状态话题
+            try {
+                await subscribeBatteryState();
+            } catch (error) {
+                console.warn('订阅电池状态失败:', error);
+            }
         } else {
             addROS2LogEntry('ROS 2 初始化失败', 'error');
         }
@@ -5358,6 +5565,24 @@ function switchToSingleArmUI() {
     renderEnvironmentObjectList();
     updateIKRobotSelection();
     updateDQCalculatorRobotSelection();
+}
+
+/**
+ * 更新 ROS 2 控制模式显示
+ */
+function updateROS2ControlModeDisplay(mode) {
+    const controlModeSelect = document.getElementById('ros2-control-mode');
+    if (controlModeSelect) {
+        controlModeSelect.value = mode;
+
+        // 更新状态显示
+        const modeStatusEl = document.getElementById('ros2-mode-status');
+        if (modeStatusEl) {
+            const modeText = mode === 'manual' ? '手动模式 - 可直接控制机器人关节' :
+                           mode === 'teleop' ? '遥操作模式 - 通过VR设备控制' : '未知模式';
+            modeStatusEl.textContent = `当前模式：${modeText}`;
+        }
+    }
 }
 
 // 页面加载完成后初始化
