@@ -2780,6 +2780,24 @@ function setupEventListeners() {
         let intervalId = null;
         
         button.addEventListener('mousedown', (e) => {
+            // 相对距离按钮单独处理（避免走 6 轴逻辑）
+            if (button.classList.contains('teach-distance-btn')) {
+                const direction = button.dataset.direction;
+                if (!visualizer || !direction) return;
+                
+                // 仅双臂模式 + distance 模式下有效
+                if (!visualizer.dualArmMode) return;
+                const controlModeSelect = document.getElementById('dual-arm-control-mode-select');
+                const controlMode = controlModeSelect ? controlModeSelect.value : 'absolute';
+                if (controlMode !== 'distance') return;
+                if (typeof visualizer.moveDualArmRelativeDistance !== 'function') return;
+                
+                visualizer.moveDualArmRelativeDistance(direction);
+                intervalId = setInterval(() => {
+                    visualizer.moveDualArmRelativeDistance(direction);
+                }, 20);
+                return;
+            }
             const axis = button.dataset.axis;
             const direction = button.dataset.direction;
             const type = button.dataset.type || 'translation'; // 'translation' 或 'rotation'
@@ -2833,6 +2851,9 @@ function setupEventListeners() {
                             visualizer.moveDualArmRelativePoseAlongAxis(axis, direction);
                         }, 20);
                     }
+                } else if (controlMode === 'distance') {
+                    // 距离模式：按键已单独处理，这里兜底不做事
+                    return;
                 } else {
                     // 默认：控制绝对位姿（保持相对位姿不变）
                     if (type === 'rotation') {
@@ -5462,11 +5483,23 @@ function switchToDualArmUI() {
     // 设置控制模式选择器的事件监听器
     const controlModeSelect = document.getElementById('dual-arm-control-mode-select');
     const modeLabel = document.getElementById('dual-arm-mode-label');
+    const teachPendantControls = document.getElementById('teach-pendant-controls');
+    const distanceControls = document.getElementById('dual-arm-distance-controls');
     if (controlModeSelect && modeLabel) {
         const updateModeLabel = () => {
             const mode = controlModeSelect.value;
             if (typeof window !== 'undefined') {
                 window.currentDualArmControlMode = mode;
+            }
+            // 控制按钮显示：相对距离模式只显示 distance-/distance+
+            if (teachPendantControls && distanceControls) {
+                if (mode === 'distance') {
+                    teachPendantControls.style.display = 'none';
+                    distanceControls.style.display = 'grid';
+                } else {
+                    teachPendantControls.style.display = 'grid';
+                    distanceControls.style.display = 'none';
+                }
             }
             switch (mode) {
                 case 'robot1':
@@ -5477,6 +5510,9 @@ function switchToDualArmUI() {
                     break;
                 case 'relative':
                     modeLabel.textContent = '相对位姿模式：控制相对位姿，保持绝对位姿不变';
+                    break;
+                case 'distance':
+                    modeLabel.textContent = '相对距离模式：控制两末端距离，保持绝对位姿与相对姿态不变';
                     break;
                 case 'absolute':
                 default:

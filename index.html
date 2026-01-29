@@ -119,6 +119,7 @@
                                 <select id="dual-arm-control-mode-select" style="width: 100%; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;">
                                     <option value="absolute">绝对位姿</option>
                                     <option value="relative">相对位姿</option>
+                                    <option value="distance">相对距离</option>
                                     <option value="robot1">机器人1</option>
                                     <option value="robot2">机器人2</option>
                                 </select>
@@ -147,7 +148,7 @@
                                 影响每步增量（不改变按键重复频率）
                             </div>
                         </div>
-                        <div class="teach-pendant-controls">
+                        <div id="teach-pendant-controls" class="teach-pendant-controls">
                             <div class="axis-control-group">
                                 <div class="axis-label">X轴</div>
                                 <button class="teach-btn teach-btn-negative" data-axis="x" data-direction="negative">X-</button>
@@ -177,6 +178,13 @@
                                 <div class="axis-label">Rz</div>
                                 <button class="teach-btn teach-btn-negative" data-axis="rz" data-direction="negative" data-type="rotation">Rz-</button>
                                 <button class="teach-btn teach-btn-positive" data-axis="rz" data-direction="positive" data-type="rotation">Rz+</button>
+                            </div>
+                        </div>
+                        <div id="dual-arm-distance-controls" class="teach-pendant-controls" style="display: none;">
+                            <div class="axis-control-group" style="grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 0.75rem;">
+                                <div class="axis-label" style="min-width: 6rem;">距离</div>
+                                <button class="teach-distance-btn teach-btn teach-btn-negative" data-direction="negative">d-</button>
+                                <button class="teach-distance-btn teach-btn teach-btn-positive" data-direction="positive">d+</button>
                             </div>
                         </div>
                     </div>
