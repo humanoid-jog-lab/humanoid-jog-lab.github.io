@@ -144,10 +144,8 @@ public:
     
     static DQ fromQuaternionAndTranslation(double qw, double qx, double qy, double qz,
                                             double tx, double ty, double tz) {
-        // 从四元数和平移创建对偶四元数
-        // DQ = translation_dq * rotation_quaternion
-        // 其中 translation_dq = 1 + 0.5 * E * (0, tx, ty, tz)
-        // 首先归一化四元数
+        // 从四元数和平移创建对偶四元数，与 DQ 库约定一致：dq = r + ε·(1/2)·p·r
+        // 这样 translation(dq) 才能正确得到 p，与 unitDQ / pose 一致
         double quatNorm = std::sqrt(qw*qw + qx*qx + qy*qy + qz*qz);
         if (quatNorm < 1e-10) {
             throw std::runtime_error("四元数不能为零");
@@ -157,9 +155,9 @@ public:
         qy /= quatNorm;
         qz /= quatNorm;
         
-        DQ r = DQ(qw, qx, qy, qz);  // 归一化的旋转四元数
-        DQ t = DQ(1) + 0.5 * DQ::E * DQ(0, tx, ty, tz);  // 平移对偶四元数
-        return t * r;  // 注意顺序：先平移再旋转
+        DQ r = DQ(qw, qx, qy, qz);
+        DQ p = DQ(0, tx, ty, tz);
+        return r + DQ::E * 0.5 * p * r;
     }
     
     static val getTranslation(const DQ& dq) {

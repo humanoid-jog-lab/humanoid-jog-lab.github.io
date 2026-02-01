@@ -2785,99 +2785,58 @@ export class RobotVisualizer {
                 dqRelativeCurrentArray = window.dualArmSystem.getRelativePose(currentJointAngles);
             }
             
-            // 迭代求解参数
-            const epsilon = 0.0000001;
-            const maxIterations = 50;
-            const damping = 0.5;
-            
-            let q = [...currentJointAngles];
-            let errNorm = epsilon + 1;
-            let iteration = 0;
-            
-            while (errNorm > epsilon && iteration < maxIterations) {
-                // 获取当前绝对位姿和相对位姿
-                const dqAbsoluteCurrentIterArray = window.dualArmSystem.getAbsolutePose(q);
-                const dqRelativeCurrentIterArray = window.dualArmSystem.getRelativePose(q);
-                
-                // 计算误差向量
-                // 绝对位姿误差（8元素）
-                const errAbsolute = [];
+            // 使用 L-BFGS 最小化 0.5*||abs_pose - abs_target||^2 + 0.5*||rel_pose - rel_fixed||^2
+            const f = (q) => {
+                const absPose = window.dualArmSystem.getAbsolutePose(q);
+                const relPose = window.dualArmSystem.getRelativePose(q);
+                let sum = 0;
                 for (let i = 0; i < 8; i++) {
-                    errAbsolute.push(dqAbsoluteTargetArray[i] - dqAbsoluteCurrentIterArray[i]);
+                    sum += (absPose[i] - dqAbsoluteTargetArray[i]) ** 2;
+                    sum += (relPose[i] - dqRelativeCurrentArray[i]) ** 2;
                 }
-                
-                // 相对位姿误差（保持为0，即保持相对位姿不变）
-                const errRelative = [];
+                return 0.5 * sum;
+            };
+            const grad = (q, out) => {
+                const absPose = window.dualArmSystem.getAbsolutePose(q);
+                const relPose = window.dualArmSystem.getRelativePose(q);
+                const errAbs = [];
+                const errRel = [];
                 for (let i = 0; i < 8; i++) {
-                    errRelative.push(dqRelativeCurrentArray[i] - dqRelativeCurrentIterArray[i]);
+                    errAbs.push(absPose[i] - dqAbsoluteTargetArray[i]);
+                    errRel.push(relPose[i] - dqRelativeCurrentArray[i]);
                 }
-                
-                // 组合误差向量：[err_abs; err_rel]（16元素）
-                const err = [...errAbsolute, ...errRelative];
-                
-                // 计算误差范数
-                errNorm = Math.sqrt(err.reduce((sum, e) => sum + e * e, 0));
-                
-                if (errNorm <= epsilon) {
-                    break;
-                }
-                
-                // 获取雅可比矩阵
-                // 绝对位姿雅可比（8xN）
-                const jacobianAbsolute = window.dualArmSystem.getAbsolutePoseJacobian(q);
-                // 相对位姿雅可比（8xN）
-                const jacobianRelative = window.dualArmSystem.getRelativePoseJacobian(q);
-                
-                // 组合雅可比矩阵：[J_abs; J_rel]（16xN）
-                const jacobian = [];
-                for (let i = 0; i < jacobianAbsolute.length; i++) {
-                    jacobian.push([...jacobianAbsolute[i]]);
-                }
-                for (let i = 0; i < jacobianRelative.length; i++) {
-                    jacobian.push([...jacobianRelative[i]]);
-                }
-                
-                // 计算雅可比伪逆
-                const jacobianPseudoInv = this.pseudoInverse(jacobian);
-                
-                // 计算关节角度增量：dq = pinv(J) * damping * err
-                const deltaJoints = [];
-                for (let i = 0; i < jacobianPseudoInv.length; i++) {
-                    let sum = 0;
-                    for (let j = 0; j < err.length; j++) {
-                        sum += jacobianPseudoInv[i][j] * err[j] * damping;
+                const Jabs = window.dualArmSystem.getAbsolutePoseJacobian(q);
+                const Jrel = window.dualArmSystem.getRelativePoseJacobian(q);
+                const n = out.length;
+                for (let i = 0; i < n; i++) {
+                    let s = 0;
+                    for (let j = 0; j < 8; j++) {
+                        s += (Jabs[j][i] || 0) * errAbs[j];
+                        s += (Jrel[j][i] || 0) * errRel[j];
                     }
-                    deltaJoints.push(sum);
+                    out[i] = s;
                 }
-                
-                // 更新关节角度
-                for (let i = 0; i < q.length && i < deltaJoints.length; i++) {
-                    q[i] += deltaJoints[i];
-                }
-                
-                iteration++;
-            }
+            };
+            const { x: qSol, converged } = this.minimizeLBFGS(f, grad, [...currentJointAngles], {
+                maxIter: 80,
+                tol: 1e-6,
+                m: 10
+            });
             
-            // 分离关节角度
             const robot1JointCount = window.jointAngles1.length;
             const robot2JointCount = window.jointAngles2.length;
+            let q = qSol.slice(0, robot1JointCount + robot2JointCount);
             
-            // 限制关节角度
-            if (window.customRobotConfig) {
+            if (window.customRobotConfig && window.clampJointAngles) {
                 const jointNames1 = window.customRobotConfig?.robot1?.joint_chain?.joints || [];
                 const jointNames2 = window.customRobotConfig?.robot2?.joint_chain?.joints || [];
-                
                 const q1 = q.slice(0, robot1JointCount);
                 const q2 = q.slice(robot1JointCount, robot1JointCount + robot2JointCount);
-                
-                if (window.clampJointAngles) {
-                    const clampedQ1 = window.clampJointAngles(q1, jointNames1, this.robot1URDF, window.customRobotConfig?.robot1);
-                    const clampedQ2 = window.clampJointAngles(q2, jointNames2, this.robot2URDF, window.customRobotConfig?.robot2);
-                    q = [...clampedQ1, ...clampedQ2];
-                }
+                const clampedQ1 = window.clampJointAngles(q1, jointNames1, this.robot1URDF, window.customRobotConfig?.robot1);
+                const clampedQ2 = window.clampJointAngles(q2, jointNames2, this.robot2URDF, window.customRobotConfig?.robot2);
+                q = [...clampedQ1, ...clampedQ2];
             }
             
-            // 更新全局关节角度
             const q1 = q.slice(0, robot1JointCount);
             const q2 = q.slice(robot1JointCount, robot1JointCount + robot2JointCount);
             
@@ -3109,82 +3068,56 @@ export class RobotVisualizer {
                 dqAbsoluteCurrentArray = window.dualArmSystem.getAbsolutePose(currentJointAngles);
             }
             
-            // 迭代求解参数
-            const epsilon = 0.000001;
-            const maxIterations = 50;
-            const damping = 0.5;
-            
-            let q = [...currentJointAngles];
-            let errNorm = epsilon + 1;
-            let iteration = 0;
-            
-            while (errNorm > epsilon && iteration < maxIterations) {
-                // 获取当前绝对位姿和相对位姿
-                const dqAbsoluteCurrentIterArray = window.dualArmSystem.getAbsolutePose(q);
-                const dqRelativeCurrentIterArray = window.dualArmSystem.getRelativePose(q);
-                
-                // 计算误差向量
-                // 绝对位姿误差（保持为0，即保持绝对位姿不变）
-                const errAbsolute = [];
+            // 使用 L-BFGS 最小化 0.5*||abs_pose - abs_fixed||^2 + 0.5*||rel_pose - rel_target||^2
+            const f = (q) => {
+                const absPose = window.dualArmSystem.getAbsolutePose(q);
+                const relPose = window.dualArmSystem.getRelativePose(q);
+                let sum = 0;
                 for (let i = 0; i < 8; i++) {
-                    errAbsolute.push(dqAbsoluteCurrentArray[i] - dqAbsoluteCurrentIterArray[i]);
+                    sum += (absPose[i] - dqAbsoluteCurrentArray[i]) ** 2;
+                    sum += (relPose[i] - dqRelativeTargetArray[i]) ** 2;
                 }
-                
-                // 相对位姿误差（8元素）
-                const errRelative = [];
+                return 0.5 * sum;
+            };
+            const grad = (q, out) => {
+                const absPose = window.dualArmSystem.getAbsolutePose(q);
+                const relPose = window.dualArmSystem.getRelativePose(q);
+                const errAbs = [];
+                const errRel = [];
                 for (let i = 0; i < 8; i++) {
-                    errRelative.push(dqRelativeTargetArray[i] - dqRelativeCurrentIterArray[i]);
+                    errAbs.push(absPose[i] - dqAbsoluteCurrentArray[i]);
+                    errRel.push(relPose[i] - dqRelativeTargetArray[i]);
                 }
-                
-                // 组合误差向量：[err_abs; err_rel]（16元素）
-                const err = [...errAbsolute, ...errRelative];
-                
-                // 计算误差范数
-                errNorm = Math.sqrt(err.reduce((sum, e) => sum + e * e, 0));
-                
-                if (errNorm <= epsilon) {
-                    break;
-                }
-                
-                // 获取雅可比矩阵
-                // 绝对位姿雅可比（8xN）
-                const jacobianAbsolute = window.dualArmSystem.getAbsolutePoseJacobian(q);
-                // 相对位姿雅可比（8xN）
-                const jacobianRelative = window.dualArmSystem.getRelativePoseJacobian(q);
-                
-                // 组合雅可比矩阵：[J_abs; J_rel]（16xN）
-                const jacobian = [];
-                for (let i = 0; i < jacobianAbsolute.length; i++) {
-                    jacobian.push([...jacobianAbsolute[i]]);
-                }
-                for (let i = 0; i < jacobianRelative.length; i++) {
-                    jacobian.push([...jacobianRelative[i]]);
-                }
-                
-                // 计算雅可比伪逆
-                const jacobianPseudoInv = this.pseudoInverse(jacobian);
-                
-                // 计算关节角度增量：dq = pinv(J) * damping * err
-                const deltaJoints = [];
-                for (let i = 0; i < jacobianPseudoInv.length; i++) {
-                    let sum = 0;
-                    for (let j = 0; j < err.length; j++) {
-                        sum += jacobianPseudoInv[i][j] * err[j] * damping;
+                const Jabs = window.dualArmSystem.getAbsolutePoseJacobian(q);
+                const Jrel = window.dualArmSystem.getRelativePoseJacobian(q);
+                const n = out.length;
+                for (let i = 0; i < n; i++) {
+                    let s = 0;
+                    for (let j = 0; j < 8; j++) {
+                        s += (Jabs[j][i] || 0) * errAbs[j];
+                        s += (Jrel[j][i] || 0) * errRel[j];
                     }
-                    deltaJoints.push(sum);
+                    out[i] = s;
                 }
-                
-                // 更新关节角度
-                for (let i = 0; i < q.length && i < deltaJoints.length; i++) {
-                    q[i] += deltaJoints[i];
-                }
-                
-                iteration++;
-            }
+            };
+            const { x: qSol, converged } = this.minimizeLBFGS(f, grad, [...currentJointAngles], {
+                maxIter: 80,
+                tol: 1e-6,
+                m: 10
+            });
             
-            // 分离关节角度
             const robot1JointCount = window.jointAngles1.length;
             const robot2JointCount = window.jointAngles2.length;
+            let q = qSol.slice(0, robot1JointCount + robot2JointCount);
+            if (window.customRobotConfig && window.clampJointAngles) {
+                const jointNames1 = window.customRobotConfig?.robot1?.joint_chain?.joints || [];
+                const jointNames2 = window.customRobotConfig?.robot2?.joint_chain?.joints || [];
+                const q1 = q.slice(0, robot1JointCount);
+                const q2 = q.slice(robot1JointCount, robot1JointCount + robot2JointCount);
+                const clampedQ1 = window.clampJointAngles(q1, jointNames1, this.robot1URDF, window.customRobotConfig?.robot1);
+                const clampedQ2 = window.clampJointAngles(q2, jointNames2, this.robot2URDF, window.customRobotConfig?.robot2);
+                q = [...clampedQ1, ...clampedQ2];
+            }
             
             // 限制关节角度
             if (window.customRobotConfig) {
@@ -3260,10 +3193,11 @@ export class RobotVisualizer {
                 console.warn('当前相对距离接近 0，distanceJacobian 可能退化，无法可靠调整距离');
             }
 
-            // 迭代求解参数
+            // 迭代求解参数（与相对位姿一致：步长小、限制单步，避免飞车）
             const epsilon = 0.000001;
-            const maxIterations = 50;
-            const damping = 0.5;
+            const maxIterations = 80;
+            const damping = 0.15;
+            const maxJointStepPerIter = 0.08;
 
             let q = [...currentJointAngles];
             let errNorm = epsilon + 1;
@@ -3322,7 +3256,8 @@ export class RobotVisualizer {
                     for (let j = 0; j < err.length; j++) {
                         sum += jacobianPseudoInv[i][j] * err[j] * damping;
                     }
-                    deltaJoints.push(sum);
+                    const clamped = Math.max(-maxJointStepPerIter, Math.min(maxJointStepPerIter, sum));
+                    deltaJoints.push(clamped);
                 }
                 for (let i = 0; i < q.length && i < deltaJoints.length; i++) {
                     q[i] += deltaJoints[i];
@@ -3849,6 +3784,43 @@ export class RobotVisualizer {
         if (window.updateRobotPose) window.updateRobotPose();
         return errNorm <= epsilon;
     }
+
+    /**
+     * 机器人1逆运动学：L-BFGS 最小化 0.5*||pose1(q)-target||^2
+     */
+    updateRobot1JointsWithLBFGS(dqTargetArray) {
+        if (!window.robot1 || !window.jointAngles1 || window.jointAngles1.length === 0) return false;
+        const robot = window.robot1;
+        const target = dqTargetArray;
+        const f = (q) => {
+            const pose = robot.fkm(q);
+            let sum = 0;
+            for (let i = 0; i < 8; i++) sum += (pose[i] - target[i]) ** 2;
+            return 0.5 * sum;
+        };
+        const grad = (q, out) => {
+            const pose = robot.fkm(q);
+            const err = [];
+            for (let i = 0; i < 8; i++) err.push(pose[i] - target[i]);
+            const J = robot.poseJacobian(q);
+            if (!J || J.length !== 8) { for (let i = 0; i < out.length; i++) out[i] = 0; return; }
+            for (let i = 0; i < out.length; i++) {
+                let s = 0;
+                for (let j = 0; j < 8; j++) s += (J[j][i] || 0) * err[j];
+                out[i] = s;
+            }
+        };
+        const { x, converged } = this.minimizeLBFGS(f, grad, [...window.jointAngles1], { maxIter: 80, tol: 1e-12, m: 10 });
+        for (let i = 0; i < window.jointAngles1.length && i < x.length; i++) window.jointAngles1[i] = x[i];
+        if (window.customRobotConfig?.robot1 && window.clampJointAngles) {
+            const names = window.customRobotConfig.robot1.joint_chain?.joints || [];
+            const clamped = window.clampJointAngles(x, names, this.robot1URDF, window.customRobotConfig.robot1);
+            for (let i = 0; i < window.jointAngles1.length && i < clamped.length; i++) window.jointAngles1[i] = clamped[i];
+        }
+        if (window.updateGlobalVariables) window.updateGlobalVariables();
+        if (window.updateRobotPose) window.updateRobotPose();
+        return converged;
+    }
     
     /**
      * 使用伪逆更新机器人2关节角度
@@ -3915,6 +3887,43 @@ export class RobotVisualizer {
     }
 
     /**
+     * 机器人2逆运动学：L-BFGS 最小化 0.5*||pose2(q)-target||^2
+     */
+    updateRobot2JointsWithLBFGS(dqTargetArray) {
+        if (!window.robot2 || !window.jointAngles2 || window.jointAngles2.length === 0) return false;
+        const robot = window.robot2;
+        const target = dqTargetArray;
+        const f = (q) => {
+            const pose = robot.fkm(q);
+            let sum = 0;
+            for (let i = 0; i < 8; i++) sum += (pose[i] - target[i]) ** 2;
+            return 0.5 * sum;
+        };
+        const grad = (q, out) => {
+            const pose = robot.fkm(q);
+            const err = [];
+            for (let i = 0; i < 8; i++) err.push(pose[i] - target[i]);
+            const J = robot.poseJacobian(q);
+            if (!J || J.length !== 8) { for (let i = 0; i < out.length; i++) out[i] = 0; return; }
+            for (let i = 0; i < out.length; i++) {
+                let s = 0;
+                for (let j = 0; j < 8; j++) s += (J[j][i] || 0) * err[j];
+                out[i] = s;
+            }
+        };
+        const { x, converged } = this.minimizeLBFGS(f, grad, [...window.jointAngles2], { maxIter: 80, tol: 1e-12, m: 10 });
+        for (let i = 0; i < window.jointAngles2.length && i < x.length; i++) window.jointAngles2[i] = x[i];
+        if (window.customRobotConfig?.robot2 && window.clampJointAngles) {
+            const names = window.customRobotConfig.robot2.joint_chain?.joints || [];
+            const clamped = window.clampJointAngles(x, names, this.robot2URDF, window.customRobotConfig.robot2);
+            for (let i = 0; i < window.jointAngles2.length && i < clamped.length; i++) window.jointAngles2[i] = clamped[i];
+        }
+        if (window.updateGlobalVariables) window.updateGlobalVariables();
+        if (window.updateRobotPose) window.updateRobotPose();
+        return converged;
+    }
+
+    /**
      * 单臂模式下，使用伪逆更新关节角度
      * @param {number[]} dqTargetArray
      */
@@ -3971,6 +3980,68 @@ export class RobotVisualizer {
         if (window.updateGlobalVariables) window.updateGlobalVariables();
         if (window.updateRobotPose) window.updateRobotPose();
         return errNorm <= epsilon;
+    }
+
+    /**
+     * 单臂逆运动学：使用 L-BFGS 最小化 0.5*||pose(q)-target||^2
+     * @param {number[]} dqTargetArray - 目标位姿（8 元素双四元数）
+     * @returns {boolean} 是否收敛
+     */
+    updateSingleArmJointsWithLBFGS(dqTargetArray) {
+        if (!window.currentRobot || !window.jointAngles || window.jointAngles.length === 0) {
+            return false;
+        }
+        const robot = window.currentRobot;
+        const target = dqTargetArray;
+        const f = (q) => {
+            const pose = robot.fkm(q);
+            let sum = 0;
+            for (let i = 0; i < 8; i++) {
+                const e = pose[i] - target[i];
+                sum += e * e;
+            }
+            return 0.5 * sum;
+        };
+        const grad = (q, out) => {
+            const pose = robot.fkm(q);
+            const err = [];
+            for (let i = 0; i < 8; i++) err.push(pose[i] - target[i]);
+            const J = robot.poseJacobian(q);
+            if (!J || J.length !== 8) {
+                for (let i = 0; i < out.length; i++) out[i] = 0;
+                return;
+            }
+            const n = out.length;
+            for (let i = 0; i < n; i++) {
+                let s = 0;
+                for (let j = 0; j < 8; j++) s += (J[j][i] || 0) * err[j];
+                out[i] = s;
+            }
+        };
+        const { x, converged } = this.minimizeLBFGS(f, grad, [...window.jointAngles], {
+            maxIter: 80,
+            tol: 1e-6,
+            m: 10
+        });
+        for (let i = 0; i < window.jointAngles.length && i < x.length; i++) {
+            window.jointAngles[i] = x[i];
+        }
+        if (window.customRobotConfig && window.clampJointAngles) {
+            const names = window.customRobotConfig?.joint_chain?.joints || [];
+            const urdf = this.urdfRobot || null;
+            const clamped = window.clampJointAngles(
+                window.jointAngles,
+                names,
+                urdf,
+                window.customRobotConfig
+            );
+            for (let i = 0; i < window.jointAngles.length && i < clamped.length; i++) {
+                window.jointAngles[i] = clamped[i];
+            }
+        }
+        if (window.updateGlobalVariables) window.updateGlobalVariables();
+        if (window.updateRobotPose) window.updateRobotPose();
+        return converged;
     }
     
     /**
@@ -4125,6 +4196,114 @@ export class RobotVisualizer {
         }
     }
     
+    /**
+     * L-BFGS 无约束最小化：min f(x)，需提供 f(x) 与 grad(x)。
+     * @param {function(number[]): number} f - 标量目标函数
+     * @param {function(number[], number[]): void} grad - 梯度函数 grad(x, out)，结果写入 out
+     * @param {number[]} x0 - 初始点
+     * @param {{ maxIter?: number, tol?: number, m?: number, maxLineSearch?: number }} options
+     * @returns {{ x: number[], converged: boolean, cost: number }}
+     */
+    minimizeLBFGS(f, grad, x0, options = {}) {
+        const maxIter = options.maxIter ?? 100;
+        const tol = options.tol ?? 1e-6;
+        const m = options.m ?? 10;
+        const maxLineSearch = options.maxLineSearch ?? 20;
+        const c1 = 1e-4;
+
+        const n = x0.length;
+        const x = [...x0];
+        const g = new Array(n);
+        grad(x, g);
+        let cost = f(x);
+        const gNorm0 = Math.sqrt(g.reduce((s, v) => s + v * v, 0));
+        if (gNorm0 < tol) {
+            return { x, converged: true, cost };
+        }
+
+        const sList = [];
+        const yList = [];
+        const rhoList = [];
+        const alphaList = new Array(m);
+        const q = new Array(n);
+        const d = new Array(n);
+
+        for (let iter = 0; iter < maxIter; iter++) {
+            const gNorm = Math.sqrt(g.reduce((s, v) => s + v * v, 0));
+            if (gNorm < tol) {
+                return { x, converged: true, cost };
+            }
+
+            // d = -H*g via two-loop L-BFGS
+            for (let i = 0; i < n; i++) q[i] = -g[i];
+            const k = sList.length;
+            for (let i = k - 1; i >= 0; i--) {
+                let sy = 0;
+                for (let j = 0; j < n; j++) sy += sList[i][j] * q[j];
+                alphaList[i] = rhoList[i] * sy;
+                for (let j = 0; j < n; j++) q[j] -= alphaList[i] * yList[i][j];
+            }
+            let H0 = 1;
+            if (k > 0) {
+                let yy = 0;
+                for (let j = 0; j < n; j++) yy += yList[k - 1][j] * yList[k - 1][j];
+                H0 = 0;
+                for (let j = 0; j < n; j++) H0 += sList[k - 1][j] * yList[k - 1][j];
+                H0 = H0 / (yy + 1e-14);
+            }
+            for (let j = 0; j < n; j++) d[j] = H0 * q[j];
+            for (let i = 0; i < k; i++) {
+                let beta = 0;
+                for (let j = 0; j < n; j++) beta += yList[i][j] * d[j];
+                beta = rhoList[i] * beta;
+                for (let j = 0; j < n; j++) d[j] += (alphaList[i] - beta) * sList[i][j];
+            }
+            for (let j = 0; j < n; j++) d[j] = -d[j];
+
+            let dg = 0;
+            for (let i = 0; i < n; i++) dg += g[i] * d[i];
+            if (dg >= 0) {
+                for (let i = 0; i < n; i++) d[i] = -g[i];
+                dg = 0;
+                for (let i = 0; i < n; i++) dg += g[i] * d[i];
+            }
+
+            let alpha = 1;
+            let xNew = new Array(n);
+            let costNew;
+            for (let ls = 0; ls < maxLineSearch; ls++) {
+                for (let i = 0; i < n; i++) xNew[i] = x[i] + alpha * d[i];
+                costNew = f(xNew);
+                if (costNew <= cost + c1 * alpha * dg) break;
+                alpha *= 0.5;
+            }
+            const gOld = [...g];
+            cost = costNew;
+            for (let i = 0; i < n; i++) x[i] = xNew[i];
+            grad(x, g);
+
+            const s = new Array(n);
+            const y = new Array(n);
+            for (let i = 0; i < n; i++) {
+                s[i] = alpha * d[i];
+                y[i] = g[i] - gOld[i];
+            }
+            let ys = 0;
+            for (let i = 0; i < n; i++) ys += y[i] * s[i];
+            if (ys > 1e-14) {
+                sList.push(s);
+                yList.push(y);
+                rhoList.push(1 / ys);
+                if (sList.length > m) {
+                    sList.shift();
+                    yList.shift();
+                    rhoList.shift();
+                }
+            }
+        }
+        return { x, converged: false, cost };
+    }
+
     /**
      * 计算矩阵的伪逆（Moore-Penrose伪逆）
      * @param {number[][]} matrix - 输入矩阵

@@ -4697,11 +4697,11 @@ function setupInverseKinematicsControls() {
         try {
             let success = false;
             if (!dualArmMode) {
-                success = vis.updateSingleArmJointsWithPseudoInverse(dqArray) === true;
+                success = vis.updateSingleArmJointsWithLBFGS?.(dqArray) === true;
             } else if (robotChoice === 'robot1') {
-                success = vis.updateRobot1JointsWithPseudoInverse(dqArray) === true;
+                success = vis.updateRobot1JointsWithLBFGS?.(dqArray) === true;
             } else if (robotChoice === 'robot2') {
-                success = vis.updateRobot2JointsWithPseudoInverse(dqArray) === true;
+                success = vis.updateRobot2JointsWithLBFGS?.(dqArray) === true;
             } else if (robotChoice === 'absolute') {
                 const allJointAngles = [...(window.jointAngles1 || []), ...(window.jointAngles2 || [])];
                 success = vis.updateDualArmJointsFromAbsolutePoseTarget?.(dqArray, allJointAngles) === true;
@@ -4718,9 +4718,9 @@ function setupInverseKinematicsControls() {
                 return;
             }
             if (!success) {
-                addROS2LogEntry('逆运动学求解失败：伪逆求解未收敛', 'warn');
+                addROS2LogEntry('逆运动学求解失败：L-BFGS 未收敛', 'warn');
                 if (ikStatus) {
-                    ikStatus.textContent = '逆运动学求解失败：伪逆求解未收敛';
+                    ikStatus.textContent = '逆运动学求解失败：L-BFGS 未收敛';
                     ikStatus.style.color = '#f87171';
                 }
                 return;
