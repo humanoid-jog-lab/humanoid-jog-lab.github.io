@@ -2,10 +2,10 @@
  * DQ Robotics 可视化实验室主程序
  */
 
-import { initDQRobotics, FrankaPanda, KukaLw4, DQ, SerialManipulator, CooperativeDualArm, quaternionToRotationMatrix, rotationMatrixToEuler, getDQModule } from './dqrobotics.js';
+import { initDQRobotics, FrankaPanda, KukaLw4, DQ, SerialManipulator, CooperativeDualArm, HumanoidDualArmAdapter, quaternionToRotationMatrix, rotationMatrixToEuler, getDQModule } from './dqrobotics.js';
 import * as THREE from 'three';
 import { RobotVisualizer } from './visualizer.js';
-import { extractMDHFromURDF, createMDHTestSuite, FRANKA_PANDA_MDH_REFERENCE, formatMDHForDQ } from './urdf-to-mdh.js';
+import { extractMDHFromURDF, createMDHTestSuite, FRANKA_PANDA_MDH_REFERENCE, formatMDHForDQ, loadHumanoidChainsFromURDF } from './urdf-to-mdh.js';
 import { URDFPackageManager, loadURDFFromPackage } from './urdf-loader.js';
 import ROS2Communicator from './ros2-communicator.js';
 
@@ -46,6 +46,12 @@ let robot2URDF = null;  // 机器人2（URDF）
 let jointAngles1 = [];  // 机器人1关节角度
 let jointAngles2 = [];  // 机器人2关节角度
 let dualArmSystem = null;  // CooperativeDualArm对象（用于计算绝对位姿）
+
+// 人形机器人状态（姿态控制以左臂、右臂为主）
+let humanoidMode = false;
+let humanoidModel = null;  // WASM HumanoidURDF
+let humanoidQ = [];        // 全关节角 [腰, 左臂, 右臂, 头]
+let humanoidJointNames = [];  // 关节名顺序（用于设置 URDF 关节）
 
 // 环境物体
 let environmentObjects = [];
@@ -134,6 +140,10 @@ function buildJointAnglesClipboardText() {
         const robot2 = formatList(jointAngles2);
         return `robot1=${robot1}\nrobot2=${robot2}`;
     }
+    if (humanoidMode && humanoidQ.length > 0) {
+        // 人形模式：使用 humanoid= 前缀，方便导入时识别
+        return `humanoid=${formatList(humanoidQ)}`;
+    }
 
     return formatList(jointAngles);
 }
@@ -172,6 +182,15 @@ function parseJointAnglesInput(text) {
 
     const result = {};
     const normalized = trimmed.replace(/\r\n/g, '\n');
+    
+    // 匹配 humanoid= 格式（人形机器人）
+    const humanoidRegex = /humanoid\s*[:=]\s*(\[[^\]]*\])/gi;
+    let humanoidMatch = humanoidRegex.exec(normalized);
+    if (humanoidMatch) {
+        result.humanoid = parseJointAngleArray(humanoidMatch[1]);
+    }
+    
+    // 匹配 robot1= 和 robot2= 格式（双臂模式）
     const regex = /(robot1|robot2)\s*[:=]\s*(\[[^\]]*\])/gi;
     let match;
     while ((match = regex.exec(normalized)) !== null) {
@@ -180,7 +199,7 @@ function parseJointAnglesInput(text) {
     }
 
     if (Object.keys(result).length === 0) {
-        throw new Error('未检测到 robot1 或 robot2 的角度数组');
+        throw new Error('未检测到有效的角度数组格式（支持: [...]、humanoid=[...]、robot1=[...] robot2=[...]）');
     }
 
     return result;
@@ -190,6 +209,31 @@ function importJointAnglesFromText(text) {
     const parsed = parseJointAnglesInput(text);
     const toRad = (value) => (angleDisplayMode === 'deg' ? value * DEG_TO_RAD : value);
 
+    // 人形模式
+    if (humanoidMode && humanoidQ.length > 0) {
+        const arr = parsed.humanoid || parsed.single;
+        if (!arr) {
+            throw new Error('人形模式需要提供一个角度数组（格式: humanoid=[...] 或 [...]）');
+        }
+        if (arr.length !== humanoidQ.length) {
+            throw new Error(`导入数组长度 ${arr.length} 与人形机器人关节数 ${humanoidQ.length} 不匹配`);
+        }
+
+        humanoidQ = arr.map(toRad);
+
+        // 应用关节限位
+        if (customRobotConfig && humanoidJointNames.length > 0) {
+            const urdfRobot = visualizer?.humanoidURDF || null;
+            humanoidQ = clampJointAngles(humanoidQ, humanoidJointNames, urdfRobot, customRobotConfig);
+        }
+
+        updateGlobalVariables();
+        updateRobotPose();
+        updateHumanoidJointSlidersFromAngles();
+        return;
+    }
+
+    // 双臂模式
     if (dualArmMode) {
         const arr1 = parsed.robot1 || parsed.single;
         const arr2 = parsed.robot2;
@@ -217,28 +261,30 @@ function importJointAnglesFromText(text) {
         updateGlobalVariables();
         updateRobotPose();
         updateDualArmJointSlidersFromAngles();
-    } else {
-        const arr = parsed.single || parsed.robot1 || parsed.robot2;
-        if (!arr) {
-            throw new Error('单臂模式需要提供一个角度数组');
-        }
-        if (arr.length !== jointAngles.length) {
-            throw new Error('导入数组长度与当前机器人关节数不匹配');
-        }
-
-        jointAngles = arr.map(toRad);
-
-        const config = getActiveJointConfig();
-        const jointNames = config?.joint_chain?.joints || [];
-        const urdfRobot = visualizer?.urdfRobot || null;
-        if (jointNames.length === jointAngles.length) {
-            jointAngles = clampJointAngles(jointAngles, jointNames, urdfRobot, config);
-        }
-
-        updateGlobalVariables();
-        updateRobotPose();
-        updateJointSlidersFromAngles();
+        return;
     }
+    
+    // 单臂模式
+    const arr = parsed.single || parsed.robot1 || parsed.robot2;
+    if (!arr) {
+        throw new Error('单臂模式需要提供一个角度数组');
+    }
+    if (arr.length !== jointAngles.length) {
+        throw new Error('导入数组长度与当前机器人关节数不匹配');
+    }
+
+    jointAngles = arr.map(toRad);
+
+    const config = getActiveJointConfig();
+    const jointNames = config?.joint_chain?.joints || [];
+    const urdfRobot = visualizer?.urdfRobot || null;
+    if (jointNames.length === jointAngles.length) {
+        jointAngles = clampJointAngles(jointAngles, jointNames, urdfRobot, config);
+    }
+
+    updateGlobalVariables();
+    updateRobotPose();
+    updateJointSlidersFromAngles();
 }
 
 function formatJointLimitsForClipboard(lowerAngles = [], upperAngles = [], label = 'joint') {
@@ -264,6 +310,13 @@ function buildJointLimitsClipboardText() {
         return formatJointLimitsForClipboard(lower, upper, label);
     };
 
+    // 人形模式
+    if (humanoidMode && humanoidJointNames.length > 0) {
+        const urdfRobot = visualizer?.humanoidURDF || null;
+        return formatLimits(humanoidJointNames, urdfRobot, config, 'humanoid');
+    }
+
+    // 双臂模式
     if (dualArmMode && config) {
         const jointNames1 = config.robot1?.joint_chain?.joints || [];
         const jointNames2 = config.robot2?.joint_chain?.joints || [];
@@ -272,6 +325,7 @@ function buildJointLimitsClipboardText() {
         return `${text1}\n${text2}`;
     }
 
+    // 单臂模式
     const jointNames = config?.joint_chain?.joints || [];
     return formatLimits(jointNames, visualizer?.urdfRobot || null, config, 'joint');
 }
@@ -434,19 +488,20 @@ async function init() {
 }
 
 /**
- * 默认初始化 ia_robot（如果未加载自定义机器人）
+ * 默认初始化机器人（如果未加载自定义机器人）
+ * 默认加载人形机器人 sailor_r1_pro
  */
 async function initDefaultIARobot() {
     // 如果用户已经通过拖拽加载/或已经有机器人，则不覆盖
-    if (customRobotConfig || dualArmMode || currentRobot) {
+    if (customRobotConfig || dualArmMode || humanoidMode || currentRobot) {
         return;
     }
 
     try {
-        await loadBuiltInRobotFromPublic('ia_robot');
+        await loadBuiltInRobotFromPublic('sailor_r1_pro_description');
         updateRobotPose();
     } catch (error) {
-        console.warn('⚠ 默认加载 ia_robot 失败，将回退到内置 Franka:', error);
+        console.warn('⚠ 默认加载人形机器人失败，将回退到内置 Franka:', error);
         await initRobot('franka');
         updateRobotPose();
     }
@@ -454,7 +509,7 @@ async function initDefaultIARobot() {
 
 /**
  * 从 public/robots/<robotDir>/ 自动加载内置 URDF 机器人（复用拖拽加载逻辑）
- * 目前用于默认加载 ia_robot。
+ * 支持 ia_robot（双臂）和 sailor_r1_pro_description（人形）
  */
 async function loadBuiltInRobotFromPublic(robotDir) {
     if (!visualizer) {
@@ -468,59 +523,93 @@ async function loadBuiltInRobotFromPublic(robotDir) {
 
     const baseUrl = import.meta.env.BASE_URL || '/';
 
-    // ia_robot 是双臂包：这里显式列出其 public 资源（URDF/YAML/mesh）
-    // 注意：path 必须以包名（ia_robot）作为第一级目录，以便 package://ia_robot/... 能正确匹配。
-    if (robotDir !== 'ia_robot') {
+    let filesInPackage = [];
+
+    if (robotDir === 'sailor_r1_pro_description') {
+        // 人形机器人：sailor_r1_pro
+        filesInPackage = [
+            'config/robot_config.yaml',
+            'urdf/sailor_r1_pro_description.urdf',
+            // meshes
+            'meshes/ankle_link.STL',
+            'meshes/base_link.STL',
+            'meshes/body_link.STL',
+            'meshes/car_link.STL',
+            'meshes/head_pitch_link.STL',
+            'meshes/head_yaw.STL',
+            'meshes/head_yaw_link.STL',
+            'meshes/hip_pitch_link.STL',
+            'meshes/knee_link.STL',
+            'meshes/left_wheel_link.STL',
+            'meshes/lidar_link.STL',
+            'meshes/llink1.STL',
+            'meshes/llink2.STL',
+            'meshes/llink3.STL',
+            'meshes/llink4.STL',
+            'meshes/llink5.STL',
+            'meshes/llink6.STL',
+            'meshes/llink7.STL',
+            'meshes/right_wheel_link.STL',
+            'meshes/rlink1.STL',
+            'meshes/rlink2.STL',
+            'meshes/rlink3.STL',
+            'meshes/rlink4.STL',
+            'meshes/rlink5.STL',
+            'meshes/rlink6.STL',
+            'meshes/rlink7.STL'
+        ];
+    } else if (robotDir === 'ia_robot') {
+        // ia_robot 是双臂包
+        filesInPackage = [
+            'robot_config.yaml',
+            'right_arm/right_arm.urdf',
+            'left_arm/left_arm.urdf',
+            // meshes
+            'meshes/arm_right.STL',
+            'meshes/base_link_arm.STL',
+            'meshes/base_link_body.STL',
+            'meshes/base_link.STL',
+            'meshes/baselink.obj',
+            'meshes/body_link.STL',
+            'meshes/car_link.STL',
+            'meshes/leftlink1.obj',
+            'meshes/leftlink2.obj',
+            'meshes/leftlink3.obj',
+            'meshes/leftlink4.obj',
+            'meshes/leftlink5.obj',
+            'meshes/leftlink6.obj',
+            'meshes/leftlink7.obj',
+            'meshes/link1.STL',
+            'meshes/link2.STL',
+            'meshes/link3.STL',
+            'meshes/llink1.STL',
+            'meshes/llink2.STL',
+            'meshes/llink3.STL',
+            'meshes/llink4.STL',
+            'meshes/llink5.STL',
+            'meshes/llink6.STL',
+            'meshes/llink7.STL',
+            'meshes/low_leg.STL',
+            'meshes/ree_link.STL',
+            'meshes/rightlink1.obj',
+            'meshes/rightlink2.obj',
+            'meshes/rightlink3.obj',
+            'meshes/rightlink4.obj',
+            'meshes/rightlink5.obj',
+            'meshes/rightlink6.obj',
+            'meshes/rightlink7.obj',
+            'meshes/rlink1.STL',
+            'meshes/rlink2.STL',
+            'meshes/rlink3.STL',
+            'meshes/rlink4.STL',
+            'meshes/rlink5.STL',
+            'meshes/rlink6.STL',
+            'meshes/rlink7.STL',
+            'meshes/up_leg.STL'
+        ];
+    } else {
         throw new Error(`暂不支持的内置机器人: ${robotDir}`);
     }
-
-    const filesInPackage = [
-        'robot_config.yaml',
-        'right_arm/right_arm.urdf',
-        'left_arm/left_arm.urdf',
-        // meshes
-        'meshes/arm_right.STL',
-        'meshes/base_link_arm.STL',
-        'meshes/base_link_body.STL',
-        'meshes/base_link.STL',
-        'meshes/baselink.obj',
-        'meshes/body_link.STL',
-        'meshes/car_link.STL',
-        'meshes/leftlink1.obj',
-        'meshes/leftlink2.obj',
-        'meshes/leftlink3.obj',
-        'meshes/leftlink4.obj',
-        'meshes/leftlink5.obj',
-        'meshes/leftlink6.obj',
-        'meshes/leftlink7.obj',
-        'meshes/link1.STL',
-        'meshes/link2.STL',
-        'meshes/link3.STL',
-        'meshes/llink1.STL',
-        'meshes/llink2.STL',
-        'meshes/llink3.STL',
-        'meshes/llink4.STL',
-        'meshes/llink5.STL',
-        'meshes/llink6.STL',
-        'meshes/llink7.STL',
-        'meshes/low_leg.STL',
-        'meshes/ree_link.STL',
-        'meshes/rightlink1.obj',
-        'meshes/rightlink2.obj',
-        'meshes/rightlink3.obj',
-        'meshes/rightlink4.obj',
-        'meshes/rightlink5.obj',
-        'meshes/rightlink6.obj',
-        'meshes/rightlink7.obj',
-        'meshes/rlink1.STL',
-        'meshes/rlink2.STL',
-        'meshes/rlink3.STL',
-        'meshes/rlink4.STL',
-        'meshes/rlink5.STL',
-        'meshes/rlink6.STL',
-        'meshes/rlink7.STL',
-        'meshes/up_leg.STL'
-    ];
 
     packageManager = new URDFPackageManager();
     const remoteEntries = filesInPackage.map((rel) => {
@@ -540,6 +629,15 @@ async function loadBuiltInRobotFromPublic(robotDir) {
 
     // 为了复用现有流程，仍然 load 一次（dualArmSystem 内部会按 config 再次加载指定 URDF）
     const robot = await loadURDFFromPackage(packageManager);
+
+    // 检查是否为人形机器人
+    const isHumanoid = customRobotConfig?.humanoid === true;
+    if (isHumanoid) {
+        await loadHumanoidSystem(robot, customRobotConfig);
+        switchToHumanoidUI();
+        refreshDockState();
+        return;
+    }
 
     const isDualArm = customRobotConfig?.dual_arm === true;
     dualArmMode = isDualArm;
@@ -634,12 +732,11 @@ function getJointLimits(jointName, urdfRobot, config) {
         if (Array.isArray(limits) && limits.length >= 2) {
             lower = limits[0];
             upper = limits[1];
-            console.log(`  ✓ 从配置文件读取 ${jointName} 限位: [${lower.toFixed(4)}, ${upper.toFixed(4)}]`);
             return { lower, upper };
         }
     }
     
-    // 从URDF读取
+    // 从URDF读取（不在此处打 log，避免每次 clamp 都刷屏；首次限位可在加载时统一打印）
     if (urdfRobot && urdfRobot.joints && urdfRobot.joints[jointName]) {
         const joint = urdfRobot.joints[jointName];
         
@@ -651,18 +748,15 @@ function getJointLimits(jointName, urdfRobot, config) {
             if (limit.lower !== undefined && limit.upper !== undefined) {
                 lower = parseFloat(limit.lower);
                 upper = parseFloat(limit.upper);
-                console.log(`  ✓ 从URDF读取 ${jointName} 限位: [${lower.toFixed(4)}, ${upper.toFixed(4)}]`);
             } else if (limit.min !== undefined && limit.max !== undefined) {
                 lower = parseFloat(limit.min);
                 upper = parseFloat(limit.max);
-                console.log(`  ✓ 从URDF读取 ${jointName} 限位: [${lower.toFixed(4)}, ${upper.toFixed(4)}]`);
             }
         } else {
             // 尝试直接访问属性（urdf-loader可能将limit属性直接挂在joint上）
             if (joint.lower !== undefined && joint.upper !== undefined) {
                 lower = parseFloat(joint.lower);
                 upper = parseFloat(joint.upper);
-                console.log(`  ✓ 从URDF读取 ${jointName} 限位: [${lower.toFixed(4)}, ${upper.toFixed(4)}]`);
             }
         }
     }
@@ -1079,6 +1173,119 @@ function createDualArmJointControls(config) {
 }
 
 /**
+ * 创建人形关节控制（腰+左臂+右臂+头，姿态控制以左臂、右臂为主）
+ * 按部位分组显示：腰部、左臂、右臂、头部
+ */
+function createHumanoidJointControls(config) {
+    const container = document.getElementById('joint-controls');
+    if (!container) return;
+    container.innerHTML = '';
+    const urdfRobot = visualizer?.humanoidURDF || null;
+    const n = humanoidJointNames.length;
+    const sliderPrecision = getSliderPrecision();
+    const inputPrecision = getInputPrecision();
+    const step = displayStep().toString();
+    
+    // 获取各部分长度
+    const waistLen = visualizer?.humanoidWaistLength ?? 0;
+    const leftLen = visualizer?.humanoidLeftArmLength ?? 0;
+    const rightLen = visualizer?.humanoidRightArmLength ?? 0;
+    const headLen = visualizer?.humanoidHeadLength ?? 0;
+    
+    // 计算各部分的起始索引
+    const waistStart = 0;
+    const leftStart = waistLen;
+    const rightStart = waistLen + leftLen;
+    const headStart = waistLen + leftLen + rightLen;
+    
+    // 创建分组标题的辅助函数
+    const createGroupHeader = (title, jointCount) => {
+        const header = document.createElement('div');
+        header.className = 'joint-group-header';
+        header.innerHTML = `<span class="group-title">${title}</span><span class="group-count">${jointCount} 关节</span>`;
+        header.style.cssText = `
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.5rem 0.75rem;
+            margin: 0.5rem 0 0.25rem 0;
+            background: linear-gradient(90deg, rgba(99, 102, 241, 0.3), transparent);
+            border-left: 3px solid #6366f1;
+            border-radius: 0 4px 4px 0;
+            font-weight: 600;
+            font-size: 0.85rem;
+            color: #e0e0ff;
+        `;
+        const countSpan = header.querySelector('.group-count');
+        if (countSpan) {
+            countSpan.style.cssText = `
+                font-size: 0.75rem;
+                color: #a0a0c0;
+                font-weight: normal;
+            `;
+        }
+        return header;
+    };
+    
+    for (let i = 0; i < n; i++) {
+        // 在各部分开始处添加分组标题
+        if (i === waistStart && waistLen > 0) {
+            container.appendChild(createGroupHeader('🦴 腰部', waistLen));
+        } else if (i === leftStart && leftLen > 0) {
+            container.appendChild(createGroupHeader('🦾 左臂', leftLen));
+        } else if (i === rightStart && rightLen > 0) {
+            container.appendChild(createGroupHeader('🦿 右臂', rightLen));
+        } else if (i === headStart && headLen > 0) {
+            container.appendChild(createGroupHeader('🗣️ 头部', headLen));
+        }
+        
+        const jointName = humanoidJointNames[i] || `q${i}`;
+        const limits = getJointLimits(jointName, urdfRobot, config);
+        const lowerRad = limits.lower;
+        const upperRad = limits.upper;
+        const jointDiv = document.createElement('div');
+        jointDiv.className = 'joint-control';
+        const label = document.createElement('div');
+        label.className = 'joint-label';
+        const nameSpan = document.createElement('span');
+        nameSpan.textContent = jointName;
+        label.appendChild(nameSpan);
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.className = 'joint-input';
+        input.id = `humanoid-input-${i}`;
+        input.step = step;
+        input.min = formatDisplayValue(angleToDisplay(lowerRad), sliderPrecision);
+        input.max = formatDisplayValue(angleToDisplay(upperRad), sliderPrecision);
+        input.placeholder = getAnglePlaceholder();
+        input.value = formatDisplayAngle(humanoidQ[i] ?? 0);
+        setupJointInput(input, `humanoid-${i}`, lowerRad, upperRad, (angleRad) => {
+            humanoidQ[i] = angleRad;
+            updateRobotPose();
+        });
+        label.appendChild(input);
+        const slider = document.createElement('input');
+        slider.type = 'range';
+        slider.className = 'joint-slider';
+        slider.id = `humanoid-${i}`;
+        slider.min = formatDisplayValue(angleToDisplay(lowerRad), sliderPrecision);
+        slider.max = formatDisplayValue(angleToDisplay(upperRad), sliderPrecision);
+        slider.step = step;
+        slider.value = formatDisplayValue(angleToDisplay(humanoidQ[i] ?? 0), sliderPrecision);
+        slider.addEventListener('input', (e) => {
+            const displayValue = parseFloat(e.target.value);
+            if (Number.isNaN(displayValue)) return;
+            humanoidQ[i] = displayToAngle(displayValue);
+            input.value = formatDisplayValue(displayValue, inputPrecision);
+            updateRobotPose();
+        });
+        jointDiv.appendChild(label);
+        jointDiv.appendChild(slider);
+        container.appendChild(jointDiv);
+    }
+}
+
+/**
  * 从当前双臂关节角度更新所有滑块的值和显示
  */
 function updateDualArmJointSlidersFromAngles() {
@@ -1128,14 +1335,43 @@ function updateDualArmJointSlidersFromAngles() {
     }
 }
 
+/**
+ * 从当前人形关节角度更新所有滑块的值和显示
+ */
+function updateHumanoidJointSlidersFromAngles() {
+    if (!humanoidQ || humanoidQ.length === 0) return;
+    
+    const sliderPrecision = getSliderPrecision();
+    const inputPrecision = getInputPrecision();
+    const step = displayStep().toString();
+    const placeholder = getAnglePlaceholder();
+    
+    humanoidQ.forEach((angle, i) => {
+        const displayValue = angleToDisplay(angle);
+        const slider = document.getElementById(`humanoid-${i}`);
+        const input = document.getElementById(`humanoid-input-${i}`);
+        
+        if (slider) {
+            slider.value = formatDisplayValue(displayValue, sliderPrecision);
+            slider.step = step;
+        }
+        
+        if (input) {
+            input.value = formatDisplayValue(displayValue, inputPrecision);
+            input.step = step;
+            input.placeholder = placeholder;
+        }
+    });
+}
+
 function refreshJointControlDisplay() {
     const container = document.getElementById('joint-controls');
-    if (!container) {
+    if (!container) return;
+    const config = getActiveJointConfig();
+    if (humanoidMode && humanoidJointNames.length > 0) {
+        createHumanoidJointControls(config || {});
         return;
     }
-    
-    const config = getActiveJointConfig();
-    
     if (dualArmMode && config) {
         const totalJoints =
             (config.robot1?.joint_chain?.joints?.length || jointAngles1.length) +
@@ -1173,9 +1409,13 @@ async function initVisualizer() {
 }
 
 /**
- * 更新机器人位姿（支持单臂和双臂模式）
+ * 更新机器人位姿（支持单臂、双臂和人形模式）
  */
 function updateRobotPose() {
+    if (humanoidMode) {
+        updateHumanoidPose();
+        return;
+    }
     if (dualArmMode) {
         updateDualArmPose();
     } else {
@@ -1206,6 +1446,11 @@ function updateGlobalVariables() {
     window.robot2 = robot2;
     window.robot1URDF = robot1URDF;
     window.robot2URDF = robot2URDF;
+    // 人形相关
+    window.humanoidMode = humanoidMode;
+    window.humanoidModel = humanoidModel;
+    window.humanoidQ = humanoidQ;
+    window.humanoidJointNames = humanoidJointNames;
 }
 
 /**
@@ -1263,6 +1508,52 @@ function updateSingleArmPose() {
         updateJointSlidersFromAngles();
     } catch (error) {
         console.error('更新单臂位姿失败:', error);
+    }
+}
+
+/**
+ * 更新人形机器人位姿（左臂=effector1，右臂=effector2；用于绝对/相对姿态显示）
+ */
+function updateHumanoidPose() {
+    try {
+        if (!humanoidModel || !humanoidQ.length) return;
+        if (visualizer) visualizer.setHumanoidJoints(humanoidQ);
+        
+        // 更新关节滑块显示
+        updateHumanoidJointSlidersFromAngles();
+        
+        const dqModule = getDQModule();
+        if (!dqModule) return;
+        const dq1 = humanoidModel.fkmEffector(humanoidQ, 1);
+        const dq2 = humanoidModel.fkmEffector(humanoidQ, 2);
+        const obj1 = dqModule.DQWrapper.createFromArray(dq1);
+        const obj2 = dqModule.DQWrapper.createFromArray(dq2);
+        const pose1 = { translation: dqModule.DQWrapper.getTranslation(obj1), rotation: dqModule.DQWrapper.getRotation(obj1) };
+        const pose2 = { translation: dqModule.DQWrapper.getTranslation(obj2), rotation: dqModule.DQWrapper.getRotation(obj2) };
+        
+        // 使用 dualArmSystem（HumanoidDualArmAdapter）计算绝对位姿和相对位姿，保持与控制器一致
+        let absPose, relPose;
+        if (dualArmSystem && typeof dualArmSystem.getAbsolutePose === 'function') {
+            const absDQ = dualArmSystem.getAbsolutePose(humanoidQ);
+            const relDQArr = dualArmSystem.getRelativePose(humanoidQ);
+            const absObj = dqModule.DQWrapper.createFromArray(absDQ);
+            const relObj = dqModule.DQWrapper.createFromArray(relDQArr);
+            absPose = { translation: dqModule.DQWrapper.getTranslation(absObj), rotation: dqModule.DQWrapper.getRotation(absObj) };
+            relPose = { translation: dqModule.DQWrapper.getTranslation(relObj), rotation: dqModule.DQWrapper.getRotation(relObj) };
+        } else {
+            // fallback: 简单计算
+            absPose = {
+                translation: [1, (pose1.translation[1] + pose2.translation[1]) / 2, (pose1.translation[2] + pose2.translation[2]) / 2, (pose1.translation[3] + pose2.translation[3]) / 2],
+                rotation: [(pose1.rotation[0] + pose2.rotation[0]) / 2, (pose1.rotation[1] + pose2.rotation[1]) / 2, (pose1.rotation[2] + pose2.rotation[2]) / 2, (pose1.rotation[3] + pose2.rotation[3]) / 2]
+            };
+            const inv1 = dqModule.DQWrapper.inverse(obj1);
+            const relDQ = dqModule.DQWrapper.multiply(obj2, inv1);
+            relPose = { translation: dqModule.DQWrapper.getTranslation(relDQ), rotation: dqModule.DQWrapper.getRotation(relDQ) };
+        }
+        if (visualizer) visualizer.updateDualArmRelativeVisualizations(pose1, pose2, absPose, null);
+        updateDualArmPoseDisplay(pose1, pose2, absPose, relPose);
+    } catch (error) {
+        console.error('更新人形位姿失败:', error);
     }
 }
 
@@ -1335,7 +1626,7 @@ function updateDualArmPose() {
         }
         
         // 更新 UI 显示
-        updateDualArmPoseDisplay(pose1, pose2);
+        updateDualArmPoseDisplay(pose1, pose2, null, null);
 
         // 同步双臂关节滑块和输入框显示
         updateDualArmJointSlidersFromAngles();
@@ -1917,9 +2208,13 @@ function updatePoseDisplay(pose) {
 }
 
 /**
- * 更新双臂位姿显示
+ * 更新双臂/人形位姿显示
+ * @param {Object} pose1 - 左臂/机器人1位姿 { translation, rotation }
+ * @param {Object} pose2 - 右臂/机器人2位姿
+ * @param {Object|null} optionalAbsolutePose - 可选，预计算的绝对位姿（人形时传入）
+ * @param {Object|null} optionalRelativePose - 可选，预计算的相对位姿（人形时传入）
  */
-function updateDualArmPoseDisplay(pose1, pose2) {
+function updateDualArmPoseDisplay(pose1, pose2, optionalAbsolutePose, optionalRelativePose) {
     // 机器人1的位置和四元数
     const x1 = pose1.translation[1] || 0;
     const y1 = pose1.translation[2] || 0;
@@ -1938,10 +2233,28 @@ function updateDualArmPoseDisplay(pose1, pose2) {
     const qy2 = pose2.rotation[2] || 0;
     const qz2 = pose2.rotation[3] || 0;
     
-    // 获取绝对位姿（使用absolute_pose函数）
+    // 获取绝对位姿（使用absolute_pose函数或人形预计算值）
     let absX, absY, absZ, absQW, absQX, absQY, absQZ, absDQ = null;
     
-    if (dualArmSystem && jointAngles1.length > 0 && jointAngles2.length > 0) {
+    if (optionalAbsolutePose) {
+        absX = optionalAbsolutePose.translation[1] || 0;
+        absY = optionalAbsolutePose.translation[2] || 0;
+        absZ = optionalAbsolutePose.translation[3] || 0;
+        absQW = optionalAbsolutePose.rotation[0] || 1;
+        absQX = optionalAbsolutePose.rotation[1] || 0;
+        absQY = optionalAbsolutePose.rotation[2] || 0;
+        absQZ = optionalAbsolutePose.rotation[3] || 0;
+        // 从位置和四元数构建DQ数组用于显示
+        try {
+            const dqModule = getDQModule();
+            if (dqModule && dqModule.DQWrapper) {
+                const absDQObj = dqModule.DQWrapper.fromQuaternionAndTranslation(absQW, absQX, absQY, absQZ, absX, absY, absZ);
+                absDQ = dqModule.DQWrapper.toArray(absDQObj);
+            }
+        } catch (e) {
+            console.warn('构建绝对位姿DQ失败:', e);
+        }
+    } else if (dualArmSystem && jointAngles1.length > 0 && jointAngles2.length > 0) {
         const allJointAngles = [...jointAngles1, ...jointAngles2];
         try {
             const absPose = dualArmSystem.getAbsoluteWorldPose(allJointAngles);
@@ -1980,10 +2293,28 @@ function updateDualArmPoseDisplay(pose1, pose2) {
         absQZ = (qz1 + qz2) / 2;
     }
     
-    // 计算相对位姿（使用relative_pose函数）
+    // 计算相对位姿（使用relative_pose函数或人形预计算值）
     let relX, relY, relZ, relQW, relQX, relQY, relQZ, relDQ = null;
     
-    if (dualArmSystem && jointAngles1.length > 0 && jointAngles2.length > 0) {
+    if (optionalRelativePose) {
+        relX = optionalRelativePose.translation[1] || 0;
+        relY = optionalRelativePose.translation[2] || 0;
+        relZ = optionalRelativePose.translation[3] || 0;
+        relQW = optionalRelativePose.rotation[0] || 1;
+        relQX = optionalRelativePose.rotation[1] || 0;
+        relQY = optionalRelativePose.rotation[2] || 0;
+        relQZ = optionalRelativePose.rotation[3] || 0;
+        // 从位置和四元数构建DQ数组用于显示
+        try {
+            const dqModule = getDQModule();
+            if (dqModule && dqModule.DQWrapper) {
+                const relDQObj = dqModule.DQWrapper.fromQuaternionAndTranslation(relQW, relQX, relQY, relQZ, relX, relY, relZ);
+                relDQ = dqModule.DQWrapper.toArray(relDQObj);
+            }
+        } catch (e) {
+            console.warn('构建相对位姿DQ失败:', e);
+        }
+    } else if (dualArmSystem && jointAngles1.length > 0 && jointAngles2.length > 0) {
         const allJointAngles = [...jointAngles1, ...jointAngles2];
         try {
             // 获取相对位姿的DQ表示
@@ -2785,16 +3116,17 @@ function setupEventListeners() {
                 const direction = button.dataset.direction;
                 if (!visualizer || !direction) return;
                 
-                // 仅双臂模式 + distance 模式下有效
-                if (!visualizer.dualArmMode) return;
+                // 双臂或人形模式 + distance/distance-fullbody 模式下有效
+                if (!visualizer.dualArmMode && !visualizer.humanoidMode) return;
                 const controlModeSelect = document.getElementById('dual-arm-control-mode-select');
                 const controlMode = controlModeSelect ? controlModeSelect.value : 'absolute';
-                if (controlMode !== 'distance') return;
+                if (controlMode !== 'distance' && controlMode !== 'distance-fullbody') return;
                 if (typeof visualizer.moveDualArmRelativeDistance !== 'function') return;
                 
-                visualizer.moveDualArmRelativeDistance(direction);
+                const includeWaist = (controlMode === 'distance-fullbody');
+                visualizer.moveDualArmRelativeDistance(direction, includeWaist);
                 intervalId = setInterval(() => {
-                    visualizer.moveDualArmRelativeDistance(direction);
+                    visualizer.moveDualArmRelativeDistance(direction, includeWaist);
                 }, 20);
                 return;
             }
@@ -2804,14 +3136,44 @@ function setupEventListeners() {
             
             if (!visualizer || !axis || !direction) return;
             
-            // 检查是否为双臂模式
-            const isDualArm = visualizer.dualArmMode;
+            // 检查是否为双臂或人形模式（人形下左臂=robot1，右臂=robot2，支持绝对/相对/距离控制）
+            const isDualArm = visualizer.dualArmMode || visualizer.humanoidMode;
             
             if (isDualArm) {
                 // 获取控制模式选择器
                 const controlModeSelect = document.getElementById('dual-arm-control-mode-select');
                 const controlMode = controlModeSelect ? controlModeSelect.value : 'absolute';
-                
+                // 人形模式下左臂/右臂单臂示教
+                if (visualizer.humanoidMode && controlMode === 'robot1') {
+                    // 人形机器人左臂控制
+                    if (type === 'rotation') {
+                        visualizer.rotateHumanoidLeftArmAroundAxis(axis, direction);
+                        intervalId = setInterval(() => {
+                            visualizer.rotateHumanoidLeftArmAroundAxis(axis, direction);
+                        }, 20);
+                    } else {
+                        visualizer.moveHumanoidLeftArmAlongAxis(axis, direction);
+                        intervalId = setInterval(() => {
+                            visualizer.moveHumanoidLeftArmAlongAxis(axis, direction);
+                        }, 20);
+                    }
+                    return;
+                }
+                if (visualizer.humanoidMode && controlMode === 'robot2') {
+                    // 人形机器人右臂控制
+                    if (type === 'rotation') {
+                        visualizer.rotateHumanoidRightArmAroundAxis(axis, direction);
+                        intervalId = setInterval(() => {
+                            visualizer.rotateHumanoidRightArmAroundAxis(axis, direction);
+                        }, 20);
+                    } else {
+                        visualizer.moveHumanoidRightArmAlongAxis(axis, direction);
+                        intervalId = setInterval(() => {
+                            visualizer.moveHumanoidRightArmAlongAxis(axis, direction);
+                        }, 20);
+                    }
+                    return;
+                }
                 if (controlMode === 'robot1') {
                     // 控制机器人1
                     if (type === 'rotation') {
@@ -2850,6 +3212,36 @@ function setupEventListeners() {
                         intervalId = setInterval(() => {
                             visualizer.moveDualArmRelativePoseAlongAxis(axis, direction);
                         }, 20);
+                    }
+                } else if (controlMode === 'decoupled') {
+                    // 全身绝对位姿：腰部+双臂联动，控制绝对位姿
+                    if (visualizer.humanoidMode) {
+                        if (type === 'rotation') {
+                            visualizer.rotateHumanoidAbsolutePoseAroundAxisDecoupled(axis, direction);
+                            intervalId = setInterval(() => {
+                                visualizer.rotateHumanoidAbsolutePoseAroundAxisDecoupled(axis, direction);
+                            }, 20);
+                        } else {
+                            visualizer.moveHumanoidAbsolutePoseAlongAxisDecoupled(axis, direction);
+                            intervalId = setInterval(() => {
+                                visualizer.moveHumanoidAbsolutePoseAlongAxisDecoupled(axis, direction);
+                            }, 20);
+                        }
+                    }
+                } else if (controlMode === 'relative-fullbody') {
+                    // 全身相对位姿：腰部+双臂联动，控制相对位姿
+                    if (visualizer.humanoidMode) {
+                        if (type === 'rotation') {
+                            visualizer.rotateHumanoidRelativePoseAroundAxisFullbody(axis, direction);
+                            intervalId = setInterval(() => {
+                                visualizer.rotateHumanoidRelativePoseAroundAxisFullbody(axis, direction);
+                            }, 20);
+                        } else {
+                            visualizer.moveHumanoidRelativePoseAlongAxisFullbody(axis, direction);
+                            intervalId = setInterval(() => {
+                                visualizer.moveHumanoidRelativePoseAlongAxisFullbody(axis, direction);
+                            }, 20);
+                        }
                     }
                 } else if (controlMode === 'distance') {
                     // 距离模式：按键已单独处理，这里兜底不做事
@@ -3066,6 +3458,19 @@ async function handleDrop(items) {
             throw new Error('未找到 robot_config.yaml 配置文件');
         }
         console.log('✓ 配置:', customRobotConfig.robot_name);
+        const isHumanoid = customRobotConfig?.humanoid === true;
+        if (isHumanoid) {
+            console.log('\n4️⃣ 人形模式：按 link 名提取腰/左臂/右臂/头...');
+            await loadHumanoidSystem(robot, customRobotConfig);
+            switchToHumanoidUI();
+            console.log('\n6️⃣ 同步界面状态...');
+            updateDropOverlay('success', `✓ 已加载人形: ${customRobotConfig.robot_name}`, '✅');
+            hideDropOverlay(1400);
+            refreshDockState();
+            console.log('\n✅ 全部完成！');
+            console.log('═══════════════════════════════════════════\n');
+            return;
+        }
         console.log('  基座:', customRobotConfig.joint_chain?.base_link);
         console.log('  末端:', customRobotConfig.joint_chain?.end_link);
         console.log('  关节数:', customRobotConfig.joint_chain?.joints?.length || 0);
@@ -3119,6 +3524,65 @@ async function handleDrop(items) {
         hideDropOverlay(2200);
         alert(`加载失败:\n\n${error.message}\n\n请打开控制台(F12)查看详细错误信息。`);
     }
+}
+
+/**
+ * 加载人形机器人：从 URDF 按 link 名提取腰/左臂/右臂/头，创建 WASM HumanoidURDF，姿态控制以左臂、右臂为主。
+ */
+async function loadHumanoidSystem(robot, config) {
+    const linkNames = config.humanoid_link_names || {};
+    const names = {
+        base_link: linkNames.base_link || 'base_link',
+        waist_start: linkNames.waist_start || linkNames.base_link || 'base_link',
+        waist_end: linkNames.waist_end || 'body_link',
+        left_arm_start: linkNames.left_arm_start || 'body_link',
+        left_arm_end: linkNames.left_arm_end || 'lee_link',
+        right_arm_start: linkNames.right_arm_start || 'body_link',
+        right_arm_end: linkNames.right_arm_end || 'ree_link',
+        head_start: linkNames.head_start || 'body_link',
+        head_end: linkNames.head_end || 'head_pitch_link'
+    };
+    const chains = loadHumanoidChainsFromURDF(robot, names);
+    if (!chains) {
+        throw new Error('人形链提取失败，请检查 humanoid_link_names 与 URDF 中的 link 名是否一致');
+    }
+    const dqModule = getDQModule();
+    if (!dqModule || !dqModule.HumanoidURDF) {
+        throw new Error('WASM 未加载或未包含 HumanoidURDF，请重新构建 wasm');
+    }
+    const baseDQ = [1, 0, 0, 0, 0, 0, 0, 0];
+    // 传递 effector frames 以处理尾随固定关节
+    humanoidModel = new dqModule.HumanoidURDF(
+        baseDQ, 
+        chains.waistChain, chains.leftArmChain, chains.rightArmChain, chains.headChain,
+        chains.waistEffector, chains.leftArmEffector, chains.rightArmEffector, chains.headEffector
+    );
+    humanoidJointNames = [...chains.waistJointNames, ...chains.leftArmJointNames, ...chains.rightArmJointNames, ...chains.headJointNames];
+    humanoidQ = new Array(humanoidJointNames.length).fill(0);
+    if (config.initial_q && Array.isArray(config.initial_q) && config.initial_q.length === humanoidQ.length) {
+        humanoidQ = config.initial_q.slice();
+    }
+    humanoidMode = true;
+    dualArmMode = false;
+    dualArmSystem = new HumanoidDualArmAdapter(humanoidModel);
+    if (visualizer) {
+        const waistLen = chains.waistJointNames.length;
+        const leftLen = chains.leftArmJointNames.length;
+        const rightLen = chains.rightArmJointNames.length;
+        const headLen = chains.headJointNames.length;
+        await visualizer.loadHumanoidURDF(robot, config, {
+            model: humanoidModel,
+            jointNames: humanoidJointNames,
+            waistLength: waistLen,
+            leftArmLength: leftLen,
+            rightArmLength: rightLen,
+            headLength: headLen,
+            effectorLinkNames: [names.waist_end, names.left_arm_end, names.right_arm_end, names.head_end]
+        });
+        visualizer.setHumanoidJoints(humanoidQ);
+    }
+    createHumanoidJointControls(config);
+    updateGlobalVariables();
 }
 
 /**
@@ -4551,15 +5015,17 @@ function updateIKRobotSelection() {
 
     const prevValue = ikSelect.value;
     ikSelect.innerHTML = '';
+    const arm1Label = humanoidMode ? '左臂' : (dualArmMode ? '机器人1' : '机器人');
     const opt1 = document.createElement('option');
     opt1.value = 'robot1';
-    opt1.textContent = dualArmMode ? '机器人1' : '机器人';
+    opt1.textContent = arm1Label;
     ikSelect.appendChild(opt1);
 
-    if (dualArmMode) {
+    const showDualOptions = dualArmMode || humanoidMode;
+    if (showDualOptions) {
         const opt2 = document.createElement('option');
         opt2.value = 'robot2';
-        opt2.textContent = '机器人2';
+        opt2.textContent = humanoidMode ? '右臂' : '机器人2';
         ikSelect.appendChild(opt2);
 
         const optAbs = document.createElement('option');
@@ -4574,7 +5040,9 @@ function updateIKRobotSelection() {
 
         ikSelect.disabled = false;
         if (ikStatus) {
-            ikStatus.textContent = '双臂模式：可选择机器人1/机器人2/绝对位姿/相对位姿';
+            ikStatus.textContent = humanoidMode
+                ? '人形模式：左臂/右臂/绝对位姿/相对位姿'
+                : '双臂模式：可选择机器人1/机器人2/绝对位姿/相对位姿';
         }
     } else {
         ikSelect.disabled = true;
@@ -4600,15 +5068,17 @@ function updateDQCalculatorRobotSelection() {
 
     const prevValue = select.value;
     select.innerHTML = '';
+    const arm1LabelCalc = humanoidMode ? '左臂' : (dualArmMode ? '机器人1' : '机器人');
     const opt1 = document.createElement('option');
     opt1.value = 'robot1';
-    opt1.textContent = dualArmMode ? '机器人1' : '机器人';
+    opt1.textContent = arm1LabelCalc;
     select.appendChild(opt1);
 
-    if (dualArmMode) {
+    const showDualOpts = dualArmMode || humanoidMode;
+    if (showDualOpts) {
         const opt2 = document.createElement('option');
         opt2.value = 'robot2';
-        opt2.textContent = '机器人2';
+        opt2.textContent = humanoidMode ? '右臂' : '机器人2';
         select.appendChild(opt2);
 
         const optAbs = document.createElement('option');
@@ -4647,27 +5117,25 @@ function setupInverseKinematicsControls() {
 
     const ikSelect = document.getElementById('ik-robot-select');
     const updateIkSolveAvailability = () => {
-        // 双臂模式下也允许求解 absolute/relative：
-        // - absolute：保持相对位姿不变
-        // - relative：保持绝对位姿不变
+        // 双臂或人形模式下允许求解 absolute/relative；人形下左臂=robot1、右臂=robot2
         if (!ikStatus) return;
-        if (!dualArmMode) {
+        if (!dualArmMode && !humanoidMode) {
             ikStatus.textContent = '单臂模式：使用雅可比伪逆更新当前机器人角度';
             ikStatus.style.color = '#94a3b8';
             return;
         }
         const choice = ikSelect?.value || 'robot1';
         if (choice === 'absolute') {
-            ikStatus.textContent = '双臂绝对位姿：求解绝对位姿，保持相对位姿不变';
+            ikStatus.textContent = humanoidMode ? '人形绝对位姿：求解绝对位姿，保持相对位姿不变' : '双臂绝对位姿：求解绝对位姿，保持相对位姿不变';
             ikStatus.style.color = '#94a3b8';
             return;
         }
         if (choice === 'relative') {
-            ikStatus.textContent = '双臂相对位姿：求解相对位姿，保持绝对位姿不变';
+            ikStatus.textContent = humanoidMode ? '人形相对位姿：求解相对位姿，保持绝对位姿不变' : '双臂相对位姿：求解相对位姿，保持绝对位姿不变';
             ikStatus.style.color = '#94a3b8';
             return;
         }
-        ikStatus.textContent = '双臂单臂求解：仅更新机器人1或机器人2角度';
+        ikStatus.textContent = humanoidMode ? '人形单臂求解：仅更新左臂或右臂角度' : '双臂单臂求解：仅更新机器人1或机器人2角度';
         ikStatus.style.color = '#94a3b8';
     };
 
@@ -4696,7 +5164,19 @@ function setupInverseKinematicsControls() {
 
         try {
             let success = false;
-            if (!dualArmMode) {
+            if (humanoidMode && (robotChoice === 'absolute' || robotChoice === 'relative')) {
+                const allQ = window.humanoidQ;
+                if (!allQ || allQ.length === 0) {
+                    if (ikStatus) { ikStatus.textContent = '人形关节未初始化'; ikStatus.style.color = '#f87171'; }
+                    return;
+                }
+                if (robotChoice === 'absolute') {
+                    success = vis.updateHumanoidJointsFromAbsolutePoseTarget?.(dqArray, allQ) === true;
+                } else {
+                    success = vis.updateHumanoidJointsFromRelativePoseTarget?.(dqArray, allQ) === true;
+                }
+                if (success && typeof refreshJointControlDisplay === 'function') refreshJointControlDisplay();
+            } else if (!dualArmMode) {
                 success = vis.updateSingleArmJointsWithLBFGS?.(dqArray) === true;
             } else if (robotChoice === 'robot1') {
                 success = vis.updateRobot1JointsWithLBFGS?.(dqArray) === true;
@@ -4732,9 +5212,9 @@ function setupInverseKinematicsControls() {
                 updateDualArmJointSlidersFromAngles();
             }
             const label = robotChoice === 'robot1'
-                ? '机器人1'
+                ? (humanoidMode ? '左臂' : '机器人1')
                 : robotChoice === 'robot2'
-                    ? '机器人2'
+                    ? (humanoidMode ? '右臂' : '机器人2')
                     : robotChoice === 'absolute'
                         ? '绝对位姿（保持相对不变）'
                         : robotChoice === 'relative'
@@ -5458,6 +5938,80 @@ function updateROS2StatusDisplay(status) {
 }
 
 /**
+ * 切换到人形UI显示（左臂/右臂位姿与相对/绝对控制）
+ */
+function switchToHumanoidUI() {
+    // 与双臂共用：显示双臂位姿面板（左臂=robot1，右臂=robot2）
+    const singleArmPose = document.querySelector('.single-arm-pose');
+    if (singleArmPose) singleArmPose.style.display = 'none';
+    const dualArmPose = document.getElementById('dual-arm-pose-tab');
+    if (dualArmPose) {
+        dualArmPose.style.display = 'block';
+        dualArmPose.classList.add('active');
+    }
+    const dualArmControlMode = document.getElementById('dual-arm-control-mode');
+    if (dualArmControlMode) dualArmControlMode.style.display = 'block';
+    const modeLabel = document.getElementById('dual-arm-mode-label');
+    if (modeLabel) modeLabel.textContent = '人形：左臂/右臂位姿与相对/绝对/距离控制';
+    // 位姿面板标签：左臂/右臂
+    const r1Pos = document.getElementById('dual-arm-robot1-pos-label');
+    const r1Quat = document.getElementById('dual-arm-robot1-quat-label');
+    const r1Dq = document.getElementById('dual-arm-robot1-dq-label');
+    const r2Pos = document.getElementById('dual-arm-robot2-pos-label');
+    const r2Quat = document.getElementById('dual-arm-robot2-quat-label');
+    const r2Dq = document.getElementById('dual-arm-robot2-dq-label');
+    if (r1Pos) r1Pos.textContent = '左臂位置 (m)';
+    if (r1Quat) r1Quat.textContent = '左臂四元数';
+    if (r1Dq) r1Dq.textContent = '左臂 DQ';
+    if (r2Pos) r2Pos.textContent = '右臂位置 (m)';
+    if (r2Quat) r2Quat.textContent = '右臂四元数';
+    if (r2Dq) r2Dq.textContent = '右臂 DQ';
+    // 控制模式下拉：robot1/robot2 显示为 左臂/右臂，并更新模式说明
+    const controlModeSelect = document.getElementById('dual-arm-control-mode-select');
+    const teachPendantControls = document.getElementById('teach-pendant-controls');
+    const distanceControls = document.getElementById('dual-arm-distance-controls');
+    if (controlModeSelect) {
+        Array.from(controlModeSelect.options).forEach(opt => {
+            if (opt.value === 'robot1') opt.textContent = '左臂';
+            else if (opt.value === 'robot2') opt.textContent = '右臂';
+        });
+        const modeLabelEl = document.getElementById('dual-arm-mode-label');
+        const updateHumanoidModeLabel = () => {
+            const mode = controlModeSelect.value;
+            if (typeof window !== 'undefined') {
+                window.currentDualArmControlMode = mode;
+            }
+            // 控制按钮显示：相对距离模式只显示 d-/d+
+            if (teachPendantControls && distanceControls) {
+                if (mode === 'distance' || mode === 'distance-fullbody') {
+                    teachPendantControls.style.display = 'none';
+                    distanceControls.style.display = 'grid';
+                } else {
+                    teachPendantControls.style.display = 'grid';
+                    distanceControls.style.display = 'none';
+                }
+            }
+            if (!modeLabelEl) return;
+            if (mode === 'robot1') modeLabelEl.textContent = '左臂模式：控制左臂末端';
+            else if (mode === 'robot2') modeLabelEl.textContent = '右臂模式：控制右臂末端';
+            else if (mode === 'relative') modeLabelEl.textContent = '相对位姿模式：控制相对位姿，保持绝对位姿不变';
+            else if (mode === 'distance') modeLabelEl.textContent = '相对距离模式：控制两末端距离，保持绝对位姿与相对姿态不变';
+            else if (mode === 'distance-fullbody') modeLabelEl.textContent = '全身相对距离：腰部+双臂联动，控制两末端距离，保持绝对位姿与相对姿态不变';
+            else if (mode === 'decoupled') modeLabelEl.textContent = '全身绝对位姿：腰部+双臂联动，控制绝对位姿，保持相对位姿不变';
+            else if (mode === 'relative-fullbody') modeLabelEl.textContent = '全身相对位姿：腰部+双臂联动，控制相对位姿，保持绝对位姿不变';
+            else modeLabelEl.textContent = '绝对位姿模式：控制绝对位姿，保持相对位姿不变';
+        };
+        controlModeSelect.removeEventListener('change', window._humanoidModeLabelHandler);
+        window._humanoidModeLabelHandler = updateHumanoidModeLabel;
+        controlModeSelect.addEventListener('change', updateHumanoidModeLabel);
+        updateHumanoidModeLabel();
+    }
+    updateIKRobotSelection();
+    updateDQCalculatorRobotSelection();
+    updateRobotPose();
+}
+
+/**
  * 切换到双臂UI显示
  */
 function switchToDualArmUI() {
@@ -5480,6 +6034,12 @@ function switchToDualArmUI() {
         dualArmControlMode.style.display = 'block';
     }
     
+    // 移除人形模式时绑定的标签更新（若有）
+    const controlModeSelectForDual = document.getElementById('dual-arm-control-mode-select');
+    if (controlModeSelectForDual && window._humanoidModeLabelHandler) {
+        controlModeSelectForDual.removeEventListener('change', window._humanoidModeLabelHandler);
+        window._humanoidModeLabelHandler = null;
+    }
     // 设置控制模式选择器的事件监听器
     const controlModeSelect = document.getElementById('dual-arm-control-mode-select');
     const modeLabel = document.getElementById('dual-arm-mode-label');
@@ -5511,8 +6071,14 @@ function switchToDualArmUI() {
                 case 'relative':
                     modeLabel.textContent = '相对位姿模式：控制相对位姿，保持绝对位姿不变';
                     break;
+                case 'relative-fullbody':
+                    modeLabel.textContent = '全身相对位姿：腰部+双臂联动，控制相对位姿，保持绝对位姿不变';
+                    break;
                 case 'distance':
                     modeLabel.textContent = '相对距离模式：控制两末端距离，保持绝对位姿与相对姿态不变';
+                    break;
+                case 'decoupled':
+                    modeLabel.textContent = '全身绝对位姿：腰部+双臂联动，控制绝对位姿，保持相对位姿不变';
                     break;
                 case 'absolute':
                 default:
@@ -5525,6 +6091,26 @@ function switchToDualArmUI() {
         controlModeSelect.addEventListener('change', updateModeLabel);
     }
     
+    // 双臂位姿面板标签：机器人1/机器人2
+    const r1Pos = document.getElementById('dual-arm-robot1-pos-label');
+    const r1Quat = document.getElementById('dual-arm-robot1-quat-label');
+    const r1Dq = document.getElementById('dual-arm-robot1-dq-label');
+    const r2Pos = document.getElementById('dual-arm-robot2-pos-label');
+    const r2Quat = document.getElementById('dual-arm-robot2-quat-label');
+    const r2Dq = document.getElementById('dual-arm-robot2-dq-label');
+    if (r1Pos) r1Pos.textContent = '机器人1位置 (m)';
+    if (r1Quat) r1Quat.textContent = '机器人1四元数';
+    if (r1Dq) r1Dq.textContent = '机器人1 DQ';
+    if (r2Pos) r2Pos.textContent = '机器人2位置 (m)';
+    if (r2Quat) r2Quat.textContent = '机器人2四元数';
+    if (r2Dq) r2Dq.textContent = '机器人2 DQ';
+    const controlModeSelectDual = document.getElementById('dual-arm-control-mode-select');
+    if (controlModeSelectDual) {
+        Array.from(controlModeSelectDual.options).forEach(opt => {
+            if (opt.value === 'robot1') opt.textContent = '机器人1';
+            else if (opt.value === 'robot2') opt.textContent = '机器人2';
+        });
+    }
     // 更新标签页，确保显示正确的标签内容
     if (dualArmPose && document.querySelector('[data-tab="pose"]')) {
         switchTab('pose');

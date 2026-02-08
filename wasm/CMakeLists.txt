@@ -33,6 +33,8 @@ if(EMSCRIPTEN)
         ${DQROBOTICS_DIR}/src/robot_modeling/DQ_SerialManipulator.cpp
         ${DQROBOTICS_DIR}/src/robot_modeling/DQ_SerialManipulatorDH.cpp
         ${DQROBOTICS_DIR}/src/robot_modeling/DQ_SerialManipulatorMDH.cpp
+        ${DQROBOTICS_DIR}/src/robot_modeling/DQ_SerialManipulatorURDF.cpp
+        ${DQROBOTICS_DIR}/src/robot_modeling/DQ_HumanoidURDF.cpp
         ${DQROBOTICS_DIR}/src/robot_modeling/DQ_CooperativeDualTaskSpace.cpp
         ${DQROBOTICS_DIR}/src/robots/FrankaEmikaPandaRobot.cpp
         ${DQROBOTICS_DIR}/src/robots/KukaLw4Robot.cpp

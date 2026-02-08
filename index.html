@@ -118,14 +118,27 @@
                                 <label style="font-size: 0.85rem; color: #cbd5e1; display: block; margin-bottom: 0.25rem;">控制模式：</label>
                                 <select id="dual-arm-control-mode-select" style="width: 100%; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;">
                                     <option value="absolute">绝对位姿</option>
+                                    <option value="decoupled">全身绝对位姿</option>
                                     <option value="relative">相对位姿</option>
+                                    <option value="relative-fullbody">全身相对位姿</option>
                                     <option value="distance">相对距离</option>
+                                    <option value="distance-fullbody">全身相对距离</option>
                                     <option value="robot1">机器人1</option>
                                     <option value="robot2">机器人2</option>
                                 </select>
                             </div>
                             <div style="font-size: 0.75rem; color: #94a3b8; margin-top: 0.25rem;">
                                 <span id="dual-arm-mode-label">绝对位姿模式：控制绝对位姿，保持相对位姿不变</span>
+                            </div>
+                            <div style="margin-top: 0.5rem;">
+                                <label class="toggle-switch" style="font-size: 0.85rem;">
+                                    <input type="checkbox" id="joint-limit-avoidance-toggle" checked>
+                                    <span class="toggle-slider"></span>
+                                    <span class="toggle-label">关节限位避免</span>
+                                </label>
+                                <div style="font-size: 0.7rem; color: #64748b; margin-top: 0.2rem;">
+                                    在零空间中优化，避免关节到达极限
+                                </div>
                             </div>
                         </div>
                         <div style="margin-bottom: 0.75rem;">
@@ -265,7 +278,7 @@
                             <!-- 机器人1位姿 -->
                             <div class="info-grid">
                                 <div class="info-item">
-                                    <label style="color: #3b82f6;">机器人1位置 (m)</label>
+                                    <label id="dual-arm-robot1-pos-label" style="color: #3b82f6;">机器人1位置 (m)</label>
                                     <div class="value-display">
                                         <span>X: <code id="robot1-pos-x">0.000</code></span>
                                         <span>Y: <code id="robot1-pos-y">0.000</code></span>
@@ -273,7 +286,7 @@
                                     </div>
                                 </div>
                                 <div class="info-item">
-                                    <label style="color: #3b82f6;">机器人1四元数</label>
+                                    <label id="dual-arm-robot1-quat-label" style="color: #3b82f6;">机器人1四元数</label>
                                     <div class="value-display">
                                         <span>W: <code id="robot1-quat-w">1.000</code></span>
                                         <span>X: <code id="robot1-quat-x">0.000</code></span>
@@ -282,7 +295,7 @@
                                     </div>
                                 </div>
                                 <div class="info-item">
-                                    <label style="color: #3b82f6;">机器人1 DQ</label>
+                                    <label id="dual-arm-robot1-dq-label" style="color: #3b82f6;">机器人1 DQ</label>
                                     <div class="dq-display-small" id="robot1-dq">
                                         <div>实部: <code id="robot1-dq-primary">0 0 0 0</code></div>
                                         <div>对偶: <code id="robot1-dq-dual">0 0 0 0</code></div>
@@ -293,7 +306,7 @@
                             <!-- 机器人2位姿 -->
                             <div class="info-grid">
                                 <div class="info-item">
-                                    <label style="color: #10b981;">机器人2位置 (m)</label>
+                                    <label id="dual-arm-robot2-pos-label" style="color: #10b981;">机器人2位置 (m)</label>
                                     <div class="value-display">
                                         <span>X: <code id="robot2-pos-x">0.000</code></span>
                                         <span>Y: <code id="robot2-pos-y">0.000</code></span>
@@ -301,7 +314,7 @@
                                     </div>
                                 </div>
                                 <div class="info-item">
-                                    <label style="color: #10b981;">机器人2四元数</label>
+                                    <label id="dual-arm-robot2-quat-label" style="color: #10b981;">机器人2四元数</label>
                                     <div class="value-display">
                                         <span>W: <code id="robot2-quat-w">1.000</code></span>
                                         <span>X: <code id="robot2-quat-x">0.000</code></span>
@@ -310,7 +323,7 @@
                                     </div>
                                 </div>
                                 <div class="info-item">
-                                    <label style="color: #10b981;">机器人2 DQ</label>
+                                    <label id="dual-arm-robot2-dq-label" style="color: #10b981;">机器人2 DQ</label>
                                     <div class="dq-display-small" id="robot2-dq">
                                         <div>实部: <code id="robot2-dq-primary">0 0 0 0</code></div>
                                         <div>对偶: <code id="robot2-dq-dual">0 0 0 0</code></div>

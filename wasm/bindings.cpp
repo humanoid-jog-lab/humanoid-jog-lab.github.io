@@ -11,6 +11,9 @@
 #include <dqrobotics/robot_modeling/DQ_Kinematics.h>
 #include <dqrobotics/robot_modeling/DQ_SerialManipulatorDH.h>
 #include <dqrobotics/robot_modeling/DQ_SerialManipulatorMDH.h>
+#include <dqrobotics/robot_modeling/DQ_SerialManipulatorURDF.h>
+#include <dqrobotics/robot_modeling/DQ_HumanoidURDF.h>
+#include <dqrobotics/robot_modeling/DQ_JointType.h>
 #include <dqrobotics/robot_modeling/DQ_CooperativeDualTaskSpace.h>
 #include <dqrobotics/robots/FrankaEmikaPandaRobot.h>
 #include <dqrobotics/robots/KukaLw4Robot.h>
@@ -340,6 +343,198 @@ public:
         DQ t = 1 + E_ * 0.5 * DQ(0, tx, ty, tz);
         DQ eff = r * t; // 先旋转再平移（工具坐标）
         robot.set_effector(eff);
+    }
+};
+
+// URDF 串联机械臂包装器：从 JS 传入的关节链创建 (joint_type, axis, origin 每关节)
+// chain_js: 数组，每项为 { joint_type: 0|1, axis: [x,y,z], origin: [q0..q7] }
+static std::vector<URDFJointData> extractURDFChain(const val& chain_js) {
+    int n = chain_js["length"].as<int>();
+    if (n <= 0)
+        throw std::runtime_error("URDF chain array cannot be empty");
+    std::vector<URDFJointData> chain;
+    chain.reserve(static_cast<size_t>(n));
+    for (int i = 0; i < n; i++) {
+        val joint_js = chain_js[i];
+        int jtype = joint_js["joint_type"].as<int>();
+        if (jtype != 0 && jtype != 1)
+            throw std::runtime_error("joint_type must be 0 (REVOLUTE) or 1 (PRISMATIC)");
+        URDFJointData j;
+        j.joint_type = DQ_JointType(jtype);
+        val axis_js = joint_js["axis"];
+        if (axis_js["length"].as<int>() != 3)
+            throw std::runtime_error("axis must be [x, y, z]");
+        j.axis(0) = axis_js[0].as<double>();
+        j.axis(1) = axis_js[1].as<double>();
+        j.axis(2) = axis_js[2].as<double>();
+        val origin_js = joint_js["origin"];
+        if (origin_js["length"].as<int>() != 8)
+            throw std::runtime_error("origin must be DQ array of 8 elements");
+        j.origin = DQ(jsArrayToVectorXd(origin_js));
+        chain.push_back(j);
+    }
+    return chain;
+}
+
+class SerialManipulatorURDF_Wrapper {
+private:
+    DQ_SerialManipulatorURDF robot;
+
+public:
+    SerialManipulatorURDF_Wrapper(const val& chain_js)
+        : robot(extractURDFChain(chain_js)) {
+    }
+
+    val fkm(const val& joint_angles_js) {
+        VectorXd joint_angles = jsArrayToVectorXd(joint_angles_js);
+        DQ pose = robot.fkm(joint_angles);
+        return vectorXdToJsArray(pose.q);
+    }
+
+    val pose_jacobian(const val& joint_angles_js) {
+        VectorXd joint_angles = jsArrayToVectorXd(joint_angles_js);
+        MatrixXd J = robot.pose_jacobian(joint_angles);
+        return matrixXdToJsArray(J);
+    }
+
+    int get_dim_configuration_space() const {
+        return robot.get_dim_configuration_space();
+    }
+
+    void set_base_frame(double x, double y, double z) {
+        DQ base = 1 + E_ * 0.5 * DQ(0, x, y, z);
+        base = base.normalize();
+        robot.set_base_frame(base);
+        robot.set_reference_frame(base);
+    }
+
+    void set_base_frame_pose(double qw, double qx, double qy, double qz,
+                             double tx, double ty, double tz) {
+        double q_norm = std::sqrt(qw*qw + qx*qx + qy*qy + qz*qz);
+        if (q_norm > 1e-10) {
+            qw /= q_norm; qx /= q_norm; qy /= q_norm; qz /= q_norm;
+        }
+        double dual_w = -0.5 * (tx*qx + ty*qy + tz*qz);
+        double dual_x = 0.5 * (qw*tx + ty*qz - tz*qy);
+        double dual_y = 0.5 * (qw*ty + tz*qx - tx*qz);
+        double dual_z = 0.5 * (qw*tz + tx*qy - ty*qx);
+        DQ base(qw, qx, qy, qz, dual_w, dual_x, dual_y, dual_z);
+        robot.set_base_frame(base);
+        robot.set_reference_frame(base);
+    }
+
+    void set_base_frame_dq(const val& dq_array) {
+        VectorXd dq_vec = jsArrayToVectorXd(dq_array);
+        if (dq_vec.size() != 8)
+            throw std::runtime_error("双四元数必须是8元素数组");
+        DQ base(dq_vec);
+        base = base.normalize();
+        robot.set_base_frame(base);
+        robot.set_reference_frame(base);
+    }
+
+    void set_effector(double x, double y, double z) {
+        DQ eff = 1 + E_ * 0.5 * DQ(0, x, y, z);
+        robot.set_effector(eff);
+    }
+
+    void set_effector_pose(double qw, double qx, double qy, double qz,
+                          double tx, double ty, double tz) {
+        DQ r(qw, qx, qy, qz);
+        DQ t = 1 + E_ * 0.5 * DQ(0, tx, ty, tz);
+        DQ eff = r * t;
+        robot.set_effector(eff);
+    }
+};
+
+// 人形 URDF 包装器：底盘 + 腰 + 左臂 + 右臂 + 头；链由 JS 从 URDF 解析后传入
+class HumanoidURDF_Wrapper {
+private:
+    DQ_HumanoidURDF robot;
+
+    static DQ extractDQOrIdentity(const val& dq_js) {
+        if (dq_js.isUndefined() || dq_js.isNull()) return DQ(1);
+        return DQ(jsArrayToVectorXd(dq_js));
+    }
+
+public:
+    // base_frame_dq: 8 元素；waist/left/right/head_chain_js: 每链为 { joint_type, axis, origin } 数组
+    // effector frames: 可选的 8 元素 DQ 数组，用于末端固定关节的变换
+    HumanoidURDF_Wrapper(const val& base_frame_dq,
+                         const val& waist_chain_js,
+                         const val& left_arm_chain_js,
+                         const val& right_arm_chain_js,
+                         const val& head_chain_js,
+                         const val& waist_effector_js,
+                         const val& left_effector_js,
+                         const val& right_effector_js,
+                         const val& head_effector_js)
+        : robot(DQ(jsArrayToVectorXd(base_frame_dq)),
+                extractURDFChain(waist_chain_js),
+                extractURDFChain(left_arm_chain_js),
+                extractURDFChain(right_arm_chain_js),
+                extractURDFChain(head_chain_js),
+                extractDQOrIdentity(waist_effector_js),
+                extractDQOrIdentity(left_effector_js),
+                extractDQOrIdentity(right_effector_js),
+                extractDQOrIdentity(head_effector_js))
+    {}
+
+    val fkm(const val& q_js) {
+        VectorXd q = jsArrayToVectorXd(q_js);
+        DQ pose = robot.fkm(q);
+        return vectorXdToJsArray(pose.q);
+    }
+
+    val fkmEffector(const val& q_js, int effector_index) {
+        VectorXd q = jsArrayToVectorXd(q_js);
+        DQ pose = robot.fkm(q, effector_index);
+        return vectorXdToJsArray(pose.q);
+    }
+
+    val poseJacobian(const val& q_js) {
+        VectorXd q = jsArrayToVectorXd(q_js);
+        MatrixXd J = robot.pose_jacobian(q);
+        return matrixXdToJsArray(J);
+    }
+
+    val poseJacobianEffector(const val& q_js, int effector_index) {
+        VectorXd q = jsArrayToVectorXd(q_js);
+        MatrixXd J = robot.pose_jacobian(q, effector_index);
+        return matrixXdToJsArray(J);
+    }
+
+    int getDimConfigurationSpace() const {
+        return robot.get_dim_configuration_space();
+    }
+
+    void setReferenceFrame(const val& dq_array) {
+        VectorXd dq_vec = jsArrayToVectorXd(dq_array);
+        if (dq_vec.size() != 8)
+            throw std::runtime_error("双四元数必须是8元素数组");
+        robot.set_reference_frame(DQ(dq_vec).normalize());
+    }
+
+    // 双臂协作空间：与 DQ_CooperativeDualTaskSpace 一致的相对/绝对位姿与雅可比
+    val relativePoseDualArm(const val& q_js) {
+        VectorXd q = jsArrayToVectorXd(q_js);
+        DQ dq = robot.relativePoseDualArm(q);
+        return vectorXdToJsArray(dq.q);
+    }
+    val absolutePoseDualArm(const val& q_js) {
+        VectorXd q = jsArrayToVectorXd(q_js);
+        DQ dq = robot.absolutePoseDualArm(q);
+        return vectorXdToJsArray(dq.q);
+    }
+    val relativePoseJacobianDualArm(const val& q_js) {
+        VectorXd q = jsArrayToVectorXd(q_js);
+        MatrixXd J = robot.relativePoseJacobianDualArm(q);
+        return matrixXdToJsArray(J);
+    }
+    val absolutePoseJacobianDualArm(const val& q_js) {
+        VectorXd q = jsArrayToVectorXd(q_js);
+        MatrixXd J = robot.absolutePoseJacobianDualArm(q);
+        return matrixXdToJsArray(J);
     }
 };
 
@@ -691,6 +886,33 @@ EMSCRIPTEN_BINDINGS(dqrobotics_module) {
         .function("setBaseFrameDQ", &SerialManipulator_Wrapper::set_base_frame_dq)
         .function("setEffector", &SerialManipulator_Wrapper::set_effector)
         .function("setEffectorPose", &SerialManipulator_Wrapper::set_effector_pose);
+
+    // URDF 串联机械臂（由 JS 传入关节链：每关节 joint_type, axis, origin）
+    class_<SerialManipulatorURDF_Wrapper>("SerialManipulatorURDF")
+        .constructor<const val&>()
+        .function("fkm", &SerialManipulatorURDF_Wrapper::fkm)
+        .function("poseJacobian", &SerialManipulatorURDF_Wrapper::pose_jacobian)
+        .function("getDimConfigurationSpace", &SerialManipulatorURDF_Wrapper::get_dim_configuration_space)
+        .function("setBaseFrame", &SerialManipulatorURDF_Wrapper::set_base_frame)
+        .function("setBaseFramePose", &SerialManipulatorURDF_Wrapper::set_base_frame_pose)
+        .function("setBaseFrameDQ", &SerialManipulatorURDF_Wrapper::set_base_frame_dq)
+        .function("setEffector", &SerialManipulatorURDF_Wrapper::set_effector)
+        .function("setEffectorPose", &SerialManipulatorURDF_Wrapper::set_effector_pose);
+
+    // 人形 URDF（底盘 + 腰 + 左臂 + 右臂 + 头）；链由 JS 从 URDF 解析后传入
+    // effector_index: 0=腰, 1=左臂, 2=右臂, 3=头
+    class_<HumanoidURDF_Wrapper>("HumanoidURDF")
+        .constructor<const val&, const val&, const val&, const val&, const val&, const val&, const val&, const val&, const val&>()
+        .function("fkm", &HumanoidURDF_Wrapper::fkm)
+        .function("fkmEffector", &HumanoidURDF_Wrapper::fkmEffector)
+        .function("poseJacobian", &HumanoidURDF_Wrapper::poseJacobian)
+        .function("poseJacobianEffector", &HumanoidURDF_Wrapper::poseJacobianEffector)
+        .function("getDimConfigurationSpace", &HumanoidURDF_Wrapper::getDimConfigurationSpace)
+        .function("setReferenceFrame", &HumanoidURDF_Wrapper::setReferenceFrame)
+        .function("relativePoseDualArm", &HumanoidURDF_Wrapper::relativePoseDualArm)
+        .function("absolutePoseDualArm", &HumanoidURDF_Wrapper::absolutePoseDualArm)
+        .function("relativePoseJacobianDualArm", &HumanoidURDF_Wrapper::relativePoseJacobianDualArm)
+        .function("absolutePoseJacobianDualArm", &HumanoidURDF_Wrapper::absolutePoseJacobianDualArm);
     
     // Franka Panda 机器人
     class_<FrankaPanda_Wrapper>("FrankaPanda")
