@@ -1,0 +1,32 @@
+name: CPP Build Windows
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        testbranches: ['release','master']
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Install prerequisites
+        run: .github\scripts\windows\install_prerequisites.ps1
+          
+      - name: Build
+        run: .github\scripts\windows\build.ps1
+          
+      - name: Install
+        run: .github\scripts\windows\install.ps1
+          
+      - name: Download examples ((${{ matrix.testbranches }}))
+        run: git clone -b ${{ matrix.testbranches }} https://github.com/dqrobotics/cpp-examples.git
+          
+      - name: Build pure examples
+        run: |
+          cd cpp-examples
+          .\build_pure.ps1
