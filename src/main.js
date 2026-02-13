@@ -2,7 +2,7 @@
  * DQ Robotics 可视化实验室主程序
  */
 
-import { initDQRobotics, FrankaPanda, KukaLw4, DQ, SerialManipulator, CooperativeDualArm, HumanoidDualArmAdapter, quaternionToRotationMatrix, rotationMatrixToEuler, getDQModule } from './dqrobotics.js';
+import { initDQRobotics, FrankaPanda, KukaLw4, DQ, SerialManipulator, DifferentialDriveRobot, CooperativeDualArm, HumanoidDualArmAdapter, quaternionToRotationMatrix, rotationMatrixToEuler, getDQModule } from './dqrobotics.js';
 import * as THREE from 'three';
 import { RobotVisualizer } from './visualizer.js';
 import { extractMDHFromURDF, createMDHTestSuite, FRANKA_PANDA_MDH_REFERENCE, formatMDHForDQ, loadHumanoidChainsFromURDF } from './urdf-to-mdh.js';
@@ -52,6 +52,64 @@ let humanoidMode = false;
 let humanoidModel = null;  // WASM HumanoidURDF
 let humanoidQ = [];        // 全关节角 [腰, 左臂, 右臂, 头]
 let humanoidJointNames = [];  // 关节名顺序（用于设置 URDF 关节）
+let humanoidBasePose = { x: 0, y: 0, yaw: 0 }; // 底盘位姿 [m, m, rad]
+let humanoidBaseTargetPose = { x: 0, y: 0, yaw: 0 }; // 底盘目标位姿 [m, m, rad]
+let humanoidBaseWheelVelocity = { left: 0, right: 0 }; // 左右轮角速度 [rad/s]
+let humanoidBaseControlTimer = null;
+let humanoidBaseControlLastTs = 0;
+let humanoidBaseConvergedCount = 0;
+let humanoidBaseReverseDrive = false; // 倒车模式（带滞回），避免前后切换导致原地绕圈
+let humanoidDiffDriveModel = null;
+let humanoidBaseControlParams = {
+    wheelRadius: 0.10,      // 轮半径 r（默认兜底；优先读取 robot_config.yaml 的 mobile_base.wheel_radius）
+    wheelDistance: 0.425,   // 轮距 l（默认兜底；优先读取 robot_config.yaml 的 mobile_base.distance_between_wheels）
+    kRho: 1.2,              // 距离误差增益
+    kAlpha: 3.2,            // 朝向目标点增益
+    kBeta: -0.9,            // 目标姿态修正增益（需为负）
+    kYawFinal: 3.0,         // 到点后仅调航向的增益
+    maxLinear: 0.8,         // 线速度上限 [m/s]
+    maxAngular: 2.0,        // 角速度上限 [rad/s]
+    maxWheelSpeed: 18.0,    // 轮角速度上限 [rad/s]
+    minWheelSpeed: 0.35,    // 低速死区补偿 [rad/s]
+    tolPos: 0.03,           // GoalChecker xy_goal_tolerance [m]（nav2 默认 0.25m，差速车常用 0.03~0.05m）
+    tolYaw: 0.05,           // GoalChecker yaw_goal_tolerance [rad]（nav2 默认 0.25rad，差速车常用 0.05~0.1rad）
+    settleCycles: 8         // 连续满足阈值的周期数
+};
+
+// Regulated Pure Pursuit 路径跟踪
+let humanoidBaseControlMode = 'point'; // 'point' (点稳定) | 'path' (路径跟踪)
+let humanoidBasePath = []; // [{x, y, yaw?}...] 路径航点（世界坐标）
+let humanoidBaseRPPParams = {
+    lookahead_dist: 0.4,               // 静态前视距离 [m]
+    use_velocity_scaled_lookahead: true, // 是否使用速度自适应前视距离
+    lookahead_time: 1.5,               // 前视时间 [s]（v * t = lookahead）
+    min_lookahead_dist: 0.3,           // 最小前视距离 [m]
+    max_lookahead_dist: 0.9,           // 最大前视距离 [m]
+    max_linear_vel: 0.5,               // 最大线速度 [m/s]
+    min_linear_vel: 0.05,              // 最小线速度 [m/s]
+    max_angular_vel: 1.8,              // 最大角速度 [rad/s]
+    max_angular_accel: 3.2,            // 最大角加速度 [rad/s²]
+    use_regulated_linear_velocity_scaling: true, // 曲率限速
+    regulated_linear_scaling_min_radius: 0.9,    // 最小转弯半径 [m]
+    regulated_linear_scaling_min_speed: 0.25,    // 限速后最低速度 [m/s]
+    use_rotate_to_heading: true,        // 角度过大时原地转向
+    rotate_to_heading_min_angle: 0.785, // 触发原地转向的最小角度 [rad]（≈45°）
+    rotate_to_heading_angular_vel: 1.8, // 原地转向角速度 [rad/s]
+    goal_dist_tol: 0.10,               // 到达目标的距离容差 [m]
+    approach_velocity_scaling_dist: 0.6, // 接近目标时开始减速的距离 [m]
+    min_approach_linear_velocity: 0.05,  // 减速时最低线速度 [m/s]
+    allow_reversing: false,             // 是否允许倒车
+};
+let humanoidBaseRPPState = {
+    isRotatingToHeading: false,
+    hasReachedGoalXY: false,
+    lastCmdLinear: 0,
+    lastCmdAngular: 0,
+    isFinished: false,
+    isRunning: false,     // 是否正在执行路径跟踪（需手动点"运行"启动）
+    carrotWorld: null,    // 前视点世界坐标（用于可视化）
+    progressSegIdx: 0,    // 路径进度（单调递增的线段索引，防止跳回）
+};
 
 // 环境物体
 let environmentObjects = [];
@@ -125,6 +183,698 @@ function formatDisplayAngle(angleRad, digits = getInputPrecision()) {
 
 function getActiveJointConfig() {
     return customRobotConfig || frankaConfigCache;
+}
+
+function quaternionToYaw(qw, qx, qy, qz) {
+    // ZYX 欧拉角中的 yaw
+    const siny = 2 * (qw * qz + qx * qy);
+    const cosy = 1 - 2 * (qy * qy + qz * qz);
+    return Math.atan2(siny, cosy);
+}
+
+function wrapAngle(angle) {
+    let a = angle;
+    while (a > Math.PI) a -= 2 * Math.PI;
+    while (a < -Math.PI) a += 2 * Math.PI;
+    return a;
+}
+
+function clampValue(value, minValue, maxValue) {
+    return Math.max(minValue, Math.min(maxValue, value));
+}
+
+function getHumanoidBasePoseFromConfig(config) {
+    const pose = { x: 0, y: 0, yaw: 0 };
+    const mobileInitialQ = config?.mobile_base?.initial_q;
+    if (Array.isArray(mobileInitialQ) && mobileInitialQ.length >= 3) {
+        return {
+            x: Number(mobileInitialQ[0]) || 0,
+            y: Number(mobileInitialQ[1]) || 0,
+            yaw: Number(mobileInitialQ[2]) || 0
+        };
+    }
+
+    const basePose = config?.base_pose || config?.mdh_extraction?.base_pose;
+    if (!Array.isArray(basePose) || basePose.length < 2) {
+        return pose;
+    }
+
+    pose.x = Number(basePose[0]) || 0;
+    pose.y = Number(basePose[1]) || 0;
+
+    if (basePose.length === 7) {
+        const [qw, qx, qy, qz] = basePose;
+        pose.yaw = quaternionToYaw(
+            Number(qw) || 1,
+            Number(qx) || 0,
+            Number(qy) || 0,
+            Number(qz) || 0
+        );
+    } else if (basePose.length === 8) {
+        const dqModule = getDQModule();
+        const DQWrapper = dqModule?.DQWrapper;
+        if (DQWrapper) {
+            try {
+                const dqObj = DQWrapper.normalize(DQWrapper.createFromArray(basePose));
+                const t = DQWrapper.getTranslation(dqObj);
+                const r = DQWrapper.getRotation(dqObj);
+                pose.x = Number(t[1]) || pose.x;
+                pose.y = Number(t[2]) || pose.y;
+                pose.yaw = quaternionToYaw(
+                    Number(r[0]) || 1,
+                    Number(r[1]) || 0,
+                    Number(r[2]) || 0,
+                    Number(r[3]) || 0
+                );
+            } catch (error) {
+                console.warn('解析 humanoid base_pose(DQ) 失败，回退到平移默认值:', error);
+            }
+        }
+    }
+
+    return pose;
+}
+
+function getHumanoidDiffDriveParamsFromConfig(config) {
+    const mobile = config?.mobile_base || {};
+    const params = { ...humanoidBaseControlParams };
+    const readNumber = (v, fallback) => (Number.isFinite(Number(v)) ? Number(v) : fallback);
+
+    params.wheelRadius = readNumber(
+        mobile.wheel_radius ?? mobile.radius ?? mobile.r,
+        params.wheelRadius
+    );
+    params.wheelDistance = readNumber(
+        mobile.distance_between_wheels ?? mobile.wheel_distance ?? mobile.wheel_base ?? mobile.l,
+        params.wheelDistance
+    );
+
+    const ctrl = mobile.controller || {};
+    params.kRho = readNumber(ctrl.k_rho ?? ctrl.k_forward, params.kRho);
+    params.kAlpha = readNumber(ctrl.k_alpha, params.kAlpha);
+    params.kBeta = readNumber(ctrl.k_beta, params.kBeta);
+    params.kYawFinal = readNumber(ctrl.k_yaw_final ?? ctrl.k_yaw, params.kYawFinal);
+    params.maxLinear = readNumber(ctrl.max_linear, params.maxLinear);
+    params.maxAngular = readNumber(ctrl.max_angular, params.maxAngular);
+    params.maxWheelSpeed = readNumber(ctrl.max_wheel_speed, params.maxWheelSpeed);
+    params.minWheelSpeed = readNumber(ctrl.min_wheel_speed, params.minWheelSpeed);
+    params.tolPos = readNumber(ctrl.tol_pos, params.tolPos);
+    params.tolYaw = readNumber(ctrl.tol_yaw, params.tolYaw);
+    params.settleCycles = Math.max(1, Math.floor(readNumber(ctrl.settle_cycles, params.settleCycles)));
+
+    // 如有 rpp 子项，读取 Regulated Pure Pursuit 参数
+    const rpp = mobile.rpp || mobile.regulated_pure_pursuit || ctrl.rpp || {};
+    const rppP = humanoidBaseRPPParams;
+    rppP.lookahead_dist = readNumber(rpp.lookahead_dist, rppP.lookahead_dist);
+    rppP.min_lookahead_dist = readNumber(rpp.min_lookahead_dist, rppP.min_lookahead_dist);
+    rppP.max_lookahead_dist = readNumber(rpp.max_lookahead_dist, rppP.max_lookahead_dist);
+    rppP.lookahead_time = readNumber(rpp.lookahead_time, rppP.lookahead_time);
+    rppP.max_linear_vel = readNumber(rpp.max_linear_vel ?? rpp.max_linear, rppP.max_linear_vel);
+    rppP.min_linear_vel = readNumber(rpp.min_linear_vel ?? rpp.min_linear, rppP.min_linear_vel);
+    rppP.max_angular_vel = readNumber(rpp.max_angular_vel ?? rpp.max_angular, rppP.max_angular_vel);
+    rppP.max_angular_accel = readNumber(rpp.max_angular_accel, rppP.max_angular_accel);
+    rppP.regulated_linear_scaling_min_radius = readNumber(rpp.regulated_linear_scaling_min_radius ?? rpp.min_radius, rppP.regulated_linear_scaling_min_radius);
+    rppP.regulated_linear_scaling_min_speed = readNumber(rpp.regulated_linear_scaling_min_speed ?? rpp.min_speed, rppP.regulated_linear_scaling_min_speed);
+    rppP.rotate_to_heading_min_angle = readNumber(rpp.rotate_to_heading_min_angle, rppP.rotate_to_heading_min_angle);
+    rppP.rotate_to_heading_angular_vel = readNumber(rpp.rotate_to_heading_angular_vel, rppP.rotate_to_heading_angular_vel);
+    rppP.goal_dist_tol = readNumber(rpp.goal_dist_tol ?? rpp.goal_tolerance, rppP.goal_dist_tol);
+    rppP.approach_velocity_scaling_dist = readNumber(rpp.approach_velocity_scaling_dist, rppP.approach_velocity_scaling_dist);
+    rppP.min_approach_linear_velocity = readNumber(rpp.min_approach_linear_velocity, rppP.min_approach_linear_velocity);
+    if (rpp.use_velocity_scaled_lookahead !== undefined) rppP.use_velocity_scaled_lookahead = !!rpp.use_velocity_scaled_lookahead;
+    if (rpp.use_regulated_linear_velocity_scaling !== undefined) rppP.use_regulated_linear_velocity_scaling = !!rpp.use_regulated_linear_velocity_scaling;
+    if (rpp.use_rotate_to_heading !== undefined) rppP.use_rotate_to_heading = !!rpp.use_rotate_to_heading;
+    if (rpp.allow_reversing !== undefined) rppP.allow_reversing = !!rpp.allow_reversing;
+
+    return params;
+}
+
+function computeHumanoidDiffDriveControl() {
+    // rho-alpha-beta controller (nav2-style two-phase architecture)
+    //
+    // Phase A: posErr >= tolPos -> full rho-alpha-beta drive to target
+    // Phase B: posErr <  tolPos -> stop linear, rotateToHeading only
+    //          (nav2 RPP: shouldRotateToGoalHeading -> rotateToHeading,
+    //           linear_vel = 0, only rotate_to_heading_angular_vel)
+    // GoalChecker: posErr < tolPos && |eYaw| < tolYaw -> fully stopped
+    //
+    const p = humanoidBaseControlParams;
+    const dx = (humanoidBaseTargetPose.x || 0) - (humanoidBasePose.x || 0);
+    const dy = (humanoidBaseTargetPose.y || 0) - (humanoidBasePose.y || 0);
+    const theta = humanoidBasePose.yaw || 0;
+    const thetaTarget = humanoidBaseTargetPose.yaw || 0;
+    const posErr = Math.hypot(dx, dy);
+    const eYaw = wrapAngle(thetaTarget - theta);
+
+    let v = 0;
+    let omega = 0;
+    let goalReached = false;
+
+    if (posErr < p.tolPos) {
+        // ── Phase B: Rotate to Heading (nav2 RPP shouldRotateToGoalHeading) ──
+        // Position within xy_goal_tolerance; stop linear, fix heading only.
+        humanoidBaseReverseDrive = false;
+        v = 0;
+
+        if (Math.abs(eYaw) < p.tolYaw) {
+            // GoalChecker: both position + heading met -> fully stopped
+            omega = 0;
+            goalReached = true;
+        } else {
+            // rotateToHeading (nav2 RPP rotateToHeading)
+            omega = p.kYawFinal * eYaw;
+            omega = clampValue(omega, -p.maxAngular, p.maxAngular);
+        }
+    } else {
+        // ── Phase A: Full rho-alpha-beta drive ──
+        const headingToTarget = Math.atan2(dy, dx);
+        const alphaForward = wrapAngle(headingToTarget - theta);
+        const alphaReverse = wrapAngle(alphaForward - Math.PI);
+
+        // Reverse mode with hysteresis
+        const reverseEnter = 100 * DEG_TO_RAD;
+        const reverseExit = 70 * DEG_TO_RAD;
+        if (humanoidBaseReverseDrive) {
+            if (Math.abs(alphaReverse) < reverseExit) {
+                // keep reverse
+            } else {
+                humanoidBaseReverseDrive = false;
+            }
+        } else if (Math.abs(alphaForward) > reverseEnter) {
+            humanoidBaseReverseDrive = true;
+        }
+
+        const alpha = humanoidBaseReverseDrive ? alphaReverse : alphaForward;
+        const rhoSigned = humanoidBaseReverseDrive ? -posErr : posErr;
+        const beta = wrapAngle(thetaTarget - theta - alpha);
+
+        // Gradually blend in beta near goal to avoid target yaw pulling robot off course
+        const yawBlendDist = Math.max(0.15, 5 * p.tolPos);
+        const yawBlend = clampValue((yawBlendDist - posErr) / yawBlendDist, 0, 1);
+
+        v = p.kRho * rhoSigned;
+        omega = p.kAlpha * alpha + yawBlend * p.kBeta * beta;
+
+        v = clampValue(v, -p.maxLinear, p.maxLinear);
+        omega = clampValue(omega, -p.maxAngular, p.maxAngular);
+    }
+
+    // Inverse kinematics: [wr, wl]
+    let wr = (v / p.wheelRadius) + (p.wheelDistance / (2 * p.wheelRadius)) * omega;
+    let wl = (v / p.wheelRadius) - (p.wheelDistance / (2 * p.wheelRadius)) * omega;
+    wr = clampValue(wr, -p.maxWheelSpeed, p.maxWheelSpeed);
+    wl = clampValue(wl, -p.maxWheelSpeed, p.maxWheelSpeed);
+
+    return { wr, wl, converged: goalReached, posErr, eYaw };
+}
+
+// ──────────────────────────────────────────────────────────────
+// Regulated Pure Pursuit Controller（路径跟踪）
+// 参考 nav2_regulated_pure_pursuit_controller
+// ──────────────────────────────────────────────────────────────
+
+/**
+ * 将世界坐标路径变换到机器人坐标系
+ */
+function rppTransformPathToRobotFrame(path, robotPose) {
+    const cx = robotPose.x || 0;
+    const cy = robotPose.y || 0;
+    const theta = robotPose.yaw || 0;
+    const cosT = Math.cos(-theta);
+    const sinT = Math.sin(-theta);
+    return path.map(p => {
+        const dx = p.x - cx;
+        const dy = p.y - cy;
+        return {
+            x: cosT * dx - sinT * dy,
+            y: sinT * dx + cosT * dy,
+            yaw: p.yaw !== undefined ? wrapAngle(p.yaw - theta) : undefined
+        };
+    });
+}
+
+/**
+ * 在路径线段上找到离原点（机器人）最近的投影点。
+ * 从 startSegIdx 开始向前搜索，保证进度单调递增不回退。
+ * 返回 { segIdx, t, projX, projY, distSq }
+ *   segIdx: 投影所在线段起点索引
+ *   t: 线段参数 [0,1]
+ *   projX/projY: 投影点坐标（机器人坐标系）
+ */
+function rppFindClosestProjection(pathLocal, startSegIdx = 0) {
+    let bestDistSq = Infinity;
+    let bestSeg = Math.max(0, startSegIdx);
+    let bestT = 0;
+    let bestPX = 0, bestPY = 0;
+
+    // 从 startSegIdx 开始搜索，允许往后看 1 段防止边界毛刺
+    const searchFrom = Math.max(0, startSegIdx - 1);
+    for (let i = searchFrom; i < pathLocal.length - 1; i++) {
+        const ax = pathLocal[i].x, ay = pathLocal[i].y;
+        const bx = pathLocal[i + 1].x, by = pathLocal[i + 1].y;
+        const dx = bx - ax, dy = by - ay;
+        const lenSq = dx * dx + dy * dy;
+
+        // 投影参数 t = -dot(A, AB) / |AB|²，clamp 到 [0,1]
+        let t = 0;
+        if (lenSq > 1e-12) {
+            t = -(ax * dx + ay * dy) / lenSq;
+            t = Math.max(0, Math.min(1, t));
+        }
+
+        const px = ax + t * dx;
+        const py = ay + t * dy;
+        const distSq = px * px + py * py;
+
+        if (distSq < bestDistSq) {
+            bestDistSq = distSq;
+            bestSeg = i;
+            bestT = t;
+            bestPX = px;
+            bestPY = py;
+        }
+    }
+
+    // 只允许前进（或原地），绝不后退
+    if (bestSeg < startSegIdx) {
+        bestSeg = startSegIdx;
+    }
+
+    return { segIdx: bestSeg, t: bestT, projX: bestPX, projY: bestPY, distSq: bestDistSq };
+}
+
+/**
+ * 从路径上投影点(segIdx, t)开始，沿路径向终点方向走 lookaheadDist，
+ * 返回插值后的前视点（机器人坐标系）。
+ */
+function rppGetLookAheadFromProjection(lookaheadDist, pathLocal, segIdx, t) {
+    if (pathLocal.length < 2) {
+        const p = pathLocal[pathLocal.length - 1] || { x: 0, y: 0 };
+        return { x: p.x, y: p.y };
+    }
+
+    const p0 = pathLocal[segIdx];
+    const p1 = pathLocal[segIdx + 1];
+
+    // 投影点
+    const projX = p0.x + t * (p1.x - p0.x);
+    const projY = p0.y + t * (p1.y - p0.y);
+
+    // 当前段剩余长度
+    const remainOnSeg = Math.hypot(p1.x - projX, p1.y - projY);
+
+    if (remainOnSeg >= lookaheadDist) {
+        // 前视点在当前段上
+        const ratio = remainOnSeg > 1e-9 ? lookaheadDist / remainOnSeg : 0;
+        return {
+            x: projX + ratio * (p1.x - projX),
+            y: projY + ratio * (p1.y - projY)
+        };
+    }
+
+    let accumulated = remainOnSeg;
+    for (let i = segIdx + 1; i < pathLocal.length - 1; i++) {
+        const a = pathLocal[i];
+        const b = pathLocal[i + 1];
+        const segLen = Math.hypot(b.x - a.x, b.y - a.y);
+        if (accumulated + segLen >= lookaheadDist) {
+            const remaining = lookaheadDist - accumulated;
+            const ratio = segLen > 1e-9 ? remaining / segLen : 0;
+            return {
+                x: a.x + ratio * (b.x - a.x),
+                y: a.y + ratio * (b.y - a.y)
+            };
+        }
+        accumulated += segLen;
+    }
+
+    // 路径不够长，返回最后一个点
+    const last = pathLocal[pathLocal.length - 1];
+    return { x: last.x, y: last.y };
+}
+
+/**
+ * Pure Pursuit 曲率：k = 2y / L² （L = 前视点到机器人的距离）
+ */
+function rppCalculateCurvature(lookaheadPoint) {
+    const L2 = lookaheadPoint.x * lookaheadPoint.x + lookaheadPoint.y * lookaheadPoint.y;
+    if (L2 > 0.001) {
+        return 2.0 * lookaheadPoint.y / L2;
+    }
+    return 0.0;
+}
+
+/**
+ * 曲率约束：转弯半径 < min_radius 时按比例降速
+ */
+function rppCurvatureConstraint(rawVel, curvature, minRadius) {
+    if (Math.abs(curvature) < 1e-6) return rawVel;
+    const radius = Math.abs(1.0 / curvature);
+    if (radius < minRadius) {
+        return rawVel * (1.0 - Math.abs(radius - minRadius) / minRadius);
+    }
+    return rawVel;
+}
+
+/**
+ * 计算路径剩余长度（机器人坐标系）
+ */
+function rppRemainingPathLength(pathLocal) {
+    let len = 0;
+    for (let i = 0; i < pathLocal.length - 1; i++) {
+        len += Math.hypot(
+            pathLocal[i + 1].x - pathLocal[i].x,
+            pathLocal[i + 1].y - pathLocal[i].y
+        );
+    }
+    return len;
+}
+
+/**
+ * 接近目标减速约束
+ */
+function rppApproachVelocityConstraint(constrainedVel, pathLocal, minApproachVel, approachDist) {
+    const remaining = rppRemainingPathLength(pathLocal);
+    if (remaining < approachDist && pathLocal.length > 0) {
+        const last = pathLocal[pathLocal.length - 1];
+        const distToGoal = Math.hypot(last.x, last.y);
+        const scale = approachDist > 1e-6 ? distToGoal / approachDist : 1.0;
+        let approachVel = constrainedVel * scale;
+        if (approachVel < minApproachVel) approachVel = minApproachVel;
+        return Math.min(constrainedVel, approachVel);
+    }
+    return constrainedVel;
+}
+
+/**
+ * 重置 RPP 状态（新路径/清除路径时调用）
+ */
+function resetRPPState() {
+    humanoidBaseRPPState.isRotatingToHeading = false;
+    humanoidBaseRPPState.hasReachedGoalXY = false;
+    humanoidBaseRPPState.lastCmdLinear = 0;
+    humanoidBaseRPPState.lastCmdAngular = 0;
+    humanoidBaseRPPState.isFinished = false;
+    humanoidBaseRPPState.isRunning = false;
+    humanoidBaseRPPState.carrotWorld = null;
+    humanoidBaseRPPState.progressSegIdx = 0;
+}
+
+/**
+ * Regulated Pure Pursuit 主控制函数
+ * 返回 { v, omega, converged, posErr, eYaw }
+ */
+function computeRegulatedPurePursuitControl() {
+    const p = humanoidBaseRPPParams;
+    const state = humanoidBaseRPPState;
+    const bp = humanoidBasePose;
+
+    // 无路径或路径太短
+    if (!humanoidBasePath || humanoidBasePath.length < 2) {
+        state.isFinished = true;
+        state.carrotWorld = null;
+        return { v: 0, omega: 0, converged: true, posErr: 0, eYaw: 0 };
+    }
+
+    // 1. 将完整路径变换到机器人坐标系
+    const pathLocal = rppTransformPathToRobotFrame(humanoidBasePath, bp);
+
+    // 2. 在路径上找机器人的投影（从上一步的进度索引开始，单调递增）
+    const proj = rppFindClosestProjection(pathLocal, state.progressSegIdx);
+    state.progressSegIdx = proj.segIdx; // 只前进不后退
+
+    // 3. 到终点距离 + 坐标变换准备
+    const goalLocal = pathLocal[pathLocal.length - 1];
+    const distToGoal = Math.hypot(goalLocal.x, goalLocal.y);
+    const theta = bp.yaw || 0;
+    const cosT = Math.cos(theta);
+    const sinT = Math.sin(theta);
+
+    // 4. 终点区域判定（参照 nav2 GoalChecker）
+    //    goal_dist_tol (10cm): 进入"到点阶段"，用比例控制平滑驶入
+    //    tolPos (3cm): GoalChecker xy_goal_tolerance，判定收敛停车
+    const finalTolPos = humanoidBaseControlParams.tolPos; // xy_goal_tolerance
+    const finalTolYaw = humanoidBaseControlParams.tolYaw; // yaw_goal_tolerance
+
+    if (distToGoal < finalTolPos) {
+        // ── GoalChecker: 位置已在容差内，检查航向 ──
+        const goalWorld = humanoidBasePath[humanoidBasePath.length - 1];
+        if (goalWorld.yaw !== undefined) {
+            const eYaw = wrapAngle(goalWorld.yaw - (bp.yaw || 0));
+            if (Math.abs(eYaw) > finalTolYaw) {
+                const sign = eYaw > 0 ? 1 : -1;
+                let omega = sign * p.rotate_to_heading_angular_vel;
+                const maxVelToStop = Math.sqrt(2 * p.max_angular_accel * Math.abs(eYaw));
+                if (Math.abs(omega) > maxVelToStop) omega = sign * maxVelToStop;
+                state.carrotWorld = null;
+                return { v: 0, omega, converged: false, posErr: distToGoal, eYaw };
+            }
+        }
+        state.isFinished = true;
+        state.carrotWorld = null;
+        return { v: 0, omega: 0, converged: true, posErr: distToGoal, eYaw: 0 };
+    }
+
+    if (distToGoal < p.goal_dist_tol) {
+        // ── 进入终点区域（< 10cm 但 > 2mm），用比例控制平滑到点 ──
+        if (!state.hasReachedGoalXY) state.hasReachedGoalXY = true;
+
+        // 直接朝终点做简单比例控制（类似点稳定的 kRho）
+        const goalHeading = Math.atan2(goalLocal.y, goalLocal.x);
+        const kFinal = humanoidBaseControlParams.kRho; // 复用点稳定增益
+        let vFinal = kFinal * distToGoal;
+        vFinal = clampValue(vFinal, -p.max_linear_vel, p.max_linear_vel);
+        let omegaFinal = humanoidBaseControlParams.kAlpha * goalHeading;
+        omegaFinal = clampValue(omegaFinal, -p.max_angular_vel, p.max_angular_vel);
+
+        state.lastCmdLinear = vFinal;
+        state.lastCmdAngular = omegaFinal;
+        state.carrotWorld = {
+            x: cosT * goalLocal.x - sinT * goalLocal.y + (bp.x || 0),
+            y: sinT * goalLocal.x + cosT * goalLocal.y + (bp.y || 0)
+        };
+        return { v: vFinal, omega: omegaFinal, converged: false, posErr: distToGoal, eYaw: 0 };
+    }
+
+    // 5. 计算前视距离（速度自适应或静态）
+    let lookaheadDist = p.lookahead_dist;
+    if (p.use_velocity_scaled_lookahead) {
+        lookaheadDist = Math.abs(state.lastCmdLinear) * p.lookahead_time;
+        lookaheadDist = Math.max(p.min_lookahead_dist, Math.min(p.max_lookahead_dist, lookaheadDist));
+    }
+
+    // 6. 从投影点开始沿路径走 lookaheadDist 获取前视点
+    const carrot = rppGetLookAheadFromProjection(lookaheadDist, pathLocal, proj.segIdx, proj.t);
+
+    // 将前视点变换回世界坐标用于可视化
+    state.carrotWorld = {
+        x: cosT * carrot.x - sinT * carrot.y + (bp.x || 0),
+        y: sinT * carrot.x + cosT * carrot.y + (bp.y || 0)
+    };
+
+    // 7. 计算曲率 k = 2y / L²
+    const curvature = rppCalculateCurvature(carrot);
+
+    // 8. 速度方向
+    let xVelSign = 1.0;
+    if (p.allow_reversing) {
+        xVelSign = carrot.x >= 0 ? 1.0 : -1.0;
+    }
+
+    let linearVel, angularVel;
+
+    // 9. 判断是否需要原地转向（前视点角度过大）
+    let angleToHeading = Math.atan2(carrot.y, carrot.x);
+    if (xVelSign < 0) angleToHeading = wrapAngle(angleToHeading + Math.PI);
+
+    if (p.use_rotate_to_heading && Math.abs(angleToHeading) > p.rotate_to_heading_min_angle) {
+        // ── 原地转向 ──
+        state.isRotatingToHeading = true;
+        linearVel = 0;
+        const sign = angleToHeading > 0 ? 1 : -1;
+        angularVel = sign * p.rotate_to_heading_angular_vel;
+
+        // 角加速度约束
+        const dt = 0.02; // 50 Hz
+        const minFeasible = state.lastCmdAngular - p.max_angular_accel * dt;
+        const maxFeasible = state.lastCmdAngular + p.max_angular_accel * dt;
+        angularVel = clampValue(angularVel, minFeasible, maxFeasible);
+
+        // 减速避免超调
+        const maxVelToStop = Math.sqrt(2 * p.max_angular_accel * Math.abs(angleToHeading));
+        if (Math.abs(angularVel) > maxVelToStop) {
+            angularVel = sign * maxVelToStop;
+        }
+    } else {
+        // ── 正常行驶 ──
+        state.isRotatingToHeading = false;
+        linearVel = p.max_linear_vel;
+
+        // 曲率约束
+        if (p.use_regulated_linear_velocity_scaling) {
+            linearVel = rppCurvatureConstraint(
+                linearVel, curvature, p.regulated_linear_scaling_min_radius
+            );
+        }
+
+        // 从投影点开始计算剩余路径，用于接近目标减速
+        // 构建从投影点到终点的子路径
+        const tailPath = [{ x: proj.projX, y: proj.projY }, ...pathLocal.slice(proj.segIdx + 1)];
+        linearVel = rppApproachVelocityConstraint(
+            linearVel, tailPath,
+            p.min_approach_linear_velocity,
+            p.approach_velocity_scaling_dist
+        );
+
+        // 限制范围
+        linearVel = Math.max(p.regulated_linear_scaling_min_speed, Math.min(p.max_linear_vel, Math.abs(linearVel)));
+        linearVel = xVelSign * linearVel;
+
+        // 角速度 = 线速度 × 曲率
+        angularVel = linearVel * curvature;
+    }
+
+    // 角速度限幅
+    angularVel = clampValue(angularVel, -p.max_angular_vel, p.max_angular_vel);
+
+    // 记录本次指令用于下一次迭代
+    state.lastCmdLinear = linearVel;
+    state.lastCmdAngular = angularVel;
+
+    return { v: linearVel, omega: angularVel, converged: false, posErr: distToGoal, eYaw: 0 };
+}
+
+// ──────────────────────────────────────────────────────────────
+
+function integrateHumanoidDiffDrive(dt) {
+    const p = humanoidBaseControlParams;
+    let wr, wl, converged, posErr, eYaw;
+
+    if (humanoidBaseControlMode === 'path') {
+        if (humanoidBasePath.length >= 2 && humanoidBaseRPPState.isRunning) {
+            // ── 路径跟踪模式：RPP 正在运行 ──
+            const rpp = computeRegulatedPurePursuitControl();
+            const v = rpp.v;
+            const omega = rpp.omega;
+            wr = (v / p.wheelRadius) + (p.wheelDistance / (2 * p.wheelRadius)) * omega;
+            wl = (v / p.wheelRadius) - (p.wheelDistance / (2 * p.wheelRadius)) * omega;
+            wr = clampValue(wr, -p.maxWheelSpeed, p.maxWheelSpeed);
+            wl = clampValue(wl, -p.maxWheelSpeed, p.maxWheelSpeed);
+            converged = rpp.converged;
+            posErr = rpp.posErr;
+            eYaw = rpp.eYaw;
+        } else {
+            // ── 路径模式但未运行（编辑航点中 / 已到达）：原地停止 ──
+            wr = 0;
+            wl = 0;
+            converged = true;
+            posErr = 0;
+            eYaw = 0;
+        }
+    } else {
+        // ── 点稳定模式：ρ-α-β ──
+        const ctrl = computeHumanoidDiffDriveControl();
+        wr = ctrl.wr;
+        wl = ctrl.wl;
+        converged = ctrl.converged;
+        posErr = ctrl.posErr;
+        eYaw = ctrl.eYaw;
+    }
+
+    humanoidBaseWheelVelocity.right = wr;
+    humanoidBaseWheelVelocity.left = wl;
+
+    // 使用 DQ Robotics 的差速约束雅可比进行状态积分
+    if (humanoidDiffDriveModel && typeof humanoidDiffDriveModel.constraintJacobian === 'function') {
+        const Jc = humanoidDiffDriveModel.constraintJacobian(humanoidBasePose.yaw || 0); // 3x2
+        const qdotX = (Jc?.[0]?.[0] || 0) * wr + (Jc?.[0]?.[1] || 0) * wl;
+        const qdotY = (Jc?.[1]?.[0] || 0) * wr + (Jc?.[1]?.[1] || 0) * wl;
+        const qdotYaw = (Jc?.[2]?.[0] || 0) * wr + (Jc?.[2]?.[1] || 0) * wl;
+        humanoidBasePose.x += dt * qdotX;
+        humanoidBasePose.y += dt * qdotY;
+        humanoidBasePose.yaw = wrapAngle((humanoidBasePose.yaw || 0) + dt * qdotYaw);
+    } else {
+        // 回退：与 DQ_DifferentialDriveRobot 同构的解析式
+        const v = (p.wheelRadius / 2) * (wr + wl);
+        const omega = (p.wheelRadius / p.wheelDistance) * (wr - wl);
+        const yaw = humanoidBasePose.yaw || 0;
+        const c = Math.cos(yaw);
+        const s = Math.sin(yaw);
+        humanoidBasePose.x += dt * v * c;
+        humanoidBasePose.y += dt * v * s;
+        humanoidBasePose.yaw = wrapAngle(yaw + dt * omega);
+    }
+
+    return { converged, posErr, eYaw };
+}
+
+function stepHumanoidBaseControl(nowMs = performance.now()) {
+    if (!humanoidMode || !humanoidModel) return;
+    if (!humanoidBaseControlLastTs) {
+        humanoidBaseControlLastTs = nowMs;
+        return;
+    }
+    const dt = clampValue((nowMs - humanoidBaseControlLastTs) / 1000, 0.001, 0.05);
+    humanoidBaseControlLastTs = nowMs;
+
+    const controlState = integrateHumanoidDiffDrive(dt);
+
+    if (controlState.converged) {
+        humanoidBaseConvergedCount += 1;
+    } else {
+        humanoidBaseConvergedCount = 0;
+    }
+
+    // 路径模式：RPP 跟踪收敛后，自动停止运行
+    if (humanoidBaseControlMode === 'path' && humanoidBaseRPPState.isRunning
+        && humanoidBaseConvergedCount >= humanoidBaseControlParams.settleCycles) {
+        humanoidBaseRPPState.isRunning = false;
+        if (visualizer) visualizer.setAddWaypointMode(true);
+        if (typeof window._updateRPPRunBtn === 'function') window._updateRPPRunBtn();
+    }
+    // 点稳定模式：不做吸附，控制器自然收敛（v = kRho * ρ → 0）
+
+    // 更新路径可视化（前视点）
+    if (humanoidBaseControlMode === 'path' && visualizer) {
+        if (typeof visualizer.setLookaheadPoint === 'function') {
+            visualizer.setLookaheadPoint(humanoidBaseRPPState.carrotWorld);
+        }
+    }
+
+    applyHumanoidBasePose();
+    updateRobotPose();
+}
+
+function stopHumanoidBaseControlLoop() {
+    if (humanoidBaseControlTimer) {
+        clearInterval(humanoidBaseControlTimer);
+        humanoidBaseControlTimer = null;
+    }
+    humanoidBaseControlLastTs = 0;
+    humanoidBaseConvergedCount = 0;
+    humanoidDiffDriveModel = null;
+}
+
+function startHumanoidBaseControlLoop() {
+    stopHumanoidBaseControlLoop();
+    humanoidBaseControlTimer = setInterval(() => {
+        stepHumanoidBaseControl(performance.now());
+    }, 20); // 50 Hz
+}
+
+function applyHumanoidBasePose() {
+    const x = Number(humanoidBasePose.x) || 0;
+    const y = Number(humanoidBasePose.y) || 0;
+    const yaw = Number(humanoidBasePose.yaw) || 0;
+
+    if (humanoidModel && typeof humanoidModel.setReferenceFrame === 'function') {
+        // 只控制平面位姿：x/y/yaw（Z-up）
+        const dqBase = DQ.pose(0, 0, 1, yaw, x, y, 0).toArray();
+        humanoidModel.setReferenceFrame(dqBase);
+    }
+
+    if (visualizer && typeof visualizer.setHumanoidBasePose === 'function') {
+        visualizer.setHumanoidBasePose({ x, y, yaw });
+    }
 }
 
 function buildJointAnglesClipboardText() {
@@ -1197,6 +1947,404 @@ function createHumanoidJointControls(config) {
     const leftStart = waistLen;
     const rightStart = waistLen + leftLen;
     const headStart = waistLen + leftLen + rightLen;
+
+    // ── 差速底盘控制区域 ──
+    const baseHeader = document.createElement('div');
+    baseHeader.className = 'joint-group-header';
+    baseHeader.innerHTML = '<span class="group-title">🚗 差速底盘</span><span class="group-count" id="humanoid-base-mode-label">点稳定</span>';
+    baseHeader.style.cssText = `
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.5rem 0.75rem;
+        margin: 0.5rem 0 0.25rem 0;
+        background: linear-gradient(90deg, rgba(16, 185, 129, 0.3), transparent);
+        border-left: 3px solid #10b981;
+        border-radius: 0 4px 4px 0;
+        font-weight: 600;
+        font-size: 0.85rem;
+        color: #d1fae5;
+    `;
+    container.appendChild(baseHeader);
+
+    // ── 控制模式切换按钮 ──
+    const modeToggleRow = document.createElement('div');
+    modeToggleRow.style.cssText = 'display:flex; gap:6px; padding:4px 8px; margin-bottom:4px;';
+    const createModeBtn = (label, mode) => {
+        const btn = document.createElement('button');
+        btn.textContent = label;
+        btn.dataset.mode = mode;
+        btn.className = 'rpp-mode-btn';
+        btn.style.cssText = `
+            flex:1; padding:4px 8px; border:1px solid #4b5563; border-radius:4px;
+            background:${humanoidBaseControlMode === mode ? '#10b981' : '#374151'};
+            color:#e5e7eb; font-size:0.78rem; cursor:pointer; transition:background 0.15s;
+        `;
+        btn.addEventListener('click', () => {
+            humanoidBaseControlMode = mode;
+            // 切换视觉样式
+            modeToggleRow.querySelectorAll('.rpp-mode-btn').forEach(b => {
+                b.style.background = b.dataset.mode === mode ? '#10b981' : '#374151';
+            });
+            // 显示/隐藏对应面板
+            pointControlsDiv.style.display = mode === 'point' ? '' : 'none';
+            pathControlsDiv.style.display = mode === 'path' ? '' : 'none';
+            // 更新模式标签
+            const modeLabel = document.getElementById('humanoid-base-mode-label');
+            if (modeLabel) modeLabel.textContent = mode === 'point' ? '点稳定' : '路径跟踪(RPP)';
+            // 切换到路径模式时启用航点添加
+            if (visualizer) {
+                visualizer.setAddWaypointMode(mode === 'path');
+            }
+            // 重置路径跟踪状态
+            if (mode === 'path') {
+                resetRPPState();
+                humanoidBaseConvergedCount = 0;
+            } else {
+                // 切回点模式，清除路径可视化
+                if (visualizer) {
+                    visualizer.clearPathVisualization();
+                    visualizer.setAddWaypointMode(false);
+                }
+                humanoidBasePath = [];
+            }
+        });
+        return btn;
+    };
+    modeToggleRow.appendChild(createModeBtn('点稳定', 'point'));
+    modeToggleRow.appendChild(createModeBtn('路径跟踪 (RPP)', 'path'));
+    container.appendChild(modeToggleRow);
+
+    // ── 点稳定控件容器 ──
+    const pointControlsDiv = document.createElement('div');
+    pointControlsDiv.id = 'humanoid-base-point-controls';
+    pointControlsDiv.style.display = humanoidBaseControlMode === 'point' ? '' : 'none';
+    container.appendChild(pointControlsDiv);
+
+    const createBaseControl = ({ key, labelText, min, max, stepValue, toState, toDisplay }) => {
+        const jointDiv = document.createElement('div');
+        jointDiv.className = 'joint-control';
+        const label = document.createElement('div');
+        label.className = 'joint-label';
+        const nameSpan = document.createElement('span');
+        nameSpan.textContent = labelText;
+        label.appendChild(nameSpan);
+
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.className = 'joint-input';
+        input.id = `humanoid-base-input-${key}`;
+        input.step = String(stepValue);
+        input.min = String(min);
+        input.max = String(max);
+        input.value = toDisplay(humanoidBaseTargetPose[key]).toFixed(key === 'yaw' ? inputPrecision : 3);
+        label.appendChild(input);
+
+        const slider = document.createElement('input');
+        slider.type = 'range';
+        slider.className = 'joint-slider';
+        slider.id = `humanoid-base-${key}`;
+        slider.min = String(min);
+        slider.max = String(max);
+        slider.step = String(stepValue);
+        slider.value = toDisplay(humanoidBaseTargetPose[key]).toFixed(key === 'yaw' ? sliderPrecision : 3);
+
+        const applyValue = (displayValue) => {
+            if (!Number.isFinite(displayValue)) return;
+            const clamped = Math.max(min, Math.min(max, displayValue));
+            humanoidBaseTargetPose[key] = toState(clamped);
+            humanoidBaseConvergedCount = 0;
+            humanoidBaseReverseDrive = false;
+            input.value = clamped.toFixed(key === 'yaw' ? inputPrecision : 3);
+            slider.value = clamped.toFixed(key === 'yaw' ? sliderPrecision : 3);
+        };
+
+        input.addEventListener('change', (e) => {
+            applyValue(parseFloat(e.target.value));
+        });
+        slider.addEventListener('input', (e) => {
+            applyValue(parseFloat(e.target.value));
+        });
+
+        jointDiv.appendChild(label);
+        jointDiv.appendChild(slider);
+        pointControlsDiv.appendChild(jointDiv);
+    };
+
+    createBaseControl({
+        key: 'x',
+        labelText: 'target_x (m)',
+        min: -5,
+        max: 5,
+        stepValue: 0.005,
+        toState: (v) => v,
+        toDisplay: (v) => Number(v) || 0
+    });
+    createBaseControl({
+        key: 'y',
+        labelText: 'target_y (m)',
+        min: -5,
+        max: 5,
+        stepValue: 0.005,
+        toState: (v) => v,
+        toDisplay: (v) => Number(v) || 0
+    });
+    createBaseControl({
+        key: 'yaw',
+        labelText: angleDisplayMode === 'deg' ? 'target_yaw (deg)' : 'target_yaw (rad)',
+        min: angleDisplayMode === 'deg' ? -180 : -Math.PI,
+        max: angleDisplayMode === 'deg' ? 180 : Math.PI,
+        stepValue: displayStep(),
+        toState: (v) => displayToAngle(v),
+        toDisplay: (v) => angleToDisplay(v)
+    });
+
+    // ── 路径跟踪控件容器 ──
+    const pathControlsDiv = document.createElement('div');
+    pathControlsDiv.id = 'humanoid-base-path-controls';
+    pathControlsDiv.style.display = humanoidBaseControlMode === 'path' ? '' : 'none';
+    container.appendChild(pathControlsDiv);
+
+    // 路径操作按钮行
+    const pathBtnRow = document.createElement('div');
+    pathBtnRow.style.cssText = 'display:flex; gap:6px; padding:4px 8px; flex-wrap:wrap;';
+
+    const pathBtnStyle = `
+        padding:4px 10px; border:1px solid #4b5563; border-radius:4px;
+        background:#374151; color:#e5e7eb; font-size:0.76rem; cursor:pointer;
+        transition:background 0.15s;
+    `;
+
+    // ▶ 运行 / ■ 停止 按钮
+    const runBtn = document.createElement('button');
+    runBtn.id = 'rpp-run-btn';
+    const updateRunBtnStyle = () => {
+        const running = humanoidBaseRPPState.isRunning;
+        runBtn.textContent = running ? '■ 停止' : '▶ 运行';
+        runBtn.style.cssText = `
+            padding:4px 14px; border:1px solid ${running ? '#ef4444' : '#10b981'}; border-radius:4px;
+            background:${running ? '#991b1b' : '#065f46'}; color:#e5e7eb; font-size:0.76rem;
+            cursor:pointer; transition:background 0.15s; font-weight:600;
+        `;
+    };
+    updateRunBtnStyle();
+    runBtn.addEventListener('click', () => {
+        if (humanoidBaseRPPState.isRunning) {
+            // 停止
+            humanoidBaseRPPState.isRunning = false;
+            humanoidBaseWheelVelocity.left = 0;
+            humanoidBaseWheelVelocity.right = 0;
+            humanoidBaseRPPState.lastCmdLinear = 0;
+            humanoidBaseRPPState.lastCmdAngular = 0;
+            // 重新启用航点添加
+            if (visualizer) visualizer.setAddWaypointMode(true);
+        } else {
+            // 启动运行
+            if (humanoidBasePath.length < 2) {
+                alert('请先添加至少 2 个航点');
+                return;
+            }
+            // 重置跟踪状态但保留路径
+            humanoidBaseRPPState.isRotatingToHeading = false;
+            humanoidBaseRPPState.hasReachedGoalXY = false;
+            humanoidBaseRPPState.lastCmdLinear = 0;
+            humanoidBaseRPPState.lastCmdAngular = 0;
+            humanoidBaseRPPState.isFinished = false;
+            humanoidBaseRPPState.carrotWorld = null;
+            humanoidBaseRPPState.progressSegIdx = 0;
+            humanoidBaseRPPState.isRunning = true;
+            humanoidBaseConvergedCount = 0;
+            // 运行中禁用航点添加，防止误点
+            if (visualizer) visualizer.setAddWaypointMode(false);
+        }
+        updateRunBtnStyle();
+        updatePathStatusDisplay();
+    });
+    pathBtnRow.appendChild(runBtn);
+    // 暴露按钮样式更新函数
+    window._updateRPPRunBtn = updateRunBtnStyle;
+
+    // 撤销最后一个航点
+    const undoWpBtn = document.createElement('button');
+    undoWpBtn.textContent = '↩ 撤销航点';
+    undoWpBtn.style.cssText = pathBtnStyle;
+    undoWpBtn.addEventListener('click', () => {
+        if (humanoidBasePath.length > 0) {
+            humanoidBasePath.pop();
+            resetRPPState();
+            humanoidBaseConvergedCount = 0;
+            if (visualizer) {
+                visualizer.setPathWaypoints(humanoidBasePath);
+                visualizer.setAddWaypointMode(true);
+            }
+            updateRunBtnStyle();
+            updatePathStatusDisplay();
+        }
+    });
+    pathBtnRow.appendChild(undoWpBtn);
+
+    // 清除路径
+    const clearPathBtn = document.createElement('button');
+    clearPathBtn.textContent = '🗑 清除路径';
+    clearPathBtn.style.cssText = pathBtnStyle;
+    clearPathBtn.addEventListener('click', () => {
+        humanoidBasePath = [];
+        resetRPPState();
+        humanoidBaseConvergedCount = 0;
+        if (visualizer) {
+            visualizer.clearPathVisualization();
+            visualizer.setAddWaypointMode(true);
+        }
+        updateRunBtnStyle();
+        updatePathStatusDisplay();
+    });
+    pathBtnRow.appendChild(clearPathBtn);
+
+    // 设置终点朝向
+    const setGoalYawBtn = document.createElement('button');
+    setGoalYawBtn.textContent = '🧭 设终点朝向';
+    setGoalYawBtn.style.cssText = pathBtnStyle;
+    setGoalYawBtn.addEventListener('click', () => {
+        if (humanoidBasePath.length === 0) return;
+        const yawStr = prompt('请输入终点朝向角度 (deg):', '0');
+        if (yawStr === null) return;
+        const yawDeg = parseFloat(yawStr);
+        if (Number.isFinite(yawDeg)) {
+            humanoidBasePath[humanoidBasePath.length - 1].yaw = yawDeg * DEG_TO_RAD;
+            resetRPPState();
+            humanoidBaseConvergedCount = 0;
+            if (visualizer) visualizer.setPathWaypoints(humanoidBasePath);
+            updatePathStatusDisplay();
+        }
+    });
+    pathBtnRow.appendChild(setGoalYawBtn);
+
+    pathControlsDiv.appendChild(pathBtnRow);
+
+    // 路径状态信息
+    const pathStatusDiv = document.createElement('div');
+    pathStatusDiv.id = 'humanoid-base-path-status';
+    pathStatusDiv.className = 'panel-subtitle';
+    pathStatusDiv.style.cssText = 'padding:2px 8px; font-size:0.75rem; color:#9ca3af;';
+    pathStatusDiv.textContent = '点击3D场景地面添加航点（至少2个）';
+    pathControlsDiv.appendChild(pathStatusDiv);
+
+    // RPP 参数折叠面板
+    const rppParamsToggle = document.createElement('div');
+    rppParamsToggle.style.cssText = `
+        padding:3px 8px; font-size:0.75rem; color:#6ee7b7; cursor:pointer;
+        user-select:none; margin-top:2px;
+    `;
+    rppParamsToggle.textContent = '▶ RPP 参数';
+    let rppParamsExpanded = false;
+    const rppParamsBody = document.createElement('div');
+    rppParamsBody.style.display = 'none';
+
+    rppParamsToggle.addEventListener('click', () => {
+        rppParamsExpanded = !rppParamsExpanded;
+        rppParamsBody.style.display = rppParamsExpanded ? '' : 'none';
+        rppParamsToggle.textContent = (rppParamsExpanded ? '▼' : '▶') + ' RPP 参数';
+    });
+    pathControlsDiv.appendChild(rppParamsToggle);
+    pathControlsDiv.appendChild(rppParamsBody);
+
+    // RPP 参数控件
+    const rppParamDefs = [
+        { key: 'lookahead_dist', label: '前视距离 (m)', min: 0.1, max: 2.0, step: 0.05 },
+        { key: 'min_lookahead_dist', label: '最小前视距离 (m)', min: 0.05, max: 1.0, step: 0.05 },
+        { key: 'max_lookahead_dist', label: '最大前视距离 (m)', min: 0.3, max: 3.0, step: 0.1 },
+        { key: 'max_linear_vel', label: '最大线速度 (m/s)', min: 0.05, max: 2.0, step: 0.05 },
+        { key: 'max_angular_vel', label: '最大角速度 (rad/s)', min: 0.5, max: 5.0, step: 0.1 },
+        { key: 'regulated_linear_scaling_min_radius', label: '最小转弯半径 (m)', min: 0.1, max: 3.0, step: 0.1 },
+        { key: 'goal_dist_tol', label: '到达容差 (m)', min: 0.01, max: 0.5, step: 0.01 },
+        { key: 'rotate_to_heading_min_angle', label: '原地转向角度 (rad)', min: 0.1, max: 1.57, step: 0.05 },
+    ];
+    for (const def of rppParamDefs) {
+        const row = document.createElement('div');
+        row.className = 'joint-control';
+        const lbl = document.createElement('div');
+        lbl.className = 'joint-label';
+        const nameSpan = document.createElement('span');
+        nameSpan.textContent = def.label;
+        nameSpan.style.fontSize = '0.73rem';
+        lbl.appendChild(nameSpan);
+
+        const inp = document.createElement('input');
+        inp.type = 'number';
+        inp.className = 'joint-input';
+        inp.step = String(def.step);
+        inp.min = String(def.min);
+        inp.max = String(def.max);
+        inp.value = (humanoidBaseRPPParams[def.key] ?? 0).toFixed(2);
+        inp.style.fontSize = '0.73rem';
+        inp.addEventListener('change', () => {
+            const val = parseFloat(inp.value);
+            if (Number.isFinite(val)) {
+                humanoidBaseRPPParams[def.key] = Math.max(def.min, Math.min(def.max, val));
+                slider.value = humanoidBaseRPPParams[def.key].toFixed(2);
+            }
+        });
+        lbl.appendChild(inp);
+
+        const slider = document.createElement('input');
+        slider.type = 'range';
+        slider.className = 'joint-slider';
+        slider.min = String(def.min);
+        slider.max = String(def.max);
+        slider.step = String(def.step);
+        slider.value = (humanoidBaseRPPParams[def.key] ?? 0).toFixed(2);
+        slider.addEventListener('input', () => {
+            const val = parseFloat(slider.value);
+            humanoidBaseRPPParams[def.key] = val;
+            inp.value = val.toFixed(2);
+        });
+
+        row.appendChild(lbl);
+        row.appendChild(slider);
+        rppParamsBody.appendChild(row);
+    }
+
+    // 更新路径状态显示的辅助函数
+    function updatePathStatusDisplay() {
+        const el = document.getElementById('humanoid-base-path-status');
+        if (!el) return;
+        const n = humanoidBasePath.length;
+        const st = humanoidBaseRPPState;
+        if (n === 0) {
+            el.textContent = '点击3D场景地面添加航点（至少2个）';
+        } else if (n === 1) {
+            el.textContent = `已添加 1 个航点，再添加至少 1 个`;
+        } else {
+            const lastWP = humanoidBasePath[n - 1];
+            const goalYaw = lastWP.yaw !== undefined ? ` | 终点朝向: ${(lastWP.yaw * RAD_TO_DEG).toFixed(1)}°` : '';
+            let statusText;
+            if (st.isFinished) statusText = '✓ 已到达';
+            else if (st.isRunning) statusText = st.isRotatingToHeading ? '转向中...' : '跟踪中...';
+            else statusText = '就绪（点击 ▶ 运行）';
+            el.textContent = `${n} 个航点${goalYaw} | ${statusText}`;
+        }
+    }
+    // 暴露更新函数供控制循环使用
+    window._updatePathStatusDisplay = updatePathStatusDisplay;
+
+    // ── 连接 visualizer 的地面点击回调 ──
+    if (visualizer) {
+        visualizer.onGroundClick = (x, y) => {
+            if (humanoidBaseControlMode !== 'path') return;
+            humanoidBasePath.push({ x, y });
+            resetRPPState();
+            humanoidBaseConvergedCount = 0;
+            visualizer.setPathWaypoints(humanoidBasePath);
+            updatePathStatusDisplay();
+        };
+    }
+
+    // 通用底盘状态栏
+    const baseStatus = document.createElement('div');
+    baseStatus.className = 'panel-subtitle';
+    baseStatus.id = 'humanoid-base-wheel-status';
+    baseStatus.textContent = '轮速: left=0.00 rad/s, right=0.00 rad/s | 当前: x=0.000, y=0.000, yaw=0.00';
+    container.appendChild(baseStatus);
     
     // 创建分组标题的辅助函数
     const createGroupHeader = (title, jointCount) => {
@@ -1362,6 +2510,56 @@ function updateHumanoidJointSlidersFromAngles() {
             input.placeholder = placeholder;
         }
     });
+
+    const baseXSlider = document.getElementById('humanoid-base-x');
+    const baseXInput = document.getElementById('humanoid-base-input-x');
+    const baseYSlider = document.getElementById('humanoid-base-y');
+    const baseYInput = document.getElementById('humanoid-base-input-y');
+    const baseYawSlider = document.getElementById('humanoid-base-yaw');
+    const baseYawInput = document.getElementById('humanoid-base-input-yaw');
+    if (baseXSlider) baseXSlider.value = (Number(humanoidBaseTargetPose.x) || 0).toFixed(3);
+    if (baseXInput) baseXInput.value = (Number(humanoidBaseTargetPose.x) || 0).toFixed(3);
+    if (baseYSlider) baseYSlider.value = (Number(humanoidBaseTargetPose.y) || 0).toFixed(3);
+    if (baseYInput) baseYInput.value = (Number(humanoidBaseTargetPose.y) || 0).toFixed(3);
+    const yawDisplay = angleToDisplay(Number(humanoidBaseTargetPose.yaw) || 0);
+    if (baseYawSlider) baseYawSlider.value = formatDisplayValue(yawDisplay, sliderPrecision);
+    if (baseYawInput) baseYawInput.value = formatDisplayValue(yawDisplay, inputPrecision);
+
+    const wheelStatus = document.getElementById('humanoid-base-wheel-status');
+    if (wheelStatus) {
+        const modeText = humanoidBaseControlMode === 'path' ? 'RPP' : 'point';
+        const currentYawDisplay = angleToDisplay(Number(humanoidBasePose.yaw) || 0);
+
+        let posErr, yawErrText;
+        if (humanoidBaseControlMode === 'path' && humanoidBasePath.length >= 2) {
+            const goal = humanoidBasePath[humanoidBasePath.length - 1];
+            posErr = Math.hypot((goal.x || 0) - (humanoidBasePose.x || 0), (goal.y || 0) - (humanoidBasePose.y || 0));
+            const rotating = humanoidBaseRPPState.isRotatingToHeading ? ' [转向]' : '';
+            yawErrText = `到终点: ${posErr.toFixed(3)}m${rotating}`;
+        } else {
+            const dx = (humanoidBaseTargetPose.x || 0) - (humanoidBasePose.x || 0);
+            const dy = (humanoidBaseTargetPose.y || 0) - (humanoidBasePose.y || 0);
+            posErr = Math.hypot(dx, dy);
+            const yawErrDisplay = angleToDisplay(
+                wrapAngle((humanoidBaseTargetPose.yaw || 0) - (humanoidBasePose.yaw || 0))
+            );
+            yawErrText = `误差: pos=${posErr.toFixed(3)}m, yaw=${yawErrDisplay.toFixed(2)} ${angleDisplayMode === 'deg' ? 'deg' : 'rad'}`;
+        }
+
+        wheelStatus.textContent =
+            `${modeText} | ` +
+            `轮速: L=${(humanoidBaseWheelVelocity.left || 0).toFixed(2)}, ` +
+            `R=${(humanoidBaseWheelVelocity.right || 0).toFixed(2)} rad/s | ` +
+            `位姿: (${(humanoidBasePose.x || 0).toFixed(3)}, ` +
+            `${(humanoidBasePose.y || 0).toFixed(3)}, ` +
+            `${currentYawDisplay.toFixed(2)}${angleDisplayMode === 'deg' ? '°' : 'rad'}) | ` +
+            yawErrText;
+    }
+
+    // 更新路径状态显示
+    if (humanoidBaseControlMode === 'path' && typeof window._updatePathStatusDisplay === 'function') {
+        window._updatePathStatusDisplay();
+    }
 }
 
 function refreshJointControlDisplay() {
@@ -1451,6 +2649,9 @@ function updateGlobalVariables() {
     window.humanoidModel = humanoidModel;
     window.humanoidQ = humanoidQ;
     window.humanoidJointNames = humanoidJointNames;
+    window.humanoidBasePose = humanoidBasePose;
+    window.humanoidBaseTargetPose = humanoidBaseTargetPose;
+    window.humanoidBaseWheelVelocity = humanoidBaseWheelVelocity;
 }
 
 /**
@@ -1517,6 +2718,7 @@ function updateSingleArmPose() {
 function updateHumanoidPose() {
     try {
         if (!humanoidModel || !humanoidQ.length) return;
+        applyHumanoidBasePose();
         if (visualizer) visualizer.setHumanoidJoints(humanoidQ);
         
         // 更新关节滑块显示
@@ -1526,16 +2728,21 @@ function updateHumanoidPose() {
         if (!dqModule) return;
         const dq1 = humanoidModel.fkmEffector(humanoidQ, 1);
         const dq2 = humanoidModel.fkmEffector(humanoidQ, 2);
-        const obj1 = dqModule.DQWrapper.createFromArray(dq1);
-        const obj2 = dqModule.DQWrapper.createFromArray(dq2);
+        const baseDQ = DQ.pose(0, 0, 1, humanoidBasePose.yaw || 0, humanoidBasePose.x || 0, humanoidBasePose.y || 0, 0).toArray();
+        const baseObj = dqModule.DQWrapper.createFromArray(baseDQ);
+        const worldDq1 = dqModule.DQWrapper.toArray(dqModule.DQWrapper.multiply(baseObj, dqModule.DQWrapper.createFromArray(dq1)));
+        const worldDq2 = dqModule.DQWrapper.toArray(dqModule.DQWrapper.multiply(baseObj, dqModule.DQWrapper.createFromArray(dq2)));
+        const obj1 = dqModule.DQWrapper.createFromArray(worldDq1);
+        const obj2 = dqModule.DQWrapper.createFromArray(worldDq2);
         const pose1 = { translation: dqModule.DQWrapper.getTranslation(obj1), rotation: dqModule.DQWrapper.getRotation(obj1) };
         const pose2 = { translation: dqModule.DQWrapper.getTranslation(obj2), rotation: dqModule.DQWrapper.getRotation(obj2) };
         
         // 使用 dualArmSystem（HumanoidDualArmAdapter）计算绝对位姿和相对位姿，保持与控制器一致
         let absPose, relPose;
         if (dualArmSystem && typeof dualArmSystem.getAbsolutePose === 'function') {
-            const absDQ = dualArmSystem.getAbsolutePose(humanoidQ);
+            const absDQLocal = dualArmSystem.getAbsolutePose(humanoidQ);
             const relDQArr = dualArmSystem.getRelativePose(humanoidQ);
+            const absDQ = dqModule.DQWrapper.toArray(dqModule.DQWrapper.multiply(baseObj, dqModule.DQWrapper.createFromArray(absDQLocal)));
             const absObj = dqModule.DQWrapper.createFromArray(absDQ);
             const relObj = dqModule.DQWrapper.createFromArray(relDQArr);
             absPose = { translation: dqModule.DQWrapper.getTranslation(absObj), rotation: dqModule.DQWrapper.getRotation(absObj) };
@@ -3228,6 +4435,21 @@ function setupEventListeners() {
                             }, 20);
                         }
                     }
+                } else if (controlMode === 'decoupled-with-base') {
+                    // 带底盘全身绝对位姿：底盘+腰部+双臂联动，控制绝对位姿
+                    if (visualizer.humanoidMode) {
+                        if (type === 'rotation') {
+                            visualizer.rotateHumanoidAbsolutePoseAroundAxisWithBase(axis, direction);
+                            intervalId = setInterval(() => {
+                                visualizer.rotateHumanoidAbsolutePoseAroundAxisWithBase(axis, direction);
+                            }, 20);
+                        } else {
+                            visualizer.moveHumanoidAbsolutePoseAlongAxisWithBase(axis, direction);
+                            intervalId = setInterval(() => {
+                                visualizer.moveHumanoidAbsolutePoseAlongAxisWithBase(axis, direction);
+                            }, 20);
+                        }
+                    }
                 } else if (controlMode === 'relative-fullbody') {
                     // 全身相对位姿：腰部+双臂联动，控制相对位姿
                     if (visualizer.humanoidMode) {
@@ -3565,6 +4787,21 @@ async function loadHumanoidSystem(robot, config) {
     humanoidMode = true;
     dualArmMode = false;
     dualArmSystem = new HumanoidDualArmAdapter(humanoidModel);
+    humanoidBasePose = getHumanoidBasePoseFromConfig(config);
+    humanoidBaseTargetPose = { ...humanoidBasePose };
+    humanoidBaseWheelVelocity = { left: 0, right: 0 };
+    humanoidBaseConvergedCount = 0;
+    humanoidBaseControlParams = getHumanoidDiffDriveParamsFromConfig(config);
+    try {
+        humanoidDiffDriveModel = new DifferentialDriveRobot(
+            humanoidBaseControlParams.wheelRadius,
+            humanoidBaseControlParams.wheelDistance
+        );
+    } catch (error) {
+        humanoidDiffDriveModel = null;
+        console.warn('未能初始化 DQ DifferentialDriveRobot，底盘将回退到解析积分:', error);
+    }
+    startHumanoidBaseControlLoop();
     if (visualizer) {
         const waistLen = chains.waistJointNames.length;
         const leftLen = chains.leftArmJointNames.length;
@@ -3579,6 +4816,7 @@ async function loadHumanoidSystem(robot, config) {
             headLength: headLen,
             effectorLinkNames: [names.waist_end, names.left_arm_end, names.right_arm_end, names.head_end]
         });
+        applyHumanoidBasePose();
         visualizer.setHumanoidJoints(humanoidQ);
     }
     createHumanoidJointControls(config);
@@ -4954,6 +6192,47 @@ function getCurrentRobotDQ(robotChoice) {
     }
 
     try {
+        if (humanoidMode) {
+            if (!window.humanoidModel || !window.humanoidQ?.length) return null;
+            const baseDQ = DQ.pose(
+                0, 0, 1,
+                window.humanoidBasePose?.yaw || 0,
+                window.humanoidBasePose?.x || 0,
+                window.humanoidBasePose?.y || 0,
+                0
+            ).toArray();
+            const baseObj = window.DQModule.DQWrapper.createFromArray(baseDQ);
+
+            if (robotChoice === 'robot1') {
+                const local = window.humanoidModel.fkmEffector(window.humanoidQ, 1);
+                return window.DQModule.DQWrapper.toArray(
+                    window.DQModule.DQWrapper.multiply(baseObj, window.DQModule.DQWrapper.createFromArray(local))
+                );
+            }
+            if (robotChoice === 'robot2') {
+                const local = window.humanoidModel.fkmEffector(window.humanoidQ, 2);
+                return window.DQModule.DQWrapper.toArray(
+                    window.DQModule.DQWrapper.multiply(baseObj, window.DQModule.DQWrapper.createFromArray(local))
+                );
+            }
+            if (robotChoice === 'absolute') {
+                if (!window.dualArmSystem || typeof window.dualArmSystem.getAbsolutePose !== 'function') {
+                    return null;
+                }
+                const local = window.dualArmSystem.getAbsolutePose(window.humanoidQ);
+                return window.DQModule.DQWrapper.toArray(
+                    window.DQModule.DQWrapper.multiply(baseObj, window.DQModule.DQWrapper.createFromArray(local))
+                );
+            }
+            if (robotChoice === 'relative') {
+                if (!window.dualArmSystem || typeof window.dualArmSystem.getRelativePose !== 'function') {
+                    return null;
+                }
+                return window.dualArmSystem.getRelativePose(window.humanoidQ);
+            }
+            return null;
+        }
+
         if (dualArmMode) {
             // 双臂：支持机器人1/2 + 绝对/相对位姿
             const da = window.dualArmSystem || dualArmSystem;
@@ -5170,10 +6449,22 @@ function setupInverseKinematicsControls() {
                     if (ikStatus) { ikStatus.textContent = '人形关节未初始化'; ikStatus.style.color = '#f87171'; }
                     return;
                 }
+                const enableLimitAvoidance = document.getElementById('joint-limit-avoidance-toggle')?.checked ?? true;
                 if (robotChoice === 'absolute') {
-                    success = vis.updateHumanoidJointsFromAbsolutePoseTarget?.(dqArray, allQ) === true;
+                    success = vis.updateHumanoidWholeBodyWithBaseFromAbsolutePoseTarget?.(
+                        dqArray,
+                        allQ,
+                        window.humanoidBasePose || window.humanoidBaseTargetPose || { x: 0, y: 0, yaw: 0 },
+                        enableLimitAvoidance,
+                        true
+                    ) === true;
                 } else {
-                    success = vis.updateHumanoidJointsFromRelativePoseTarget?.(dqArray, allQ) === true;
+                    success = vis.updateHumanoidJointsFromRelativePoseTargetAbsoluteFirst?.(
+                        dqArray,
+                        allQ,
+                        enableLimitAvoidance,
+                        true
+                    ) === true;
                 }
                 if (success && typeof refreshJointControlDisplay === 'function') refreshJointControlDisplay();
             } else if (!dualArmMode) {
@@ -5941,6 +7232,7 @@ function updateROS2StatusDisplay(status) {
  * 切换到人形UI显示（左臂/右臂位姿与相对/绝对控制）
  */
 function switchToHumanoidUI() {
+    startHumanoidBaseControlLoop();
     // 与双臂共用：显示双臂位姿面板（左臂=robot1，右臂=robot2）
     const singleArmPose = document.querySelector('.single-arm-pose');
     if (singleArmPose) singleArmPose.style.display = 'none';
@@ -5997,7 +7289,8 @@ function switchToHumanoidUI() {
             else if (mode === 'relative') modeLabelEl.textContent = '相对位姿模式：控制相对位姿，保持绝对位姿不变';
             else if (mode === 'distance') modeLabelEl.textContent = '相对距离模式：控制两末端距离，保持绝对位姿与相对姿态不变';
             else if (mode === 'distance-fullbody') modeLabelEl.textContent = '全身相对距离：腰部+双臂联动，控制两末端距离，保持绝对位姿与相对姿态不变';
-            else if (mode === 'decoupled') modeLabelEl.textContent = '全身绝对位姿：腰部+双臂联动，控制绝对位姿，保持相对位姿不变';
+            else if (mode === 'decoupled') modeLabelEl.textContent = '全身绝对位姿：腰部+双臂联动（不含底盘），控制绝对位姿，保持相对位姿不变';
+            else if (mode === 'decoupled-with-base') modeLabelEl.textContent = '带底盘全身绝对位姿：底盘+腰部+双臂联动，控制绝对位姿，保持相对位姿不变';
             else if (mode === 'relative-fullbody') modeLabelEl.textContent = '全身相对位姿：腰部+双臂联动，控制相对位姿，保持绝对位姿不变';
             else modeLabelEl.textContent = '绝对位姿模式：控制绝对位姿，保持相对位姿不变';
         };
@@ -6015,6 +7308,7 @@ function switchToHumanoidUI() {
  * 切换到双臂UI显示
  */
 function switchToDualArmUI() {
+    stopHumanoidBaseControlLoop();
     // 隐藏单臂位姿显示
     const singleArmPose = document.querySelector('.single-arm-pose');
     if (singleArmPose) {
@@ -6078,7 +7372,10 @@ function switchToDualArmUI() {
                     modeLabel.textContent = '相对距离模式：控制两末端距离，保持绝对位姿与相对姿态不变';
                     break;
                 case 'decoupled':
-                    modeLabel.textContent = '全身绝对位姿：腰部+双臂联动，控制绝对位姿，保持相对位姿不变';
+                    modeLabel.textContent = '全身绝对位姿：腰部+双臂联动（不含底盘），控制绝对位姿，保持相对位姿不变';
+                    break;
+                case 'decoupled-with-base':
+                    modeLabel.textContent = '带底盘全身绝对位姿：底盘+腰部+双臂联动，控制绝对位姿，保持相对位姿不变';
                     break;
                 case 'absolute':
                 default:
@@ -6125,6 +7422,7 @@ function switchToDualArmUI() {
  * 切换到单臂UI显示
  */
 function switchToSingleArmUI() {
+    stopHumanoidBaseControlLoop();
     // 显示单臂位姿显示
     const singleArmPose = document.querySelector('.single-arm-pose');
     if (singleArmPose) {
@@ -6177,4 +7475,3 @@ if (document.readyState === 'loading') {
 } else {
     init();
 }
-

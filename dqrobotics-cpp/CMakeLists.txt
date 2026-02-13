@@ -122,8 +122,17 @@ if(BUILD_EXAMPLES)
         examples/test_sailor_r1_pro.cpp
         examples/urdf_humanoid_chain_loader.cpp
     )
+    add_executable(sailor_r1_pro_wholebody_diffdrive
+        examples/test_sailor_r1_pro_wholebody_diffdrive.cpp
+        examples/urdf_humanoid_chain_loader.cpp
+    )
     target_link_libraries(sailor_r1_pro_test PRIVATE dqrobotics tinyxml2)
+    target_link_libraries(sailor_r1_pro_wholebody_diffdrive PRIVATE dqrobotics tinyxml2)
     target_include_directories(sailor_r1_pro_test PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+        ${tinyxml2_SOURCE_DIR}
+    )
+    target_include_directories(sailor_r1_pro_wholebody_diffdrive PRIVATE
         ${CMAKE_SOURCE_DIR}/include
         ${tinyxml2_SOURCE_DIR}
     )

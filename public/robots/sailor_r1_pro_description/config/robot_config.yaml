@@ -16,3 +16,9 @@ humanoid_link_names:
 
 # 初始关节角（腰4+左臂7+右臂7+头2=20，单位 rad）
 initial_q: [0, 0, 0, 0, -0.5236, 0, 0, -1.0471, 0, 0, 0, 0.5236, 0, 0, 1.0471, 0, 0, 0, 0, 0]
+
+# 差速底盘参数（供前端 DQ DifferentialDriveRobot 读取）
+mobile_base:
+  wheel_radius: 0.10
+  distance_between_wheels: 0.425
+  initial_q: [0, 0, 0]  # [x, y, yaw]

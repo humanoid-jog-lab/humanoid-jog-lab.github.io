@@ -332,6 +332,35 @@ export class SerialManipulator {
 }
 
 /**
+ * 差速底盘（DQ_DifferentialDriveRobot）
+ * 配置量 q=[x, y, yaw]，控制量 u=[w_r, w_l]
+ */
+export class DifferentialDriveRobot {
+    constructor(wheelRadius, wheelDistance) {
+        if (!DQModule) {
+            throw new Error('DQ Robotics 模块未初始化');
+        }
+        this._robot = new DQModule.DifferentialDriveRobot(wheelRadius, wheelDistance);
+    }
+
+    fkm(q) {
+        return this._robot.fkm(q);
+    }
+
+    poseJacobian(q) {
+        return this._robot.poseJacobian(q);
+    }
+
+    constraintJacobian(phi) {
+        return this._robot.constraintJacobian(phi);
+    }
+
+    constraintJacobianDerivative(phi, phiDot) {
+        return this._robot.constraintJacobianDerivative(phi, phiDot);
+    }
+}
+
+/**
  * Franka Emika Panda 机器人
  */
 export class FrankaPanda {
@@ -788,4 +817,3 @@ export class HumanoidDualArmAdapter {
         };
     }
 }
-

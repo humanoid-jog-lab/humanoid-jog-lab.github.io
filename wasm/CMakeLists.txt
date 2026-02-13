@@ -36,6 +36,9 @@ if(EMSCRIPTEN)
         ${DQROBOTICS_DIR}/src/robot_modeling/DQ_SerialManipulatorURDF.cpp
         ${DQROBOTICS_DIR}/src/robot_modeling/DQ_HumanoidURDF.cpp
         ${DQROBOTICS_DIR}/src/robot_modeling/DQ_CooperativeDualTaskSpace.cpp
+        ${DQROBOTICS_DIR}/src/robot_modeling/DQ_MobileBase.cpp
+        ${DQROBOTICS_DIR}/src/robot_modeling/DQ_HolonomicBase.cpp
+        ${DQROBOTICS_DIR}/src/robot_modeling/DQ_DifferentialDriveRobot.cpp
         ${DQROBOTICS_DIR}/src/robots/FrankaEmikaPandaRobot.cpp
         ${DQROBOTICS_DIR}/src/robots/KukaLw4Robot.cpp
     )
@@ -87,4 +90,3 @@ if(EMSCRIPTEN)
 else()
     message(FATAL_ERROR "This project must be built with Emscripten")
 endif()
-

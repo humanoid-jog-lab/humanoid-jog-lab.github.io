@@ -13,6 +13,7 @@
 #include <dqrobotics/robot_modeling/DQ_SerialManipulatorMDH.h>
 #include <dqrobotics/robot_modeling/DQ_SerialManipulatorURDF.h>
 #include <dqrobotics/robot_modeling/DQ_HumanoidURDF.h>
+#include <dqrobotics/robot_modeling/DQ_DifferentialDriveRobot.h>
 #include <dqrobotics/robot_modeling/DQ_JointType.h>
 #include <dqrobotics/robot_modeling/DQ_CooperativeDualTaskSpace.h>
 #include <dqrobotics/robots/FrankaEmikaPandaRobot.h>
@@ -538,6 +539,44 @@ public:
     }
 };
 
+// 差速底盘包装器（配置量 q=[x, y, yaw]，控制量 u=[w_r, w_l]）
+class DifferentialDriveRobot_Wrapper {
+private:
+    DQ_DifferentialDriveRobot robot;
+
+public:
+    DifferentialDriveRobot_Wrapper(double wheel_radius, double distance_between_wheels)
+        : robot(wheel_radius, distance_between_wheels) {}
+
+    val fkm(const val& q_js) {
+        VectorXd q = jsArrayToVectorXd(q_js);
+        if (q.size() != 3) {
+            throw std::runtime_error("DifferentialDriveRobot::fkm expects q=[x,y,yaw]");
+        }
+        DQ pose = robot.fkm(q);
+        return vectorXdToJsArray(pose.q);
+    }
+
+    val poseJacobian(const val& q_js) {
+        VectorXd q = jsArrayToVectorXd(q_js);
+        if (q.size() != 3) {
+            throw std::runtime_error("DifferentialDriveRobot::poseJacobian expects q=[x,y,yaw]");
+        }
+        MatrixXd J = robot.pose_jacobian(q);
+        return matrixXdToJsArray(J);
+    }
+
+    val constraintJacobian(double phi) {
+        MatrixXd Jc = robot.constraint_jacobian(phi);
+        return matrixXdToJsArray(Jc);
+    }
+
+    val constraintJacobianDerivative(double phi, double phi_dot) {
+        MatrixXd Jcd = robot.constraint_jacobian_derivative(phi, phi_dot);
+        return matrixXdToJsArray(Jcd);
+    }
+};
+
 // 预定义机器人包装器 - Franka Panda (使用 MDH 参数)
 class FrankaPanda_Wrapper {
 private:
@@ -913,6 +952,14 @@ EMSCRIPTEN_BINDINGS(dqrobotics_module) {
         .function("absolutePoseDualArm", &HumanoidURDF_Wrapper::absolutePoseDualArm)
         .function("relativePoseJacobianDualArm", &HumanoidURDF_Wrapper::relativePoseJacobianDualArm)
         .function("absolutePoseJacobianDualArm", &HumanoidURDF_Wrapper::absolutePoseJacobianDualArm);
+
+    // 差速底盘
+    class_<DifferentialDriveRobot_Wrapper>("DifferentialDriveRobot")
+        .constructor<double, double>()
+        .function("fkm", &DifferentialDriveRobot_Wrapper::fkm)
+        .function("poseJacobian", &DifferentialDriveRobot_Wrapper::poseJacobian)
+        .function("constraintJacobian", &DifferentialDriveRobot_Wrapper::constraintJacobian)
+        .function("constraintJacobianDerivative", &DifferentialDriveRobot_Wrapper::constraintJacobianDerivative);
     
     // Franka Panda 机器人
     class_<FrankaPanda_Wrapper>("FrankaPanda")
@@ -949,4 +996,3 @@ EMSCRIPTEN_BINDINGS(dqrobotics_module) {
         .function("relativePoseJacobian", &CooperativeDualTaskSpace_Wrapper::relative_pose_jacobian)
         .function("absolutePoseJacobian", &CooperativeDualTaskSpace_Wrapper::absolute_pose_jacobian);
 }
-

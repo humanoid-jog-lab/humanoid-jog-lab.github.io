@@ -8,7 +8,7 @@
     name="base_link">
     <inertial>
       <origin
-        xyz="-0.035573 -0.0035166 0.15072"
+        xyz="-0.293073 -0.0035166 0.05072"
         rpy="0 0 0" />
       <mass
         value="16.374" />
@@ -22,7 +22,7 @@
     </inertial>
     <visual>
       <origin
-        xyz="0 0 0"
+        xyz="-0.2575 0 -0.1"
         rpy="0 0 0" />
       <geometry>
         <mesh
@@ -36,7 +36,7 @@
     </visual>
     <collision>
       <origin
-        xyz="0 0 0"
+        xyz="-0.2575 0 -0.1"
         rpy="0 0 0" />
       <geometry>
         <mesh
@@ -74,7 +74,7 @@
     name="left_wheel_joint"
     type="continuous">
     <origin
-      xyz="0.2575 0.2125 0.1"
+      xyz="0 0.2125 0"
       rpy="0 0 0" />
     <parent
       link="base_link" />
@@ -113,7 +113,7 @@
     name="right_wheel_joint"
     type="continuous">
     <origin
-      xyz="0.2575 -0.2125 0.1"
+      xyz="0 -0.2125 0"
       rpy="0 0 0" />
     <parent
       link="base_link" />
@@ -166,7 +166,7 @@
     name="lidar_joint"
     type="fixed">
     <origin
-      xyz="0.30221 -6.0461E-05 0.19727"
+      xyz="0.04471 -6.0461E-05 0.09727"
       rpy="0 0.2618 0" />
     <parent
       link="base_link" />
@@ -219,7 +219,7 @@
     name="ankle_joint"
     type="revolute">
     <origin
-      xyz="-0.0715 0 0.355"
+      xyz="-0.329 0 0.255"
       rpy="0 0 0" />
     <parent
       link="base_link" />

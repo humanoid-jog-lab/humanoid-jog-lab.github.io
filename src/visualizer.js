@@ -37,6 +37,7 @@ export class RobotVisualizer {
         this.humanoidHeadLength = 0;
         this.humanoidEffectorLinkNames = [];  // [waist_end, left_arm_end, right_arm_end, head_end] 用于球体取 URDF link 世界坐标
         this.humanoidEffectorSpheres = null;  // Group: 4 球体（腰/左臂/右臂/头末端）
+        this.humanoidBaseHeight = 0; // 人形底盘高度（z 方向保持固定）
         this.humanoidAbsoluteMarker = null;   // 绝对位姿球+坐标轴（左右臂中点）
         this.humanoidRelativeLine = null;     // 左臂到右臂连线
         this.humanoidLeftArmEndEffector = null;   // 左臂末端球+坐标轴
@@ -108,6 +109,15 @@ export class RobotVisualizer {
 
         // 示教器速度百分比（影响“每一步”的平移/旋转增量，不改变按键重复频率）
         this.teachSpeedPercent = 100;
+
+        // ── Regulated Pure Pursuit 路径可视化 ──
+        this.rppPathLine = null;           // THREE.Line - 路径折线
+        this.rppWaypointMarkers = [];      // THREE.Mesh[] - 航点圆球
+        this.rppLookaheadMarker = null;    // THREE.Mesh - 前视点标记
+        this.rppPathGroup = null;          // THREE.Group - 路径可视化容器
+        this.rppAddWaypointMode = false;   // 是否处于"点击添加航点"模式
+        this.onGroundClick = null;         // 地面点击回调 (x, y) => void
+        this._groundPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0); // Z-up 地面
     }
     
     /**
@@ -220,6 +230,15 @@ export class RobotVisualizer {
             this.renderer.setViewport(0, 0, width, height);
             this.renderer.autoClear = true;
         }
+        
+        // 绑定画布点击事件（用于路径航点添加）— 记录 mousedown 位置用于过滤拖动
+        this.canvas.addEventListener('mousedown', (e) => {
+            if (e.button === 0 && this.rppAddWaypointMode) {
+                this._rppMouseDownPos = { x: e.clientX, y: e.clientY };
+                this._rppMouseDownTime = performance.now();
+            }
+        }, true); // capture phase，先于其他 handler
+        this.canvas.addEventListener('click', (e) => this._handleCanvasClickForWaypoint(e));
         
         // 开始渲染循环
         this.animate();
@@ -1036,12 +1055,208 @@ export class RobotVisualizer {
             const [tx, ty, tz] = basePose;
             robot.position.set(tx || 0, ty || 0, tz || 0);
         }
+        this.humanoidBaseHeight = robot.position.z || 0;
         this.scene.add(robot);
         this._createHumanoidEffectorSpheres();
         this._createHumanoidDualArmVisualizations();
+        
+        // 初始化URDF坐标系显示（如果开关已打开）
+        if (this.showURDFFrames && robot && robot.links) {
+            const linkNames = Object.keys(robot.links);
+            this.initURDFFrames(robot, linkNames, null, null);
+        }
+        
         console.log('✓ 人形 URDF 加载完成，关节数:', this.humanoidJointNames.length, '（腰/左臂/右臂/头）仅左臂+右臂参与 IK');
         return true;
     }
+
+    /**
+     * 设置人形底盘平面位姿（x/y/yaw）
+     * @param {{x:number,y:number,yaw:number}} basePose
+     */
+    setHumanoidBasePose(basePose = {}) {
+        if (!this.humanoidURDF) return;
+        const x = Number(basePose.x) || 0;
+        const y = Number(basePose.y) || 0;
+        const yaw = Number(basePose.yaw) || 0;
+        const z = Number(this.humanoidBaseHeight) || 0;
+
+        this.humanoidURDF.position.set(x, y, z);
+        this.humanoidURDF.quaternion.set(0, 0, Math.sin(yaw / 2), Math.cos(yaw / 2));
+
+        if (typeof this.humanoidURDF.updateMatrixWorld === 'function') {
+            this.humanoidURDF.updateMatrixWorld(true);
+        }
+        if (this.showURDFFrames) {
+            this.updateAllURDFFrames();
+        }
+        this._updateHumanoidEffectorSpheres(window?.humanoidQ || []);
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // Regulated Pure Pursuit 路径可视化
+    // ──────────────────────────────────────────────────────────────
+
+    /**
+     * 初始化路径可视化的 Three.js 组（在 scene 已创建后调用）
+     */
+    _initRPPPathGroup() {
+        if (this.rppPathGroup) return;
+        this.rppPathGroup = new THREE.Group();
+        this.rppPathGroup.name = 'RPPPathVisualization';
+        this.scene.add(this.rppPathGroup);
+    }
+
+    /**
+     * 设置路径航点并更新可视化
+     * @param {Array<{x:number, y:number, yaw?:number}>} waypoints
+     */
+    setPathWaypoints(waypoints = []) {
+        this._initRPPPathGroup();
+
+        // 清除旧的路径线
+        if (this.rppPathLine) {
+            this.rppPathGroup.remove(this.rppPathLine);
+            this.rppPathLine.geometry.dispose();
+            this.rppPathLine.material.dispose();
+            this.rppPathLine = null;
+        }
+
+        // 清除旧的航点标记
+        for (const m of this.rppWaypointMarkers) {
+            this.rppPathGroup.remove(m);
+            m.geometry.dispose();
+            m.material.dispose();
+        }
+        this.rppWaypointMarkers = [];
+
+        if (waypoints.length === 0) return;
+
+        // 路径折线（Z-up，路径放在地面稍上方 z=0.005）
+        const linePoints = waypoints.map(wp => new THREE.Vector3(wp.x, wp.y, 0.005));
+        const lineGeom = new THREE.BufferGeometry().setFromPoints(linePoints);
+        const lineMat = new THREE.LineBasicMaterial({ color: 0x22d3ee, linewidth: 2, transparent: true, opacity: 0.85 });
+        this.rppPathLine = new THREE.Line(lineGeom, lineMat);
+        this.rppPathGroup.add(this.rppPathLine);
+
+        // 航点圆球
+        const sphereGeom = new THREE.SphereGeometry(0.025, 12, 8);
+        for (let i = 0; i < waypoints.length; i++) {
+            const wp = waypoints[i];
+            const isLast = i === waypoints.length - 1;
+            const color = isLast ? 0xf97316 : 0x22d3ee; // 最后一个点为橙色
+            const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9 });
+            const sphere = new THREE.Mesh(sphereGeom.clone(), mat);
+            sphere.position.set(wp.x, wp.y, 0.025);
+            this.rppPathGroup.add(sphere);
+            this.rppWaypointMarkers.push(sphere);
+        }
+
+        // 最后一个航点如有 yaw，画一个短箭头指示朝向
+        const lastWP = waypoints[waypoints.length - 1];
+        if (lastWP.yaw !== undefined) {
+            const arrowLen = 0.12;
+            const dirX = Math.cos(lastWP.yaw) * arrowLen;
+            const dirY = Math.sin(lastWP.yaw) * arrowLen;
+            const arrowPts = [
+                new THREE.Vector3(lastWP.x, lastWP.y, 0.01),
+                new THREE.Vector3(lastWP.x + dirX, lastWP.y + dirY, 0.01)
+            ];
+            const arrowGeom = new THREE.BufferGeometry().setFromPoints(arrowPts);
+            const arrowMat = new THREE.LineBasicMaterial({ color: 0xf97316, linewidth: 2 });
+            const arrowLine = new THREE.Line(arrowGeom, arrowMat);
+            this.rppPathGroup.add(arrowLine);
+            this.rppWaypointMarkers.push(arrowLine); // 便于统一清除
+        }
+    }
+
+    /**
+     * 设置前视点标记位置
+     * @param {{x:number, y:number}|null} point
+     */
+    setLookaheadPoint(point) {
+        this._initRPPPathGroup();
+
+        if (!point) {
+            if (this.rppLookaheadMarker) this.rppLookaheadMarker.visible = false;
+            return;
+        }
+
+        if (!this.rppLookaheadMarker) {
+            const geom = new THREE.SphereGeometry(0.035, 16, 12);
+            const mat = new THREE.MeshBasicMaterial({ color: 0xfbbf24, transparent: true, opacity: 0.9 });
+            this.rppLookaheadMarker = new THREE.Mesh(geom, mat);
+            this.rppLookaheadMarker.name = 'RPPLookaheadMarker';
+            this.rppPathGroup.add(this.rppLookaheadMarker);
+        }
+
+        this.rppLookaheadMarker.visible = true;
+        this.rppLookaheadMarker.position.set(point.x, point.y, 0.035);
+    }
+
+    /**
+     * 清除所有路径可视化
+     */
+    clearPathVisualization() {
+        if (this.rppPathLine) {
+            this.rppPathGroup?.remove(this.rppPathLine);
+            this.rppPathLine.geometry.dispose();
+            this.rppPathLine.material.dispose();
+            this.rppPathLine = null;
+        }
+        for (const m of this.rppWaypointMarkers) {
+            this.rppPathGroup?.remove(m);
+            if (m.geometry) m.geometry.dispose();
+            if (m.material) m.material.dispose();
+        }
+        this.rppWaypointMarkers = [];
+        if (this.rppLookaheadMarker) {
+            this.rppLookaheadMarker.visible = false;
+        }
+    }
+
+    /**
+     * 启用/禁用"点击地面添加航点"模式
+     */
+    setAddWaypointMode(enabled) {
+        this.rppAddWaypointMode = !!enabled;
+        if (this.canvas) {
+            this.canvas.style.cursor = enabled ? 'crosshair' : '';
+        }
+    }
+
+    /**
+     * 处理画布点击事件（在添加航点模式下 raycast 到地面）
+     * 通过 mousedown/mouseup 距离判断是否为"点击"而非"拖动"
+     */
+    _handleCanvasClickForWaypoint(e) {
+        if (!this.rppAddWaypointMode || !this.onGroundClick) return;
+
+        // 排除拖动操作
+        if (this.isDraggingEndEffector) return;
+
+        // 通过 mousedown → click 的时间差和距离判断是否为拖动（>5px 或 >300ms 判为拖动）
+        if (this._rppMouseDownPos) {
+            const dx = e.clientX - this._rppMouseDownPos.x;
+            const dy = e.clientY - this._rppMouseDownPos.y;
+            const dt = performance.now() - (this._rppMouseDownTime || 0);
+            if (Math.hypot(dx, dy) > 5 || dt > 400) return;
+        }
+
+        const rect = this.canvas.getBoundingClientRect();
+        const mouse = new THREE.Vector2(
+            ((e.clientX - rect.left) / rect.width) * 2 - 1,
+            -((e.clientY - rect.top) / rect.height) * 2 + 1
+        );
+        this.raycaster.setFromCamera(mouse, this.camera);
+
+        const intersection = new THREE.Vector3();
+        const hit = this.raycaster.ray.intersectPlane(this._groundPlane, intersection);
+        if (hit) {
+            this.onGroundClick(intersection.x, intersection.y);
+        }
+    }
+
     _createHumanoidDualArmVisualizations() {
         if (this.humanoidAbsoluteMarker) {
             this.scene.remove(this.humanoidAbsoluteMarker);
@@ -1182,6 +1397,9 @@ export class RobotVisualizer {
         if (!this.humanoidEffectorSpheres || !this.humanoidURDF) return;
         const robot = this.humanoidURDF;
         const linkNames = this.humanoidEffectorLinkNames;
+        const basePose = (typeof window !== 'undefined')
+            ? (window.humanoidBasePose || window.humanoidBaseTargetPose || { x: 0, y: 0, yaw: 0 })
+            : { x: 0, y: 0, yaw: 0 };
         let leftPos = null;
         let rightPos = null;
         if (Array.isArray(linkNames) && linkNames.length >= 4 && robot.links) {
@@ -1199,7 +1417,8 @@ export class RobotVisualizer {
             if (leftPos && rightPos) {
                 if (this.humanoidAbsoluteMarker && window.humanoidQ?.length) {
                     // 使用 DQ 公式计算的绝对位姿：x2 * pow(relative, 0.5)
-                    const dqAbsArray = this._getHumanoidAbsolutePose(window.humanoidQ);
+                    const dqAbsLocalArray = this._getHumanoidAbsolutePose(window.humanoidQ);
+                    const dqAbsArray = dqAbsLocalArray ? (this._composeHumanoidWorldPose(basePose, dqAbsLocalArray) || dqAbsLocalArray) : null;
                     if (dqAbsArray) {
                         const DQ = window.DQModule?.DQWrapper;
                         if (DQ) {
@@ -1226,7 +1445,8 @@ export class RobotVisualizer {
                 if (DQ && window.humanoidQ?.length && this.humanoidModel) {
                     // 腰部末端 (effector index 0)
                     if (this.humanoidWaistEndEffector) {
-                        const pose0 = this.humanoidModel.fkmEffector(window.humanoidQ, 0);
+                        const pose0Local = this.humanoidModel.fkmEffector(window.humanoidQ, 0);
+                        const pose0 = pose0Local ? (this._composeHumanoidWorldPose(basePose, pose0Local) || pose0Local) : null;
                         if (pose0?.length >= 8) {
                             const dq0 = DQ.createFromArray(pose0);
                             const t0 = DQ.getTranslation(dq0);
@@ -1238,7 +1458,8 @@ export class RobotVisualizer {
                     
                     // 左臂末端 (effector index 1)
                     if (this.humanoidLeftArmEndEffector) {
-                        const pose1 = this.humanoidModel.fkmEffector(window.humanoidQ, 1);
+                        const pose1Local = this.humanoidModel.fkmEffector(window.humanoidQ, 1);
+                        const pose1 = pose1Local ? (this._composeHumanoidWorldPose(basePose, pose1Local) || pose1Local) : null;
                         if (pose1?.length >= 8) {
                             const dq1 = DQ.createFromArray(pose1);
                             const t1 = DQ.getTranslation(dq1);
@@ -1264,7 +1485,8 @@ export class RobotVisualizer {
                     
                     // 右臂末端 (effector index 2)
                     if (this.humanoidRightArmEndEffector) {
-                        const pose2 = this.humanoidModel.fkmEffector(window.humanoidQ, 2);
+                        const pose2Local = this.humanoidModel.fkmEffector(window.humanoidQ, 2);
+                        const pose2 = pose2Local ? (this._composeHumanoidWorldPose(basePose, pose2Local) || pose2Local) : null;
                         if (pose2?.length >= 8) {
                             const dq2 = DQ.createFromArray(pose2);
                             const t2 = DQ.getTranslation(dq2);
@@ -1291,7 +1513,8 @@ export class RobotVisualizer {
                     
                     // 头部末端 (effector index 3)
                     if (this.humanoidHeadEndEffector) {
-                        const pose3 = this.humanoidModel.fkmEffector(window.humanoidQ, 3);
+                        const pose3Local = this.humanoidModel.fkmEffector(window.humanoidQ, 3);
+                        const pose3 = pose3Local ? (this._composeHumanoidWorldPose(basePose, pose3Local) || pose3Local) : null;
                         if (pose3?.length >= 8) {
                             const dq3 = DQ.createFromArray(pose3);
                             const t3 = DQ.getTranslation(dq3);
@@ -2147,8 +2370,8 @@ export class RobotVisualizer {
             
             console.log(`✓ 已创建双臂URDF坐标系: 机器人1(${robot1Links.length}个), 机器人2(${robot2Links.length}个)`);
         } else {
-            // 单臂模式
-            const robot = urdfRobot || this.urdfRobot;
+            // 单臂或人形模式：优先使用 humanoidURDF
+            const robot = urdfRobot || this.humanoidURDF || this.urdfRobot;
             if (!robot || !robot.links) {
                 console.warn('URDF机器人对象无效，无法创建坐标系');
                 return;
@@ -2253,8 +2476,8 @@ export class RobotVisualizer {
             this.updateURDFFramesForRobot(this.robot1URDF, 'robot1', this.urdfFrameRobot1Links);
             this.updateURDFFramesForRobot(this.robot2URDF, 'robot2', this.urdfFrameRobot2Links);
         } else {
-            // 单臂模式
-            const urdfRobot = this.urdfRobot;
+            // 单臂或人形模式：优先使用 humanoidURDF
+            const urdfRobot = this.humanoidURDF || this.urdfRobot;
             if (urdfRobot && urdfRobot.links) {
                 this.updateURDFFramesForRobot(urdfRobot, null, this.urdfFrameLinkNames);
             }
@@ -2353,18 +2576,18 @@ export class RobotVisualizer {
         if (this.showURDFFrames) {
             // 如果坐标系还没有初始化，尝试初始化
             if (!this.urdfFramesGroup) {
-                // 判断是单臂还是双臂模式
+                // 判断是单臂还是双臂还是人形模式
                 if (this.dualArmMode && this.robot1URDF && this.robot2URDF) {
                     // 双臂模式：同时初始化两个机器人
                     this.initURDFFrames(null, null, this.robot1URDF, this.robot2URDF);
                     console.log('URDF坐标系已自动初始化（双臂模式）');
                 } else {
-                    // 单臂模式
-                    const urdfRobot = this.urdfRobot;
+                    // 单臂或人形模式：优先使用 humanoidURDF，其次 urdfRobot
+                    const urdfRobot = this.humanoidURDF || this.urdfRobot;
                     if (urdfRobot && urdfRobot.links) {
                         const linkNames = Object.keys(urdfRobot.links);
                         this.initURDFFrames(urdfRobot, linkNames, null, null);
-                        console.log('URDF坐标系已自动初始化（单臂模式）');
+                        console.log(`URDF坐标系已自动初始化（${this.humanoidMode ? '人形' : '单臂'}模式，${linkNames.length}个link）`);
                     } else {
                         console.warn('无法自动初始化URDF坐标系：URDF机器人对象无效');
                         return;
@@ -3757,6 +3980,41 @@ export class RobotVisualizer {
         const inv1 = DQ.inverse(dq1);
         const rel = DQ.multiply(dq2, inv1);
         return DQ.toArray(rel);
+    }
+    _makeHumanoidBaseDQ(basePose = {}) {
+        const DQ = window.DQModule?.DQWrapper;
+        if (!DQ) return null;
+        const x = Number(basePose.x) || 0;
+        const y = Number(basePose.y) || 0;
+        const yaw = Number(basePose.yaw) || 0;
+        const h = 0.5 * yaw;
+        const c = Math.cos(h);
+        const s = Math.sin(h);
+        const rot = DQ.createFromArray([c, 0, 0, s, 0, 0, 0, 0]);
+        const trans = DQ.translation(x, y, 0);
+        return DQ.multiply(trans, rot);
+    }
+    _composeHumanoidWorldPose(basePose, localPoseArray) {
+        const DQ = window.DQModule?.DQWrapper;
+        if (!DQ || !Array.isArray(localPoseArray) || localPoseArray.length !== 8) return null;
+        const baseDQ = this._makeHumanoidBaseDQ(basePose);
+        if (!baseDQ) return null;
+        const localDQ = DQ.createFromArray(localPoseArray);
+        return DQ.toArray(DQ.multiply(baseDQ, localDQ));
+    }
+    _dqLeftMultiplicationMatrix(leftDQArray) {
+        const DQ = window.DQModule?.DQWrapper;
+        if (!DQ || !Array.isArray(leftDQArray) || leftDQArray.length !== 8) return null;
+        const leftDQ = DQ.createFromArray(leftDQArray);
+        const L = [];
+        for (let i = 0; i < 8; i++) L.push(new Array(8).fill(0));
+        for (let j = 0; j < 8; j++) {
+            const basis = new Array(8).fill(0);
+            basis[j] = 1;
+            const col = DQ.toArray(DQ.multiply(leftDQ, DQ.createFromArray(basis)));
+            for (let i = 0; i < 8; i++) L[i][j] = col[i];
+        }
+        return L;
     }
     /** 绝对位姿雅可比：优先使用 C++ 解析雅可比，否则数值微分 */
     _getHumanoidAbsolutePoseJacobian(q, eps = 1e-7) {
@@ -5265,7 +5523,7 @@ export class RobotVisualizer {
     }
     
     /**
-     * 全身控制：沿轴平移绝对位姿（腰部+双臂联动）
+     * 全身控制：沿轴平移绝对位姿（腰部+双臂联动，不含底盘）
      */
     moveHumanoidAbsolutePoseAlongAxisDecoupled(axis, direction) {
         if (!this.humanoidMode || !window.humanoidQ?.length) return;
@@ -5293,9 +5551,8 @@ export class RobotVisualizer {
             
             // 获取关节限位避免开关状态
             const enableLimitAvoidance = document.getElementById('joint-limit-avoidance-toggle')?.checked ?? true;
-            
-            // 使用相对位姿优先的零空间控制更新（相对位姿不变 > 绝对位姿跟踪 > 关节限位）
-            // 全身控制：包含腰部 (includeWaist=true)
+
+            // 不带底盘：仅腰部+双臂联动
             this.updateHumanoidJointsFromAbsolutePoseTargetRelativeFirst(dqTargetArray, window.humanoidQ, enableLimitAvoidance, true);
         } catch (e) {
             console.error('全身控制移动绝对位姿失败:', e);
@@ -5303,7 +5560,7 @@ export class RobotVisualizer {
     }
     
     /**
-     * 全身控制：绕轴旋转绝对位姿（腰部+双臂联动）
+     * 全身控制：绕轴旋转绝对位姿（腰部+双臂联动，不含底盘）
      */
     rotateHumanoidAbsolutePoseAroundAxisDecoupled(axis, direction) {
         if (!this.humanoidMode || !window.humanoidQ?.length) return;
@@ -5330,13 +5587,340 @@ export class RobotVisualizer {
             
             // 获取关节限位避免开关状态
             const enableLimitAvoidance = document.getElementById('joint-limit-avoidance-toggle')?.checked ?? true;
-            
-            // 使用相对位姿优先的零空间控制更新（相对位姿不变 > 绝对位姿跟踪 > 关节限位）
-            // 全身控制：包含腰部 (includeWaist=true)
+
+            // 不带底盘：仅腰部+双臂联动
             this.updateHumanoidJointsFromAbsolutePoseTargetRelativeFirst(DQ.toArray(dqAbsoluteTarget), window.humanoidQ, enableLimitAvoidance, true);
         } catch (e) {
             console.error('全身控制旋转绝对位姿失败:', e);
         }
+    }
+
+    /**
+     * 带底盘全身控制：沿轴平移绝对位姿（底盘+腰部+双臂）
+     */
+    moveHumanoidAbsolutePoseAlongAxisWithBase(axis, direction) {
+        if (!this.humanoidMode || !window.humanoidQ?.length) return;
+        const DQ = window.DQModule?.DQWrapper;
+        if (!DQ) return;
+
+        try {
+            const stepSize = this.getTeachTranslationStep();
+            const directionSign = direction === 'positive' ? 1 : -1;
+            const basePose = window.humanoidBasePose || window.humanoidBaseTargetPose || { x: 0, y: 0, yaw: 0 };
+            const dqAbsLocalArray = this._getHumanoidAbsolutePose(window.humanoidQ);
+            if (!dqAbsLocalArray) return;
+            const dqAbsWorldArray = this._composeHumanoidWorldPose(basePose, dqAbsLocalArray) || dqAbsLocalArray;
+            const dqAbsCurrent = DQ.createFromArray(dqAbsWorldArray);
+            const rotationArray = DQ.getRotation(dqAbsCurrent);
+            const rotationQuat = new THREE.Quaternion(rotationArray[1], rotationArray[2], rotationArray[3], rotationArray[0]);
+            const delta = this.getTranslationDirection(axis, rotationQuat).multiplyScalar(stepSize * directionSign);
+            const dqDelta = DQ.translation(delta.x, delta.y, delta.z);
+            const dqTargetArray = DQ.toArray(DQ.multiply(dqDelta, dqAbsCurrent));
+            const enableLimitAvoidance = document.getElementById('joint-limit-avoidance-toggle')?.checked ?? true;
+            this.updateHumanoidWholeBodyWithBaseFromAbsolutePoseTarget(
+                dqTargetArray,
+                window.humanoidQ,
+                basePose,
+                enableLimitAvoidance,
+                true,
+                { lockBaseYaw: true }
+            );
+        } catch (e) {
+            console.error('带底盘全身控制移动绝对位姿失败:', e);
+        }
+    }
+
+    /**
+     * 带底盘全身控制：绕轴旋转绝对位姿（底盘+腰部+双臂）
+     */
+    rotateHumanoidAbsolutePoseAroundAxisWithBase(axis, direction) {
+        if (!this.humanoidMode || !window.humanoidQ?.length) return;
+        const DQ = window.DQModule?.DQWrapper;
+        if (!DQ) return;
+
+        try {
+            const angle = this.getTeachRotationAngle();
+            const directionSign = direction === 'positive' ? 1 : -1;
+            const rotationAngle = angle * directionSign;
+            const basePose = window.humanoidBasePose || window.humanoidBaseTargetPose || { x: 0, y: 0, yaw: 0 };
+            const dqAbsoluteLocalArray = this._getHumanoidAbsolutePose(window.humanoidQ);
+            if (!dqAbsoluteLocalArray) return;
+            const dqAbsoluteWorldArray = this._composeHumanoidWorldPose(basePose, dqAbsoluteLocalArray) || dqAbsoluteLocalArray;
+            const dqAbsoluteCurrent = DQ.createFromArray(dqAbsoluteWorldArray);
+            let rotationDQ;
+            if (axis === 'rx') rotationDQ = DQ.rotation(rotationAngle, 1, 0, 0);
+            else if (axis === 'ry') rotationDQ = DQ.rotation(rotationAngle, 0, 1, 0);
+            else if (axis === 'rz') rotationDQ = DQ.rotation(rotationAngle, 0, 0, 1);
+            else return;
+            const dqAbsoluteTarget = this.combineDQWithTeachOrder(rotationDQ, dqAbsoluteCurrent, false);
+            const enableLimitAvoidance = document.getElementById('joint-limit-avoidance-toggle')?.checked ?? true;
+            this.updateHumanoidWholeBodyWithBaseFromAbsolutePoseTarget(
+                DQ.toArray(dqAbsoluteTarget),
+                window.humanoidQ,
+                basePose,
+                enableLimitAvoidance,
+                true,
+                { lockBaseYaw: false }
+            );
+        } catch (e) {
+            console.error('带底盘全身控制旋转绝对位姿失败:', e);
+        }
+    }
+
+    /**
+     * 全身绝对位姿控制（含底盘）：
+     * 相对位姿保持（高优先级） + 绝对位姿跟踪（次优先级）
+     * 求解变量：底盘 [x,y,yaw] + 活动关节（默认腰+双臂）
+     */
+    updateHumanoidWholeBodyWithBaseFromAbsolutePoseTarget(
+        dqAbsoluteTargetArray,
+        currentQ,
+        currentBasePose = null,
+        enableJointLimitAvoidance = true,
+        includeWaist = true,
+        options = {}
+    ) {
+        if (!this.humanoidModel || !window.humanoidQ || !currentQ || currentQ.length === 0) return false;
+        const DQ = window.DQModule?.DQWrapper;
+        if (!DQ || !Array.isArray(dqAbsoluteTargetArray) || dqAbsoluteTargetArray.length !== 8) return false;
+
+        const wrapAngle = (a) => {
+            let v = Number(a) || 0;
+            while (v > Math.PI) v -= 2 * Math.PI;
+            while (v < -Math.PI) v += 2 * Math.PI;
+            return v;
+        };
+
+        const baseStart = currentBasePose || window.humanoidBasePose || window.humanoidBaseTargetPose || { x: 0, y: 0, yaw: 0 };
+        const absLocalCurrent = this._getHumanoidAbsolutePose(currentQ);
+        const relCurrentArray = this._getHumanoidRelativePose(currentQ);
+        if (!absLocalCurrent || !relCurrentArray) return false;
+
+        const absWorldCurrent = this._composeHumanoidWorldPose(baseStart, absLocalCurrent);
+        if (!absWorldCurrent) return false;
+
+        let absTargetArray = [...dqAbsoluteTargetArray];
+        let dotAbsInit = 0;
+        for (let i = 0; i < 8; i++) dotAbsInit += absTargetArray[i] * absWorldCurrent[i];
+        if (dotAbsInit < 0) absTargetArray = absTargetArray.map(v => -v);
+
+        const waistCount = this.humanoidWaistLength;
+        const leftArmCount = this.humanoidLeftArmLength;
+        const rightArmCount = this.humanoidRightArmLength;
+        const activeStart = includeWaist ? 0 : waistCount;
+        const activeCount = includeWaist ? (waistCount + leftArmCount + rightArmCount) : (leftArmCount + rightArmCount);
+        if (activeCount <= 0) return false;
+
+        const lockBaseYaw = Boolean(options?.lockBaseYaw);
+        const baseVarCount = lockBaseYaw ? 2 : 3; // [x,y] or [x,y,yaw]
+        const varCount = baseVarCount + activeCount;
+        const jointLimits = this._getHumanoidJointLimits();
+
+        const x = new Array(varCount).fill(0);
+        x[0] = Number(baseStart.x) || 0;
+        x[1] = Number(baseStart.y) || 0;
+        if (!lockBaseYaw) {
+            x[2] = wrapAngle(baseStart.yaw);
+        }
+        for (let i = 0; i < activeCount; i++) {
+            x[baseVarCount + i] = currentQ[activeStart + i] || 0;
+        }
+
+        const kappaRel = 0.5;
+        const kappaAbs = 0.6;
+        const kappaLimit = 0.05;
+        const damping = 0.002;
+        const maxIter = 120;
+        const tol = 1e-12;
+        const maxJointStep = 0.003;
+        const maxBasePosStep = 0.008;
+        const maxBaseYawStep = 0.03;
+        const epsBase = 1e-6;
+        const margin = 0.1;
+        const W = lockBaseYaw
+            ? [0.9, 0.9, ...new Array(activeCount).fill(1.0)]
+            : [0.9, 0.9, 0.8, ...new Array(activeCount).fill(1.0)];
+
+        const buildQ = (xVec) => {
+            const q = [...currentQ];
+            for (let i = 0; i < activeCount; i++) q[activeStart + i] = xVec[baseVarCount + i];
+            return q;
+        };
+
+        let q = buildQ(x);
+        let converged = false;
+
+        for (let iter = 0; iter < maxIter; iter++) {
+            const baseNow = {
+                x: x[0],
+                y: x[1],
+                yaw: lockBaseYaw ? wrapAngle(baseStart.yaw) : wrapAngle(x[2])
+            };
+            q = buildQ(x);
+
+            const absLocalNow = this._getHumanoidAbsolutePose(q);
+            const relNow = this._getHumanoidRelativePose(q);
+            if (!absLocalNow || !relNow) break;
+
+            const absWorldNow = this._composeHumanoidWorldPose(baseNow, absLocalNow);
+            if (!absWorldNow) break;
+
+            let dotRel = 0;
+            for (let i = 0; i < 8; i++) dotRel += relCurrentArray[i] * relNow[i];
+            const signRel = dotRel < 0 ? -1 : 1;
+
+            let dotAbs = 0;
+            for (let i = 0; i < 8; i++) dotAbs += absTargetArray[i] * absWorldNow[i];
+            const signAbs = dotAbs < 0 ? -1 : 1;
+
+            const eRel = new Array(8).fill(0);
+            const eAbs = new Array(8).fill(0);
+            let eRelNorm2 = 0;
+            let eAbsNorm2 = 0;
+            for (let i = 0; i < 8; i++) {
+                eRel[i] = relCurrentArray[i] - signRel * relNow[i];
+                eAbs[i] = absTargetArray[i] - signAbs * absWorldNow[i];
+                eRelNorm2 += eRel[i] * eRel[i];
+                eAbsNorm2 += eAbs[i] * eAbs[i];
+            }
+            if (eRelNorm2 < tol && eAbsNorm2 < tol) {
+                converged = true;
+                break;
+            }
+
+            const JrelFull = this._getHumanoidRelativePoseJacobian(q);
+            const JabsLocalFull = this._getHumanoidAbsolutePoseJacobian(q);
+            if (!JrelFull || !JabsLocalFull) break;
+
+            const J1 = [];
+            const J2 = [];
+            for (let row = 0; row < 8; row++) {
+                J1.push(new Array(varCount).fill(0));
+                J2.push(new Array(varCount).fill(0));
+            }
+
+            for (let row = 0; row < 8; row++) {
+                for (let i = 0; i < activeCount; i++) {
+                    J1[row][baseVarCount + i] = JrelFull[row][activeStart + i] || 0;
+                }
+            }
+
+            const baseDQObj = this._makeHumanoidBaseDQ(baseNow);
+            const baseDQArray = baseDQObj ? DQ.toArray(baseDQObj) : null;
+            const Lb = baseDQArray ? this._dqLeftMultiplicationMatrix(baseDQArray) : null;
+            if (!Lb) break;
+            const JabsActiveLocal = [];
+            for (let row = 0; row < 8; row++) {
+                JabsActiveLocal.push(JabsLocalFull[row].slice(activeStart, activeStart + activeCount));
+            }
+            const JabsActiveWorld = this._matMul(Lb, JabsActiveLocal);
+            for (let row = 0; row < 8; row++) {
+                for (let i = 0; i < activeCount; i++) {
+                    J2[row][baseVarCount + i] = JabsActiveWorld[row][i] || 0;
+                }
+            }
+
+            const basePlusX = this._composeHumanoidWorldPose({ x: baseNow.x + epsBase, y: baseNow.y, yaw: baseNow.yaw }, absLocalNow);
+            const baseMinusX = this._composeHumanoidWorldPose({ x: baseNow.x - epsBase, y: baseNow.y, yaw: baseNow.yaw }, absLocalNow);
+            const basePlusY = this._composeHumanoidWorldPose({ x: baseNow.x, y: baseNow.y + epsBase, yaw: baseNow.yaw }, absLocalNow);
+            const baseMinusY = this._composeHumanoidWorldPose({ x: baseNow.x, y: baseNow.y - epsBase, yaw: baseNow.yaw }, absLocalNow);
+            const basePlusYaw = this._composeHumanoidWorldPose({ x: baseNow.x, y: baseNow.y, yaw: baseNow.yaw + epsBase }, absLocalNow);
+            const baseMinusYaw = this._composeHumanoidWorldPose({ x: baseNow.x, y: baseNow.y, yaw: baseNow.yaw - epsBase }, absLocalNow);
+            if (!basePlusX || !baseMinusX || !basePlusY || !baseMinusY || !basePlusYaw || !baseMinusYaw) break;
+
+            for (let row = 0; row < 8; row++) {
+                J2[row][0] = (basePlusX[row] - baseMinusX[row]) / (2 * epsBase);
+                J2[row][1] = (basePlusY[row] - baseMinusY[row]) / (2 * epsBase);
+                if (!lockBaseYaw) {
+                    J2[row][2] = (basePlusYaw[row] - baseMinusYaw[row]) / (2 * epsBase);
+                }
+            }
+
+            const J1Pinv = this._weightedDampedPseudoInverse(J1, W, damping);
+            if (!J1Pinv) break;
+            const P1 = this._computeNullspaceProjection(J1Pinv, J1, varCount);
+            const J2Bar = this._matMul(J2, P1);
+            const J2BarPinv = this._weightedDampedPseudoInverse(J2Bar, W, damping);
+            if (!J2BarPinv) break;
+            const P12 = this._computeNullspaceProjection2(P1, J2BarPinv, J2Bar, varCount);
+
+            const gradLimit = new Array(varCount).fill(0);
+            if (enableJointLimitAvoidance && jointLimits) {
+                for (let i = 0; i < activeCount; i++) {
+                    const globalIdx = activeStart + i;
+                    const lim = jointLimits[globalIdx];
+                    if (!lim) continue;
+                    const range = lim.upper - lim.lower;
+                    const threshold = range * margin;
+                    const qi = q[globalIdx] || 0;
+                    if (qi < lim.lower + threshold) {
+                        const d = lim.lower + threshold - qi;
+                    gradLimit[baseVarCount + i] = d / Math.max(threshold, 1e-6);
+                } else if (qi > lim.upper - threshold) {
+                    const d = qi - (lim.upper - threshold);
+                    gradLimit[baseVarCount + i] = -d / Math.max(threshold, 1e-6);
+                }
+            }
+        }
+
+            const dx = new Array(varCount).fill(0);
+            for (let i = 0; i < varCount; i++) {
+                for (let j = 0; j < 8; j++) dx[i] += J1Pinv[i][j] * kappaRel * eRel[j];
+            }
+            const dx2Temp = new Array(varCount).fill(0);
+            for (let i = 0; i < varCount; i++) {
+                for (let j = 0; j < 8; j++) dx2Temp[i] += J2BarPinv[i][j] * kappaAbs * eAbs[j];
+            }
+            for (let i = 0; i < varCount; i++) {
+                for (let j = 0; j < varCount; j++) dx[i] += P1[i][j] * dx2Temp[j];
+            }
+            if (enableJointLimitAvoidance) {
+                for (let i = 0; i < varCount; i++) {
+                    for (let j = 0; j < varCount; j++) dx[i] += P12[i][j] * kappaLimit * gradLimit[j];
+                }
+            }
+
+            x[0] += Math.max(-maxBasePosStep, Math.min(maxBasePosStep, dx[0]));
+            x[1] += Math.max(-maxBasePosStep, Math.min(maxBasePosStep, dx[1]));
+            if (!lockBaseYaw) {
+                x[2] = wrapAngle(x[2] + Math.max(-maxBaseYawStep, Math.min(maxBaseYawStep, dx[2])));
+            }
+            for (let i = 0; i < activeCount; i++) {
+                const step = Math.max(-maxJointStep, Math.min(maxJointStep, dx[baseVarCount + i]));
+                x[baseVarCount + i] += step;
+            }
+
+            if (jointLimits) {
+                for (let i = 0; i < activeCount; i++) {
+                    const globalIdx = activeStart + i;
+                    const lim = jointLimits[globalIdx];
+                    if (!lim) continue;
+                    x[baseVarCount + i] = Math.max(lim.lower, Math.min(lim.upper, x[baseVarCount + i]));
+                }
+            }
+        }
+
+        if (!converged) {
+            // 继续应用当前最优值，不因未严格收敛而丢弃结果
+        }
+
+        const qSol = buildQ(x);
+        for (let i = 0; i < window.humanoidQ.length && i < qSol.length; i++) window.humanoidQ[i] = qSol[i];
+        this.setHumanoidJoints(window.humanoidQ);
+
+        if (typeof window !== 'undefined') {
+            if (window.humanoidBaseTargetPose) {
+                window.humanoidBaseTargetPose.x = x[0];
+                window.humanoidBaseTargetPose.y = x[1];
+                window.humanoidBaseTargetPose.yaw = lockBaseYaw ? wrapAngle(baseStart.yaw) : wrapAngle(x[2]);
+            }
+            if (typeof window.humanoidBaseConvergedCount === 'number') {
+                window.humanoidBaseConvergedCount = 0;
+            }
+        }
+        if (window.updateGlobalVariables) window.updateGlobalVariables();
+        if (window.updateRobotPose) window.updateRobotPose();
+        return true;
     }
     
     /**
@@ -7608,6 +8192,12 @@ export class RobotVisualizer {
         if (this.endEffector) {
             return this.endEffector;
         }
+        // 人形模式：优先返回绝对位姿标记或左臂末端
+        if (this.humanoidMode) {
+            if (this.humanoidAbsoluteMarker) return this.humanoidAbsoluteMarker;
+            if (this.humanoidLeftArmEndEffector) return this.humanoidLeftArmEndEffector;
+            if (this.humanoidRightArmEndEffector) return this.humanoidRightArmEndEffector;
+        }
         if (this.dualArmMode) {
             const activeMode = typeof window !== 'undefined' ? window.currentDualArmControlMode : null;
             if (activeMode === 'robot2' && this.robot2EndEffector) {
@@ -7643,7 +8233,7 @@ export class RobotVisualizer {
      * @returns {boolean}
      */
     hasAbsolutePoseMarker() {
-        return !!this.absolutePoseMarker;
+        return !!(this.absolutePoseMarker || (this.humanoidMode && this.humanoidAbsoluteMarker));
     }
 
     /**
@@ -7661,10 +8251,13 @@ export class RobotVisualizer {
         let anchor = null;
 
         if (target === 'dual-absolute') {
-            if (!this.dualArmMode || !this.absolutePoseMarker) {
+            if (this.humanoidMode && this.humanoidAbsoluteMarker) {
+                anchor = this.humanoidAbsoluteMarker;
+            } else if (this.dualArmMode && this.absolutePoseMarker) {
+                anchor = this.absolutePoseMarker;
+            } else {
                 throw new Error('当前没有可用的双臂绝对姿态小球');
             }
-            anchor = this.absolutePoseMarker;
         } else if (target === 'end-effector') {
             anchor = this.getPrimaryEndEffectorAnchor();
             if (!anchor) {
