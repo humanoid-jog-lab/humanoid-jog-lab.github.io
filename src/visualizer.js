@@ -89,6 +89,10 @@ export class RobotVisualizer {
         this.environmentGroup = null;
         this.environmentObjects = new Map();
 
+        // 场景预设管理
+        this.scenePresetGroup = null;  // 当前加载的场景预设 Group
+        this.currentScenePreset = null; // 当前预设 ID（如 'warehouse'）
+
         // 预分配临时向量，减少频繁创建
         this._tempVec3 = new THREE.Vector3();
         this._tempQuat = new THREE.Quaternion();
@@ -5596,334 +5600,6 @@ export class RobotVisualizer {
     }
 
     /**
-     * 带底盘全身控制：沿轴平移绝对位姿（底盘+腰部+双臂）
-     */
-    moveHumanoidAbsolutePoseAlongAxisWithBase(axis, direction) {
-        if (!this.humanoidMode || !window.humanoidQ?.length) return;
-        const DQ = window.DQModule?.DQWrapper;
-        if (!DQ) return;
-
-        try {
-            const stepSize = this.getTeachTranslationStep();
-            const directionSign = direction === 'positive' ? 1 : -1;
-            const basePose = window.humanoidBasePose || window.humanoidBaseTargetPose || { x: 0, y: 0, yaw: 0 };
-            const dqAbsLocalArray = this._getHumanoidAbsolutePose(window.humanoidQ);
-            if (!dqAbsLocalArray) return;
-            const dqAbsWorldArray = this._composeHumanoidWorldPose(basePose, dqAbsLocalArray) || dqAbsLocalArray;
-            const dqAbsCurrent = DQ.createFromArray(dqAbsWorldArray);
-            const rotationArray = DQ.getRotation(dqAbsCurrent);
-            const rotationQuat = new THREE.Quaternion(rotationArray[1], rotationArray[2], rotationArray[3], rotationArray[0]);
-            const delta = this.getTranslationDirection(axis, rotationQuat).multiplyScalar(stepSize * directionSign);
-            const dqDelta = DQ.translation(delta.x, delta.y, delta.z);
-            const dqTargetArray = DQ.toArray(DQ.multiply(dqDelta, dqAbsCurrent));
-            const enableLimitAvoidance = document.getElementById('joint-limit-avoidance-toggle')?.checked ?? true;
-            this.updateHumanoidWholeBodyWithBaseFromAbsolutePoseTarget(
-                dqTargetArray,
-                window.humanoidQ,
-                basePose,
-                enableLimitAvoidance,
-                true,
-                { lockBaseYaw: true }
-            );
-        } catch (e) {
-            console.error('带底盘全身控制移动绝对位姿失败:', e);
-        }
-    }
-
-    /**
-     * 带底盘全身控制：绕轴旋转绝对位姿（底盘+腰部+双臂）
-     */
-    rotateHumanoidAbsolutePoseAroundAxisWithBase(axis, direction) {
-        if (!this.humanoidMode || !window.humanoidQ?.length) return;
-        const DQ = window.DQModule?.DQWrapper;
-        if (!DQ) return;
-
-        try {
-            const angle = this.getTeachRotationAngle();
-            const directionSign = direction === 'positive' ? 1 : -1;
-            const rotationAngle = angle * directionSign;
-            const basePose = window.humanoidBasePose || window.humanoidBaseTargetPose || { x: 0, y: 0, yaw: 0 };
-            const dqAbsoluteLocalArray = this._getHumanoidAbsolutePose(window.humanoidQ);
-            if (!dqAbsoluteLocalArray) return;
-            const dqAbsoluteWorldArray = this._composeHumanoidWorldPose(basePose, dqAbsoluteLocalArray) || dqAbsoluteLocalArray;
-            const dqAbsoluteCurrent = DQ.createFromArray(dqAbsoluteWorldArray);
-            let rotationDQ;
-            if (axis === 'rx') rotationDQ = DQ.rotation(rotationAngle, 1, 0, 0);
-            else if (axis === 'ry') rotationDQ = DQ.rotation(rotationAngle, 0, 1, 0);
-            else if (axis === 'rz') rotationDQ = DQ.rotation(rotationAngle, 0, 0, 1);
-            else return;
-            const dqAbsoluteTarget = this.combineDQWithTeachOrder(rotationDQ, dqAbsoluteCurrent, false);
-            const enableLimitAvoidance = document.getElementById('joint-limit-avoidance-toggle')?.checked ?? true;
-            this.updateHumanoidWholeBodyWithBaseFromAbsolutePoseTarget(
-                DQ.toArray(dqAbsoluteTarget),
-                window.humanoidQ,
-                basePose,
-                enableLimitAvoidance,
-                true,
-                { lockBaseYaw: false }
-            );
-        } catch (e) {
-            console.error('带底盘全身控制旋转绝对位姿失败:', e);
-        }
-    }
-
-    /**
-     * 全身绝对位姿控制（含底盘）：
-     * 相对位姿保持（高优先级） + 绝对位姿跟踪（次优先级）
-     * 求解变量：底盘 [x,y,yaw] + 活动关节（默认腰+双臂）
-     */
-    updateHumanoidWholeBodyWithBaseFromAbsolutePoseTarget(
-        dqAbsoluteTargetArray,
-        currentQ,
-        currentBasePose = null,
-        enableJointLimitAvoidance = true,
-        includeWaist = true,
-        options = {}
-    ) {
-        if (!this.humanoidModel || !window.humanoidQ || !currentQ || currentQ.length === 0) return false;
-        const DQ = window.DQModule?.DQWrapper;
-        if (!DQ || !Array.isArray(dqAbsoluteTargetArray) || dqAbsoluteTargetArray.length !== 8) return false;
-
-        const wrapAngle = (a) => {
-            let v = Number(a) || 0;
-            while (v > Math.PI) v -= 2 * Math.PI;
-            while (v < -Math.PI) v += 2 * Math.PI;
-            return v;
-        };
-
-        const baseStart = currentBasePose || window.humanoidBasePose || window.humanoidBaseTargetPose || { x: 0, y: 0, yaw: 0 };
-        const absLocalCurrent = this._getHumanoidAbsolutePose(currentQ);
-        const relCurrentArray = this._getHumanoidRelativePose(currentQ);
-        if (!absLocalCurrent || !relCurrentArray) return false;
-
-        const absWorldCurrent = this._composeHumanoidWorldPose(baseStart, absLocalCurrent);
-        if (!absWorldCurrent) return false;
-
-        let absTargetArray = [...dqAbsoluteTargetArray];
-        let dotAbsInit = 0;
-        for (let i = 0; i < 8; i++) dotAbsInit += absTargetArray[i] * absWorldCurrent[i];
-        if (dotAbsInit < 0) absTargetArray = absTargetArray.map(v => -v);
-
-        const waistCount = this.humanoidWaistLength;
-        const leftArmCount = this.humanoidLeftArmLength;
-        const rightArmCount = this.humanoidRightArmLength;
-        const activeStart = includeWaist ? 0 : waistCount;
-        const activeCount = includeWaist ? (waistCount + leftArmCount + rightArmCount) : (leftArmCount + rightArmCount);
-        if (activeCount <= 0) return false;
-
-        const lockBaseYaw = Boolean(options?.lockBaseYaw);
-        const baseVarCount = lockBaseYaw ? 2 : 3; // [x,y] or [x,y,yaw]
-        const varCount = baseVarCount + activeCount;
-        const jointLimits = this._getHumanoidJointLimits();
-
-        const x = new Array(varCount).fill(0);
-        x[0] = Number(baseStart.x) || 0;
-        x[1] = Number(baseStart.y) || 0;
-        if (!lockBaseYaw) {
-            x[2] = wrapAngle(baseStart.yaw);
-        }
-        for (let i = 0; i < activeCount; i++) {
-            x[baseVarCount + i] = currentQ[activeStart + i] || 0;
-        }
-
-        const kappaRel = 0.5;
-        const kappaAbs = 0.6;
-        const kappaLimit = 0.05;
-        const damping = 0.002;
-        const maxIter = 120;
-        const tol = 1e-12;
-        const maxJointStep = 0.003;
-        const maxBasePosStep = 0.008;
-        const maxBaseYawStep = 0.03;
-        const epsBase = 1e-6;
-        const margin = 0.1;
-        const W = lockBaseYaw
-            ? [0.9, 0.9, ...new Array(activeCount).fill(1.0)]
-            : [0.9, 0.9, 0.8, ...new Array(activeCount).fill(1.0)];
-
-        const buildQ = (xVec) => {
-            const q = [...currentQ];
-            for (let i = 0; i < activeCount; i++) q[activeStart + i] = xVec[baseVarCount + i];
-            return q;
-        };
-
-        let q = buildQ(x);
-        let converged = false;
-
-        for (let iter = 0; iter < maxIter; iter++) {
-            const baseNow = {
-                x: x[0],
-                y: x[1],
-                yaw: lockBaseYaw ? wrapAngle(baseStart.yaw) : wrapAngle(x[2])
-            };
-            q = buildQ(x);
-
-            const absLocalNow = this._getHumanoidAbsolutePose(q);
-            const relNow = this._getHumanoidRelativePose(q);
-            if (!absLocalNow || !relNow) break;
-
-            const absWorldNow = this._composeHumanoidWorldPose(baseNow, absLocalNow);
-            if (!absWorldNow) break;
-
-            let dotRel = 0;
-            for (let i = 0; i < 8; i++) dotRel += relCurrentArray[i] * relNow[i];
-            const signRel = dotRel < 0 ? -1 : 1;
-
-            let dotAbs = 0;
-            for (let i = 0; i < 8; i++) dotAbs += absTargetArray[i] * absWorldNow[i];
-            const signAbs = dotAbs < 0 ? -1 : 1;
-
-            const eRel = new Array(8).fill(0);
-            const eAbs = new Array(8).fill(0);
-            let eRelNorm2 = 0;
-            let eAbsNorm2 = 0;
-            for (let i = 0; i < 8; i++) {
-                eRel[i] = relCurrentArray[i] - signRel * relNow[i];
-                eAbs[i] = absTargetArray[i] - signAbs * absWorldNow[i];
-                eRelNorm2 += eRel[i] * eRel[i];
-                eAbsNorm2 += eAbs[i] * eAbs[i];
-            }
-            if (eRelNorm2 < tol && eAbsNorm2 < tol) {
-                converged = true;
-                break;
-            }
-
-            const JrelFull = this._getHumanoidRelativePoseJacobian(q);
-            const JabsLocalFull = this._getHumanoidAbsolutePoseJacobian(q);
-            if (!JrelFull || !JabsLocalFull) break;
-
-            const J1 = [];
-            const J2 = [];
-            for (let row = 0; row < 8; row++) {
-                J1.push(new Array(varCount).fill(0));
-                J2.push(new Array(varCount).fill(0));
-            }
-
-            for (let row = 0; row < 8; row++) {
-                for (let i = 0; i < activeCount; i++) {
-                    J1[row][baseVarCount + i] = JrelFull[row][activeStart + i] || 0;
-                }
-            }
-
-            const baseDQObj = this._makeHumanoidBaseDQ(baseNow);
-            const baseDQArray = baseDQObj ? DQ.toArray(baseDQObj) : null;
-            const Lb = baseDQArray ? this._dqLeftMultiplicationMatrix(baseDQArray) : null;
-            if (!Lb) break;
-            const JabsActiveLocal = [];
-            for (let row = 0; row < 8; row++) {
-                JabsActiveLocal.push(JabsLocalFull[row].slice(activeStart, activeStart + activeCount));
-            }
-            const JabsActiveWorld = this._matMul(Lb, JabsActiveLocal);
-            for (let row = 0; row < 8; row++) {
-                for (let i = 0; i < activeCount; i++) {
-                    J2[row][baseVarCount + i] = JabsActiveWorld[row][i] || 0;
-                }
-            }
-
-            const basePlusX = this._composeHumanoidWorldPose({ x: baseNow.x + epsBase, y: baseNow.y, yaw: baseNow.yaw }, absLocalNow);
-            const baseMinusX = this._composeHumanoidWorldPose({ x: baseNow.x - epsBase, y: baseNow.y, yaw: baseNow.yaw }, absLocalNow);
-            const basePlusY = this._composeHumanoidWorldPose({ x: baseNow.x, y: baseNow.y + epsBase, yaw: baseNow.yaw }, absLocalNow);
-            const baseMinusY = this._composeHumanoidWorldPose({ x: baseNow.x, y: baseNow.y - epsBase, yaw: baseNow.yaw }, absLocalNow);
-            const basePlusYaw = this._composeHumanoidWorldPose({ x: baseNow.x, y: baseNow.y, yaw: baseNow.yaw + epsBase }, absLocalNow);
-            const baseMinusYaw = this._composeHumanoidWorldPose({ x: baseNow.x, y: baseNow.y, yaw: baseNow.yaw - epsBase }, absLocalNow);
-            if (!basePlusX || !baseMinusX || !basePlusY || !baseMinusY || !basePlusYaw || !baseMinusYaw) break;
-
-            for (let row = 0; row < 8; row++) {
-                J2[row][0] = (basePlusX[row] - baseMinusX[row]) / (2 * epsBase);
-                J2[row][1] = (basePlusY[row] - baseMinusY[row]) / (2 * epsBase);
-                if (!lockBaseYaw) {
-                    J2[row][2] = (basePlusYaw[row] - baseMinusYaw[row]) / (2 * epsBase);
-                }
-            }
-
-            const J1Pinv = this._weightedDampedPseudoInverse(J1, W, damping);
-            if (!J1Pinv) break;
-            const P1 = this._computeNullspaceProjection(J1Pinv, J1, varCount);
-            const J2Bar = this._matMul(J2, P1);
-            const J2BarPinv = this._weightedDampedPseudoInverse(J2Bar, W, damping);
-            if (!J2BarPinv) break;
-            const P12 = this._computeNullspaceProjection2(P1, J2BarPinv, J2Bar, varCount);
-
-            const gradLimit = new Array(varCount).fill(0);
-            if (enableJointLimitAvoidance && jointLimits) {
-                for (let i = 0; i < activeCount; i++) {
-                    const globalIdx = activeStart + i;
-                    const lim = jointLimits[globalIdx];
-                    if (!lim) continue;
-                    const range = lim.upper - lim.lower;
-                    const threshold = range * margin;
-                    const qi = q[globalIdx] || 0;
-                    if (qi < lim.lower + threshold) {
-                        const d = lim.lower + threshold - qi;
-                    gradLimit[baseVarCount + i] = d / Math.max(threshold, 1e-6);
-                } else if (qi > lim.upper - threshold) {
-                    const d = qi - (lim.upper - threshold);
-                    gradLimit[baseVarCount + i] = -d / Math.max(threshold, 1e-6);
-                }
-            }
-        }
-
-            const dx = new Array(varCount).fill(0);
-            for (let i = 0; i < varCount; i++) {
-                for (let j = 0; j < 8; j++) dx[i] += J1Pinv[i][j] * kappaRel * eRel[j];
-            }
-            const dx2Temp = new Array(varCount).fill(0);
-            for (let i = 0; i < varCount; i++) {
-                for (let j = 0; j < 8; j++) dx2Temp[i] += J2BarPinv[i][j] * kappaAbs * eAbs[j];
-            }
-            for (let i = 0; i < varCount; i++) {
-                for (let j = 0; j < varCount; j++) dx[i] += P1[i][j] * dx2Temp[j];
-            }
-            if (enableJointLimitAvoidance) {
-                for (let i = 0; i < varCount; i++) {
-                    for (let j = 0; j < varCount; j++) dx[i] += P12[i][j] * kappaLimit * gradLimit[j];
-                }
-            }
-
-            x[0] += Math.max(-maxBasePosStep, Math.min(maxBasePosStep, dx[0]));
-            x[1] += Math.max(-maxBasePosStep, Math.min(maxBasePosStep, dx[1]));
-            if (!lockBaseYaw) {
-                x[2] = wrapAngle(x[2] + Math.max(-maxBaseYawStep, Math.min(maxBaseYawStep, dx[2])));
-            }
-            for (let i = 0; i < activeCount; i++) {
-                const step = Math.max(-maxJointStep, Math.min(maxJointStep, dx[baseVarCount + i]));
-                x[baseVarCount + i] += step;
-            }
-
-            if (jointLimits) {
-                for (let i = 0; i < activeCount; i++) {
-                    const globalIdx = activeStart + i;
-                    const lim = jointLimits[globalIdx];
-                    if (!lim) continue;
-                    x[baseVarCount + i] = Math.max(lim.lower, Math.min(lim.upper, x[baseVarCount + i]));
-                }
-            }
-        }
-
-        if (!converged) {
-            // 继续应用当前最优值，不因未严格收敛而丢弃结果
-        }
-
-        const qSol = buildQ(x);
-        for (let i = 0; i < window.humanoidQ.length && i < qSol.length; i++) window.humanoidQ[i] = qSol[i];
-        this.setHumanoidJoints(window.humanoidQ);
-
-        if (typeof window !== 'undefined') {
-            if (window.humanoidBaseTargetPose) {
-                window.humanoidBaseTargetPose.x = x[0];
-                window.humanoidBaseTargetPose.y = x[1];
-                window.humanoidBaseTargetPose.yaw = lockBaseYaw ? wrapAngle(baseStart.yaw) : wrapAngle(x[2]);
-            }
-            if (typeof window.humanoidBaseConvergedCount === 'number') {
-                window.humanoidBaseConvergedCount = 0;
-            }
-        }
-        if (window.updateGlobalVariables) window.updateGlobalVariables();
-        if (window.updateRobotPose) window.updateRobotPose();
-        return true;
-    }
-    
-    /**
      * 全身相对位姿控制：沿轴平移相对位姿（腰部+双臂联动）
      */
     moveHumanoidRelativePoseAlongAxisFullbody(axis, direction) {
@@ -8182,6 +7858,71 @@ export class RobotVisualizer {
             this.removeEnvironmentObject(id);
         });
         this.environmentObjects.clear();
+    }
+
+    // ── 场景预设管理 ─────────────────────────────────
+
+    /**
+     * 加载场景预设
+     * @param {string} presetId - 预设 ID（如 'warehouse'）
+     * @param {THREE.Group} presetGroup - 由环境构建器生成的 Three.js Group
+     * @returns {boolean}
+     */
+    loadScenePreset(presetId, presetGroup) {
+        if (!this.scene) {
+            console.warn('场景未初始化，无法加载场景预设');
+            return false;
+        }
+
+        // 清除已有预设
+        this.clearScenePreset();
+
+        // 添加新预设
+        this.scenePresetGroup = presetGroup;
+        this.currentScenePreset = presetId;
+        this.scene.add(this.scenePresetGroup);
+
+        console.log(`✓ 已加载场景预设: ${presetId}`);
+        return true;
+    }
+
+    /**
+     * 清除当前场景预设
+     * @returns {boolean}
+     */
+    clearScenePreset() {
+        if (!this.scenePresetGroup) {
+            return false;
+        }
+
+        // 递归释放所有子对象资源
+        this.scenePresetGroup.traverse((child) => {
+            if (child.isMesh) {
+                if (child.geometry) child.geometry.dispose();
+                if (child.material) {
+                    if (Array.isArray(child.material)) {
+                        child.material.forEach((m) => m.dispose());
+                    } else {
+                        child.material.dispose();
+                    }
+                }
+            }
+        });
+
+        this.scene.remove(this.scenePresetGroup);
+        this.scenePresetGroup = null;
+        this.currentScenePreset = null;
+
+        console.log('✓ 已清除场景预设');
+        return true;
+    }
+
+    /**
+     * 获取当前场景预设 ID
+     * @returns {string|null}
+     */
+    getCurrentScenePreset() {
+        return this.currentScenePreset;
     }
 
     /**

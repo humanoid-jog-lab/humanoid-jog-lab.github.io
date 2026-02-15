@@ -119,7 +119,6 @@
                                 <select id="dual-arm-control-mode-select" style="width: 100%; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;">
                                     <option value="absolute">绝对位姿</option>
                                     <option value="decoupled">全身绝对位姿</option>
-                                    <option value="decoupled-with-base">带底盘全身绝对位姿</option>
                                     <option value="relative">相对位姿</option>
                                     <option value="relative-fullbody">全身相对位姿</option>
                                     <option value="distance">相对距离</option>
@@ -200,6 +199,50 @@
                                 <button class="teach-distance-btn teach-btn teach-btn-negative" data-direction="negative">d-</button>
                                 <button class="teach-distance-btn teach-btn teach-btn-positive" data-direction="positive">d+</button>
                             </div>
+                        </div>
+                    </div>
+
+                    <div class="panel-section" id="planned-motion-section" style="display: none;">
+                        <h3 style="margin-bottom: 0.5rem; font-size: 0.9rem; color: #cbd5e1;">规划运动</h3>
+                        <p style="font-size: 0.75rem; color: #94a3b8; margin-bottom: 0.5rem;">
+                            输入目标绝对位姿（世界坐标系 DQ），系统自动判断：偏差较大时先移动底盘再补偿手臂，偏差较小时直接手臂调整。
+                        </p>
+                        <div style="margin-bottom: 0.5rem;">
+                            <label style="font-size: 0.85rem; color: #cbd5e1; display: block; margin-bottom: 0.25rem;">
+                                目标双四元数（8 个数，空格/逗号分隔）：
+                            </label>
+                            <div style="display: flex; gap: 0.35rem;">
+                                <input
+                                    type="text"
+                                    id="planned-motion-dq-input"
+                                    placeholder="qw qx qy qz qw' qx' qy' qz'"
+                                    style="flex: 1; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;"
+                                >
+                                <button id="planned-motion-copy-current" class="demo-btn" style="padding: 0.35rem 0.6rem; font-size: 0.75rem; white-space: nowrap;">
+                                    填入当前
+                                </button>
+                            </div>
+                        </div>
+                        <div style="margin-bottom: 0.5rem;">
+                            <label style="font-size: 0.85rem; color: #cbd5e1; display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.25rem;">
+                                <span>底盘启动阈值</span>
+                                <span><code id="planned-motion-threshold-value">40</code> cm</span>
+                            </label>
+                            <input id="planned-motion-threshold" type="range" min="10" max="100" value="40" step="5" style="width: 100%;">
+                            <div style="font-size: 0.7rem; color: #64748b; margin-top: 0.15rem;">
+                                偏差大于此值时先移动底盘，否则直接手臂补偿
+                            </div>
+                        </div>
+                        <div style="display: flex; gap: 0.5rem; margin-bottom: 0.5rem;">
+                            <button id="planned-motion-execute-btn" class="demo-btn" style="flex: 1;">
+                                执行规划运动
+                            </button>
+                            <button id="planned-motion-cancel-btn" class="demo-btn" style="flex: 0 0 auto; padding: 0.35rem 0.75rem;" disabled>
+                                取消
+                            </button>
+                        </div>
+                        <div id="planned-motion-status" class="planned-motion-status">
+                            就绪
                         </div>
                     </div>
                 </div>
@@ -428,6 +471,19 @@
             <button class="panel-toggle" id="environment-toggle">+</button>
         </div>
         <div class="panel-body">
+            <div class="panel-section">
+                <h2>场景预设</h2>
+                <p class="panel-subtitle env-panel-description">
+                    选择预设环境场景，为机器人提供仿真工作空间。
+                </p>
+                <div class="env-actions" style="display: flex; align-items: center; gap: 0.5rem;">
+                    <select id="scene-preset-select" style="flex: 1; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;">
+                        <option value="none">无场景</option>
+                        <option value="warehouse">仓储机器人环境</option>
+                    </select>
+                </div>
+                <div id="scene-preset-info" class="scene-preset-info" style="display: none;"></div>
+            </div>
             <div class="panel-section">
                 <h2>环境物体</h2>
                 <p class="panel-subtitle env-panel-description">
