@@ -383,6 +383,16 @@ function setupEventListeners() {
                             }, 20);
                         }
                     }
+                } else if (controlMode === 'waist-body-link-xz') {
+                    // 腰部 body_link 点动：仅支持 X/Z 平移（仅人形模式）
+                    if (appState.visualizer.humanoidMode) {
+                        if (type === 'rotation') return;
+                        if (axis !== 'x' && axis !== 'z') return;
+                        appState.visualizer.moveHumanoidWaistBodyLinkAlongAxis(axis, direction);
+                        intervalId = setInterval(() => {
+                            appState.visualizer.moveHumanoidWaistBodyLinkAlongAxis(axis, direction);
+                        }, 20);
+                    }
                 } else if (controlMode === 'relative-fullbody') {
                     // 全身相对位姿：腰部+双臂联动，控制相对位姿
                     if (appState.visualizer.humanoidMode) {

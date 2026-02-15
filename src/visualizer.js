@@ -6454,7 +6454,103 @@ export class RobotVisualizer {
         if (window.updateRobotPose) window.updateRobotPose();
     }
     
-    // ---------- 人形单臂控制（左臂=effector1，右臂=effector2） ----------
+    // ---------- 人形局部控制（腰部=effector0，左臂=effector1，右臂=effector2） ----------
+
+    /**
+     * 获取人形机器人腰部关节索引范围
+     * @returns {{start: number, end: number, count: number}}
+     */
+    _humanoidWaistIndices() {
+        const w = this.humanoidWaistLength;
+        return { start: 0, end: w, count: w };
+    }
+
+    /**
+     * 人形机器人腰部 body_link 位姿控制（仅移动腰部关节）
+     * @param {number[]} dqTargetArray - 目标 body_link 位姿 DQ 8元素
+     * @param {number[]} currentQ - 当前全关节角
+     * @returns {boolean}
+     */
+    updateHumanoidWaistPoseTarget(dqTargetArray, currentQ) {
+        if (!this.humanoidModel || !window.humanoidQ || !currentQ || currentQ.length === 0) return false;
+        if (typeof this.humanoidModel.fkmEffector !== 'function' || typeof this.humanoidModel.poseJacobianEffector !== 'function') return false;
+
+        const { start: waistStart, end: waistEnd, count: waistCount } = this._humanoidWaistIndices();
+        if (waistCount <= 0) return false;
+
+        const jointLimits = this._getHumanoidJointLimits();
+        const waistLimits = jointLimits ? jointLimits.slice(waistStart, waistEnd) : null;
+
+        const epsilon = 1e-5;
+        const maxIterations = 80;
+        const damping = 0.5;
+        const maxJointStepPerIter = 0.08;
+
+        let q = [...currentQ];
+
+        for (let iter = 0; iter < maxIterations; iter++) {
+            const currentPose = this.humanoidModel.fkmEffector(q, 0);
+            if (!currentPose) return false;
+
+            // DQ 双覆盖处理：目标与当前符号对齐，避免误差突变。
+            let dot = 0;
+            for (let i = 0; i < 8; i++) dot += (dqTargetArray[i] || 0) * (currentPose[i] || 0);
+            const sign = dot < 0 ? -1 : 1;
+
+            const err = [];
+            let errNorm2 = 0;
+            for (let i = 0; i < 8; i++) {
+                const e = (dqTargetArray[i] || 0) - sign * (currentPose[i] || 0);
+                err.push(e);
+                errNorm2 += e * e;
+            }
+            if (Math.sqrt(errNorm2) <= epsilon) break;
+
+            const J = this.humanoidModel.poseJacobianEffector(q, 0);
+            if (!J) return false;
+
+            const Jwaist = [];
+            for (let i = 0; i < 8; i++) {
+                Jwaist.push(J[i].slice(waistStart, waistEnd));
+            }
+
+            const JwaistPseudoInv = this.pseudoInverse(Jwaist);
+            if (!JwaistPseudoInv) return false;
+
+            for (let i = 0; i < waistCount; i++) {
+                let step = 0;
+                for (let j = 0; j < 8; j++) {
+                    step += (JwaistPseudoInv[i][j] || 0) * err[j] * damping;
+                }
+                step = Math.max(-maxJointStepPerIter, Math.min(maxJointStepPerIter, step));
+                q[waistStart + i] += step;
+            }
+
+            if (waistLimits) {
+                for (let i = 0; i < waistCount && i < waistLimits.length; i++) {
+                    const lim = waistLimits[i];
+                    if (lim) {
+                        q[waistStart + i] = Math.max(lim.lower, Math.min(lim.upper, q[waistStart + i]));
+                    }
+                }
+            }
+        }
+
+        for (let i = 0; i < window.humanoidQ.length && i < q.length; i++) {
+            window.humanoidQ[i] = q[i];
+        }
+        if (window.clampJointAngles && window.customRobotConfig && this.humanoidURDF) {
+            const names = this.humanoidJointNames || [];
+            const clamped = window.clampJointAngles(q, names, this.humanoidURDF, window.customRobotConfig);
+            for (let i = 0; i < window.humanoidQ.length && i < clamped.length; i++) {
+                window.humanoidQ[i] = clamped[i];
+            }
+        }
+        this.setHumanoidJoints(window.humanoidQ);
+        if (window.updateGlobalVariables) window.updateGlobalVariables();
+        if (window.updateRobotPose) window.updateRobotPose();
+        return true;
+    }
     
     /**
      * 获取人形机器人单臂的关节索引范围
@@ -6570,6 +6666,39 @@ export class RobotVisualizer {
         if (window.updateGlobalVariables) window.updateGlobalVariables();
         if (window.updateRobotPose) window.updateRobotPose();
         return true;
+    }
+
+    /**
+     * 人形机器人腰部 body_link 平移控制（仅支持 X/Z）
+     * @param {string} axis - 'x' | 'z'
+     * @param {string} direction - 'positive' | 'negative'
+     */
+    moveHumanoidWaistBodyLinkAlongAxis(axis, direction) {
+        if (!this.humanoidMode || !window.humanoidQ?.length) return;
+        if (axis !== 'x' && axis !== 'z') return;
+        const DQ = window.DQModule?.DQWrapper;
+        if (!DQ || !this.humanoidModel || typeof this.humanoidModel.fkmEffector !== 'function') return;
+
+        try {
+            const stepSize = this.getTeachTranslationStep();
+            const directionSign = direction === 'positive' ? 1 : -1;
+
+            const currentPose = this.humanoidModel.fkmEffector(window.humanoidQ, 0); // body_link
+            if (!currentPose) return;
+
+            const dqCurrent = DQ.createFromArray(currentPose);
+            const rotationArray = DQ.getRotation(dqCurrent);
+            const rotationQuat = new THREE.Quaternion(rotationArray[1], rotationArray[2], rotationArray[3], rotationArray[0]);
+
+            const delta = this.getTranslationDirection(axis, rotationQuat).multiplyScalar(stepSize * directionSign);
+            const dqDelta = DQ.translation(delta.x, delta.y, delta.z);
+            const worldMode = this.isWorldTranslationMode?.() ?? true;
+            const dqTarget = worldMode ? DQ.multiply(dqDelta, dqCurrent) : DQ.multiply(dqCurrent, dqDelta);
+
+            this.updateHumanoidWaistPoseTarget(DQ.toArray(dqTarget), window.humanoidQ);
+        } catch (e) {
+            console.error('移动腰部 body_link 失败:', e);
+        }
     }
     
     /**

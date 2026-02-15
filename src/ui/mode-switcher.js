@@ -50,6 +50,7 @@ export function switchToHumanoidUI() {
         Array.from(controlModeSelect.options).forEach(opt => {
             if (opt.value === 'robot1') opt.textContent = '左臂';
             else if (opt.value === 'robot2') opt.textContent = '右臂';
+            else if (opt.value === 'waist-body-link-xz') opt.hidden = false;
         });
         const modeLabelEl = document.getElementById('dual-arm-mode-label');
         const updateHumanoidModeLabel = () => {
@@ -67,6 +68,13 @@ export function switchToHumanoidUI() {
                     distanceControls.style.display = 'none';
                 }
             }
+            const teachButtons = document.querySelectorAll('#teach-pendant-controls .teach-btn');
+            teachButtons.forEach(btn => {
+                const axis = btn.dataset.axis;
+                const type = btn.dataset.type || 'translation';
+                const enabled = mode !== 'waist-body-link-xz' || (type !== 'rotation' && (axis === 'x' || axis === 'z'));
+                btn.disabled = !enabled;
+            });
             if (!modeLabelEl) return;
             if (mode === 'robot1') modeLabelEl.textContent = '左臂模式：控制左臂末端';
             else if (mode === 'robot2') modeLabelEl.textContent = '右臂模式：控制右臂末端';
@@ -75,6 +83,7 @@ export function switchToHumanoidUI() {
             else if (mode === 'distance-fullbody') modeLabelEl.textContent = '全身相对距离：腰部+双臂联动，控制两末端距离，保持绝对位姿与相对姿态不变';
             else if (mode === 'decoupled') modeLabelEl.textContent = '全身绝对位姿：腰部+双臂联动，控制绝对位姿，保持相对位姿不变';
             else if (mode === 'decoupled-upright') modeLabelEl.textContent = '全身绝对位姿（腰部竖直）：腰部+双臂联动，控制绝对位姿，同时保持 body_link 的 z 轴竖直地面';
+            else if (mode === 'waist-body-link-xz') modeLabelEl.textContent = '腰部 body_link 点动：仅控制 body_link 的 X/Z 平移';
             else if (mode === 'relative-fullbody') modeLabelEl.textContent = '全身相对位姿：腰部+双臂联动，控制相对位姿，保持绝对位姿不变';
             else modeLabelEl.textContent = '绝对位姿模式：控制绝对位姿，保持相对位姿不变';
         };
@@ -130,6 +139,15 @@ export function switchToDualArmUI() {
     const modeLabel = document.getElementById('dual-arm-mode-label');
     const teachPendantControls = document.getElementById('teach-pendant-controls');
     const distanceControls = document.getElementById('dual-arm-distance-controls');
+    const waistBodyOption = controlModeSelect
+        ? Array.from(controlModeSelect.options).find(opt => opt.value === 'waist-body-link-xz')
+        : null;
+    if (waistBodyOption) {
+        waistBodyOption.hidden = true;
+        if (controlModeSelect.value === 'waist-body-link-xz') {
+            controlModeSelect.value = 'absolute';
+        }
+    }
     if (controlModeSelect && modeLabel) {
         const updateModeLabel = () => {
             const mode = controlModeSelect.value;
@@ -146,6 +164,8 @@ export function switchToDualArmUI() {
                     distanceControls.style.display = 'none';
                 }
             }
+            const teachButtons = document.querySelectorAll('#teach-pendant-controls .teach-btn');
+            teachButtons.forEach(btn => { btn.disabled = false; });
             switch (mode) {
                 case 'robot1':
                     modeLabel.textContent = '机器人1模式：控制机器人1的末端执行器';
@@ -243,6 +263,9 @@ export function switchToSingleArmUI() {
     if (typeof window !== 'undefined') {
         window.currentDualArmControlMode = 'absolute';
     }
+
+    const teachButtons = document.querySelectorAll('#teach-pendant-controls .teach-btn');
+    teachButtons.forEach(btn => { btn.disabled = false; });
 
     callbacks.renderEnvironmentObjectList?.();
     callbacks.updateIKRobotSelection?.();
