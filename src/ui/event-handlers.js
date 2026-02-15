@@ -368,6 +368,21 @@ function setupEventListeners() {
                             }, 20);
                         }
                     }
+                } else if (controlMode === 'decoupled-upright') {
+                    // 全身绝对位姿（腰部竖直）：腰部+双臂联动，控制绝对位姿并约束 body_link z 轴
+                    if (appState.visualizer.humanoidMode) {
+                        if (type === 'rotation') {
+                            appState.visualizer.rotateHumanoidAbsolutePoseAroundAxisDecoupledUpright(axis, direction);
+                            intervalId = setInterval(() => {
+                                appState.visualizer.rotateHumanoidAbsolutePoseAroundAxisDecoupledUpright(axis, direction);
+                            }, 20);
+                        } else {
+                            appState.visualizer.moveHumanoidAbsolutePoseAlongAxisDecoupledUpright(axis, direction);
+                            intervalId = setInterval(() => {
+                                appState.visualizer.moveHumanoidAbsolutePoseAlongAxisDecoupledUpright(axis, direction);
+                            }, 20);
+                        }
+                    }
                 } else if (controlMode === 'relative-fullbody') {
                     // 全身相对位姿：腰部+双臂联动，控制相对位姿
                     if (appState.visualizer.humanoidMode) {

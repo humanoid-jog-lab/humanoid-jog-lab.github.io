@@ -220,6 +220,34 @@ public:
         MatrixXd Jd = DQ_Kinematics::distance_jacobian(J_pose, pose);
         return matrixXdToJsArray(Jd);
     }
+
+    /**
+     * 线雅可比（对应 DQ_Kinematics::line_jacobian）
+     * 给定 vec8(pose_dot)=J_pose*q_dot，返回满足 vec8(line_dot)=Jline*q_dot 的 Jline（8xN）
+     *
+     * @param pose_jacobian_js 8xN 的位姿雅可比（二维数组）
+     * @param pose_dq_js 8 元素位姿双四元数（数组）
+     * @param line_direction_js 8 元素线方向（数组）。例如 body z 轴使用 [0,0,0,1,0,0,0,0]
+     * @return 8xN 的线雅可比（二维数组）
+     */
+    static val line_jacobian(const val& pose_jacobian_js, const val& pose_dq_js, const val& line_direction_js) {
+        MatrixXd J_pose = jsArrayToMatrixXd(pose_jacobian_js);
+
+        VectorXd pose_vec = jsArrayToVectorXd(pose_dq_js);
+        if (pose_vec.size() != 8) {
+            throw std::runtime_error("pose_dq must be an 8-element array");
+        }
+        DQ pose(pose_vec);
+
+        VectorXd line_direction_vec = jsArrayToVectorXd(line_direction_js);
+        if (line_direction_vec.size() != 8) {
+            throw std::runtime_error("line_direction must be an 8-element array");
+        }
+        DQ line_direction(line_direction_vec);
+
+        MatrixXd Jline = DQ_Kinematics::line_jacobian(J_pose, pose, line_direction);
+        return matrixXdToJsArray(Jline);
+    }
 };
 
 // 串联机械臂包装器（使用 Modified DH）
@@ -912,7 +940,8 @@ EMSCRIPTEN_BINDINGS(dqrobotics_module) {
 
     // 运动学工具（静态函数）
     class_<Kinematics_Wrapper>("Kinematics")
-        .class_function("distanceJacobian", &Kinematics_Wrapper::distance_jacobian);
+        .class_function("distanceJacobian", &Kinematics_Wrapper::distance_jacobian)
+        .class_function("lineJacobian", &Kinematics_Wrapper::line_jacobian);
     
     // 串联机械臂
     class_<SerialManipulator_Wrapper>("SerialManipulator")

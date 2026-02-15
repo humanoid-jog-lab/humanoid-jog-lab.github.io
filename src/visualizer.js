@@ -4616,12 +4616,14 @@ export class RobotVisualizer {
      * @param {number[]} dqAbsoluteTargetArray - 目标绝对位姿 DQ 8元素
      * @param {number[]} currentQ - 当前全关节角
      * @param {boolean} enableJointLimitAvoidance - 是否启用关节限位避免，默认为 true
-     * @param {boolean} includeWaist - 是否包含腰部关节，默认为 false（只控制双臂）
+     * @param {boolean} includeWaist - 是否包含腰部关节，默认为 false（只控制双臂）。
+     * @param {boolean} keepBodyZVertical - 是否使用 line_jacobian 约束 body_link 的 z 轴竖直地面。
      * @returns {boolean}
      */
-    updateHumanoidJointsFromAbsolutePoseTargetRelativeFirst(dqAbsoluteTargetArray, currentQ, enableJointLimitAvoidance = true, includeWaist = false) {
+    updateHumanoidJointsFromAbsolutePoseTargetRelativeFirst(dqAbsoluteTargetArray, currentQ, enableJointLimitAvoidance = true, includeWaist = false, keepBodyZVertical = false) {
         if (!this.humanoidModel || !window.humanoidQ || !currentQ || currentQ.length === 0) return false;
         const DQ = window.DQModule?.DQWrapper;
+        const Kinematics = window.DQModule?.Kinematics;
         if (!DQ) return false;
 
         // Debug log（节流）：用于观察“相对位姿是否发生偏移”
@@ -4675,7 +4677,19 @@ export class RobotVisualizer {
         const kappa1 = 0.5;     // 任务1增益（相对位姿保持 - 最高优先级）
         const kappa2 = 0.5;     // 任务2增益（绝对位姿跟踪）
         const kappa3 = 0.3;    // 任务3基础增益（关节限位避免，实际使用自适应缩放）
+        const kappaBodyZ = 0.8; // body_link z 轴竖直约束增益（line_jacobian）
+        const waistGain = 1.0;  // 腰部权重（更小=腰部动得更少）
         const armGain = 1.0;    // 手臂权重
+        const enableBodyVerticalTask = keepBodyZVertical && includeWaist && waistCount > 0
+            && Kinematics && typeof Kinematics.lineJacobian === 'function'
+            && typeof this.humanoidModel.fkmEffector === 'function'
+            && typeof this.humanoidModel.poseJacobianEffector === 'function';
+        if (keepBodyZVertical && includeWaist && waistCount > 0 && !enableBodyVerticalTask && !this._missingBodyZConstraintWarned) {
+            console.warn('全身绝对位姿控制：未启用 body_link z 轴竖直约束（缺少 Kinematics.lineJacobian 或腰部接口）');
+            this._missingBodyZConstraintWarned = true;
+        }
+        const bodyZLineDirection = [0, 0, 0, 1, 0, 0, 0, 0];
+        const tolBodyZ = 1e-14;
         
         // 迭代参数
         const maxIter = 200;
@@ -4689,8 +4703,10 @@ export class RobotVisualizer {
         // 用于日志统计
         let lastERel = Number.NaN;
         let lastEAbs = Number.NaN;
+        let lastEBodyZ = Number.NaN;
         let maxERel = 0;
         let maxEAbs = 0;
+        let maxEBodyZ = 0;
         let iterEnd = 0;
         let converged = false;
         
@@ -4712,6 +4728,32 @@ export class RobotVisualizer {
                 e1.push(err);
                 e1Norm2 += err * err;
             }
+
+            // === 任务1附加约束：body_link 的 z 轴保持垂直地面（世界 Z）===
+            // 通过 line_jacobian 获取 body_link z 轴方向对关节的雅可比，约束其 x/y 分量为 0
+            let JBodyZ = null;
+            let eBodyZNorm2 = 0;
+            if (enableBodyVerticalTask) {
+                const waistPose = this.humanoidModel.fkmEffector(q, 0); // body_link
+                const JWaistFull = this.humanoidModel.poseJacobianEffector(q, 0);
+                if (!waistPose || !JWaistFull) break;
+
+                const JLineFull = Kinematics.lineJacobian(JWaistFull, waistPose, bodyZLineDirection);
+                if (!Array.isArray(JLineFull) || JLineFull.length < 3) break;
+
+                const waistPoseDQ = DQ.createFromArray(waistPose);
+                const rotMat = DQ.getRotationMatrix(waistPoseDQ);
+                const ex = -(rotMat?.[0]?.[2] ?? 0);
+                const ey = -(rotMat?.[1]?.[2] ?? 0);
+                e1.push(ex, ey);
+                eBodyZNorm2 = ex * ex + ey * ey;
+                e1Norm2 += eBodyZNorm2;
+
+                JBodyZ = [
+                    JLineFull[1].slice(armStart, armStart + activeCount),
+                    JLineFull[2].slice(armStart, armStart + activeCount)
+                ];
+            }
             
             // === 计算任务2误差：绝对位姿跟踪 ===
             const absNow = this._getHumanoidAbsolutePose(q);
@@ -4731,7 +4773,7 @@ export class RobotVisualizer {
             }
             
             // 收敛检查（主要看绝对位姿是否跟上，相对位姿由于是优先级应该一直很小）
-            if (e1Norm2 < tol && e2Norm2 < tol) {
+            if (e1Norm2 < tol && e2Norm2 < tol && (!enableBodyVerticalTask || eBodyZNorm2 < tolBodyZ)) {
                 console.log('零空间控制(相对优先): 迭代收敛, iter=', iter, 'e_rel=', Math.sqrt(e1Norm2).toFixed(6), 'e_abs=', Math.sqrt(e2Norm2).toFixed(6));
                 converged = true;
                 break;
@@ -4739,36 +4781,40 @@ export class RobotVisualizer {
 
             lastERel = Math.sqrt(e1Norm2);
             lastEAbs = Math.sqrt(e2Norm2);
+            lastEBodyZ = Math.sqrt(eBodyZNorm2);
             if (lastERel > maxERel) maxERel = lastERel;
             if (lastEAbs > maxEAbs) maxEAbs = lastEAbs;
+            if (lastEBodyZ > maxEBodyZ) maxEBodyZ = lastEBodyZ;
             
             if (iter === 0 || iter === maxIter - 1) {
-                console.log('零空间控制(相对优先): iter=', iter, 'e_rel=', Math.sqrt(e1Norm2).toFixed(6), 'e_abs=', Math.sqrt(e2Norm2).toFixed(6));
+                console.log('零空间控制(相对优先): iter=', iter, 'e_rel=', Math.sqrt(e1Norm2).toFixed(6), 'e_abs=', Math.sqrt(e2Norm2).toFixed(6), 'e_body_z=', Math.sqrt(eBodyZNorm2).toFixed(6));
             }
             
             // === 计算雅可比矩阵 ===
-            // J_rel: 相对位姿对双臂关节的雅可比 (8 x activeCount)
+            // J_rel: 相对位姿对活动关节的雅可比 (8 x activeCount)
             const JrelFull = this._getHumanoidRelativePoseJacobian(q);
             if (!JrelFull) break;
             const J1 = [];  // 任务1的雅可比（相对位姿）
             for (let i = 0; i < 8; i++) {
-                // 只取双臂对应的列（跳过腰部）
                 J1.push(JrelFull[i].slice(armStart, armStart + activeCount));
             }
+            if (JBodyZ) {
+                J1.push(JBodyZ[0], JBodyZ[1]);
+            }
             
-            // J_abs: 绝对位姿对双臂关节的雅可比 (8 x activeCount)
+            // J_abs: 绝对位姿对活动关节的雅可比 (8 x activeCount)
             const JabsFull = this._getHumanoidAbsolutePoseJacobian(q);
             if (!JabsFull) break;
             const J2 = [];  // 任务2的雅可比（绝对位姿）
             for (let i = 0; i < 8; i++) {
-                // 只取双臂对应的列（跳过腰部）
                 J2.push(JabsFull[i].slice(armStart, armStart + activeCount));
             }
             
             // === 计算关节权重矩阵 W (对角阵，用数组表示) ===
             const W = [];
             for (let i = 0; i < activeCount; i++) {
-                W.push(armGain);    // 双臂权重
+                const isWaistJoint = includeWaist && i < waistCount;
+                W.push(isWaistJoint ? waistGain : armGain);
             }
             
             // === 计算任务1（相对位姿）的加权伪逆和零空间投影 ===
@@ -4799,8 +4845,9 @@ export class RobotVisualizer {
             
             // 任务1贡献：J1^+ * κ1 * e1 （相对位姿保持 - 最高优先级）
             for (let i = 0; i < activeCount; i++) {
-                for (let j = 0; j < 8; j++) {
-                    dq[i] += J1Pinv[i][j] * kappa1 * e1[j];
+                for (let j = 0; j < e1.length; j++) {
+                    const gain = (enableBodyVerticalTask && j >= 8) ? kappaBodyZ : kappa1;
+                    dq[i] += J1Pinv[i][j] * gain * e1[j];
                 }
             }
             
@@ -4918,6 +4965,7 @@ export class RobotVisualizer {
                     'converged=', converged,
                     'e_rel(last/max)=', (Number.isFinite(lastERel) ? lastERel.toExponential(3) : 'n/a'), '/', maxERel.toExponential(3),
                     'e_abs(last/max)=', (Number.isFinite(lastEAbs) ? lastEAbs.toExponential(3) : 'n/a'), '/', maxEAbs.toExponential(3),
+                    'e_body_z(last/max)=', (Number.isFinite(lastEBodyZ) ? lastEBodyZ.toExponential(3) : 'n/a'), '/', maxEBodyZ.toExponential(3),
                     'relΔt(m)=', Number.isFinite(relDt) ? relDt.toExponential(3) : 'n/a',
                     'relΔang(deg)=', Number.isFinite(relDAngDeg) ? relDAngDeg.toFixed(3) : 'n/a',
                     'absErrT(m)=', Number.isFinite(absErrT) ? absErrT.toExponential(3) : 'n/a',
@@ -5003,7 +5051,8 @@ export class RobotVisualizer {
         const kappa1 = 0.2;     // 任务1增益（绝对位姿保持 - 最高优先级）
         const kappa2 = 0.4;     // 任务2增益（相对位姿跟踪）
         const kappa3 = 0.00;    // 任务3增益（关节限位避免）
-        const armGain = 1.0;    // 关节权重
+        const waistGain = 0.5;  // 腰部权重（更小=腰部动得更少）
+        const armGain = 1.0;    // 手臂权重
         
         // 迭代参数
         const maxIter = 200;
@@ -5093,7 +5142,8 @@ export class RobotVisualizer {
             // === 计算关节权重矩阵 W (对角阵，用数组表示) ===
             const W = [];
             for (let i = 0; i < activeCount; i++) {
-                W.push(armGain);
+                const isWaistJoint = includeWaist && i < waistCount;
+                W.push(isWaistJoint ? waistGain : armGain);
             }
             
             // === 计算任务1（绝对位姿）的加权伪逆和零空间投影 ===
@@ -5600,6 +5650,70 @@ export class RobotVisualizer {
     }
 
     /**
+     * 全身控制（腰部竖直约束）：沿轴平移绝对位姿（腰部+双臂联动，不含底盘）
+     */
+    moveHumanoidAbsolutePoseAlongAxisDecoupledUpright(axis, direction) {
+        if (!this.humanoidMode || !window.humanoidQ?.length) return;
+        const DQ = window.DQModule?.DQWrapper;
+        if (!DQ) return;
+        
+        try {
+            const stepSize = this.getTeachTranslationStep();
+            const directionSign = direction === 'positive' ? 1 : -1;
+            
+            const dqAbsArray = this._getHumanoidAbsolutePose(window.humanoidQ);
+            if (!dqAbsArray) return;
+            const dqAbsCurrent = DQ.createFromArray(dqAbsArray);
+            const rotationArray = DQ.getRotation(dqAbsCurrent);
+            const rotationQuat = new THREE.Quaternion(rotationArray[1], rotationArray[2], rotationArray[3], rotationArray[0]);
+            
+            const delta = this.getTranslationDirection(axis, rotationQuat).multiplyScalar(stepSize * directionSign);
+            const dqDelta = DQ.translation(delta.x, delta.y, delta.z);
+            const dqTargetDQ = DQ.multiply(dqDelta, dqAbsCurrent);
+            const dqTargetArray = DQ.toArray(dqTargetDQ);
+            
+            const enableLimitAvoidance = document.getElementById('joint-limit-avoidance-toggle')?.checked ?? true;
+
+            this.updateHumanoidJointsFromAbsolutePoseTargetRelativeFirst(dqTargetArray, window.humanoidQ, enableLimitAvoidance, true, true);
+        } catch (e) {
+            console.error('全身控制（腰部竖直约束）移动绝对位姿失败:', e);
+        }
+    }
+    
+    /**
+     * 全身控制（腰部竖直约束）：绕轴旋转绝对位姿（腰部+双臂联动，不含底盘）
+     */
+    rotateHumanoidAbsolutePoseAroundAxisDecoupledUpright(axis, direction) {
+        if (!this.humanoidMode || !window.humanoidQ?.length) return;
+        const DQ = window.DQModule?.DQWrapper;
+        if (!DQ) return;
+        
+        try {
+            const angle = this.getTeachRotationAngle();
+            const directionSign = direction === 'positive' ? 1 : -1;
+            const rotationAngle = angle * directionSign;
+            
+            const dqAbsoluteCurrentArray = this._getHumanoidAbsolutePose(window.humanoidQ);
+            if (!dqAbsoluteCurrentArray) return;
+            
+            const dqAbsoluteCurrent = DQ.createFromArray(dqAbsoluteCurrentArray);
+            
+            let rotationDQ;
+            if (axis === 'rx') rotationDQ = DQ.rotation(rotationAngle, 1, 0, 0);
+            else if (axis === 'ry') rotationDQ = DQ.rotation(rotationAngle, 0, 1, 0);
+            else if (axis === 'rz') rotationDQ = DQ.rotation(rotationAngle, 0, 0, 1);
+            else return;
+            
+            const dqAbsoluteTarget = this.combineDQWithTeachOrder(rotationDQ, dqAbsoluteCurrent, false);
+            const enableLimitAvoidance = document.getElementById('joint-limit-avoidance-toggle')?.checked ?? true;
+
+            this.updateHumanoidJointsFromAbsolutePoseTargetRelativeFirst(DQ.toArray(dqAbsoluteTarget), window.humanoidQ, enableLimitAvoidance, true, true);
+        } catch (e) {
+            console.error('全身控制（腰部竖直约束）旋转绝对位姿失败:', e);
+        }
+    }
+
+    /**
      * 全身相对位姿控制：沿轴平移相对位姿（腰部+双臂联动）
      */
     moveHumanoidRelativePoseAlongAxisFullbody(axis, direction) {
@@ -5859,7 +5973,8 @@ export class RobotVisualizer {
         const kappa1 = 0.2;     // 任务1增益（绝对位姿+相对姿态保持 - 最高优先级）
         const kappa2 = 0.4;     // 任务2增益（相对距离跟踪）
         const kappa3 = 0.0005;    // 任务3增益（关节限位避免）
-        const armGain = 1.0;
+        const waistGain = 0.5;  // 腰部权重（更小=腰部动得更少）
+        const armGain = 1.0;    // 手臂权重
         
         // 迭代参数
         const maxIter = 200;
@@ -5943,7 +6058,8 @@ export class RobotVisualizer {
             // === 计算关节权重矩阵 W ===
             const W = [];
             for (let i = 0; i < activeCount; i++) {
-                W.push(armGain);
+                const isWaistJoint = includeWaist && i < waistCount;
+                W.push(isWaistJoint ? waistGain : armGain);
             }
             
             // === 计算任务1（绝对位姿+相对姿态）的加权伪逆和零空间投影 ===

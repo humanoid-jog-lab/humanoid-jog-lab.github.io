@@ -74,6 +74,7 @@ export function switchToHumanoidUI() {
             else if (mode === 'distance') modeLabelEl.textContent = '相对距离模式：控制两末端距离，保持绝对位姿与相对姿态不变';
             else if (mode === 'distance-fullbody') modeLabelEl.textContent = '全身相对距离：腰部+双臂联动，控制两末端距离，保持绝对位姿与相对姿态不变';
             else if (mode === 'decoupled') modeLabelEl.textContent = '全身绝对位姿：腰部+双臂联动，控制绝对位姿，保持相对位姿不变';
+            else if (mode === 'decoupled-upright') modeLabelEl.textContent = '全身绝对位姿（腰部竖直）：腰部+双臂联动，控制绝对位姿，同时保持 body_link 的 z 轴竖直地面';
             else if (mode === 'relative-fullbody') modeLabelEl.textContent = '全身相对位姿：腰部+双臂联动，控制相对位姿，保持绝对位姿不变';
             else modeLabelEl.textContent = '绝对位姿模式：控制绝对位姿，保持相对位姿不变';
         };
@@ -163,6 +164,9 @@ export function switchToDualArmUI() {
                     break;
                 case 'decoupled':
                     modeLabel.textContent = '全身绝对位姿：腰部+双臂联动，控制绝对位姿，保持相对位姿不变';
+                    break;
+                case 'decoupled-upright':
+                    modeLabel.textContent = '全身绝对位姿（腰部竖直）：腰部+双臂联动，控制绝对位姿，同时保持 body_link 的 z 轴竖直地面';
                     break;
                 case 'absolute':
                 default:
