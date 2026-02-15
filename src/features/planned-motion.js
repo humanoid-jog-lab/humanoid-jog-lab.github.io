@@ -10,7 +10,6 @@
 
 import { appState, callbacks } from '../core/state.js';
 import { getDQModule } from '../dqrobotics.js';
-import { wrapAngle } from '../utils/math-utils.js';
 
 // ── 状态机状态 ──────────────────────────────────
 const STATE = {
@@ -29,6 +28,9 @@ const DEFAULT_PARAMS = {
     pollInterval: 50,           // 状态轮询间隔（ms）
     armCompensationDuration: 0.5,  // 手臂补偿动画时长（秒）
     armCompensationEase: 'easeInOutCubic',
+    armRefineMaxPasses: 4,         // 手臂 IK 自动精修轮次（避免重复点击）
+    finalPosTolMm: 0.5,            // 期望最终平移误差阈值（毫米）
+    finalRotTolDeg: 0.2,           // 期望最终旋转误差阈值（度）
 };
 
 // ── 模块状态 ──────────────────────────────────
@@ -103,11 +105,16 @@ export function executePlannedMotion(targetDQArray, options = {}) {
         return false;
     }
 
-    // 计算位置偏差
-    const posError = computePositionError(DQ, currentWorldAbs, motionTarget);
-    console.log(`规划运动：位置偏差 = ${(posError * 100).toFixed(1)} cm，阈值 = ${(motionParams.baseThreshold * 100).toFixed(1)} cm`);
+    // 底盘阶段判定只看 XY 偏差（底盘本身不可直接消除 Z 误差）
+    const poseError = computePoseError(DQ, currentWorldAbs, motionTarget);
+    console.log(
+        `规划运动：偏差 XY=${(poseError.posErrXY * 100).toFixed(1)} cm, ` +
+        `3D=${(poseError.posErr3D * 100).toFixed(1)} cm, ` +
+        `rot=${poseError.rotErrDeg.toFixed(2)} deg, ` +
+        `底盘阈值=${(motionParams.baseThreshold * 100).toFixed(1)} cm`
+    );
 
-    if (posError > motionParams.baseThreshold) {
+    if (poseError.posErrXY > motionParams.baseThreshold) {
         // 偏差大 → 先移动底盘
         startBaseMovement(DQ, currentWorldAbs, motionTarget);
     } else {
@@ -157,9 +164,10 @@ function getCurrentWorldAbsolutePose(DQ) {
 }
 
 /**
- * 从 DQ 数组提取 XY 平面上的位置偏差
+ * 计算绝对位姿误差（平移 + 旋转）
+ * @returns {{posErr3D: number, posErrXY: number, rotErrRad: number, rotErrDeg: number}}
  */
-function computePositionError(DQ, currentDQArray, targetDQArray) {
+function computePoseError(DQ, currentDQArray, targetDQArray) {
     const dqCur = DQ.createFromArray(currentDQArray);
     const dqTgt = DQ.createFromArray(targetDQArray);
     const tCur = DQ.getTranslation(dqCur); // [tw, tx, ty, tz]
@@ -168,7 +176,33 @@ function computePositionError(DQ, currentDQArray, targetDQArray) {
     const dx = tTgt[1] - tCur[1];
     const dy = tTgt[2] - tCur[2];
     const dz = tTgt[3] - tCur[3];
-    return Math.sqrt(dx * dx + dy * dy + dz * dz);
+    const posErr3D = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    const posErrXY = Math.hypot(dx, dy);
+
+    const qCur = DQ.getRotation(dqCur); // [w, x, y, z]
+    const qTgt = DQ.getRotation(dqTgt);
+    const dot = Math.min(1, Math.max(-1,
+        Math.abs(
+            (qCur[0] || 0) * (qTgt[0] || 0) +
+            (qCur[1] || 0) * (qTgt[1] || 0) +
+            (qCur[2] || 0) * (qTgt[2] || 0) +
+            (qCur[3] || 0) * (qTgt[3] || 0)
+        )
+    ));
+    const rotErrRad = 2 * Math.acos(dot);
+    const rotErrDeg = (rotErrRad * 180) / Math.PI;
+
+    return { posErr3D, posErrXY, rotErrRad, rotErrDeg };
+}
+
+/**
+ * 在给定底盘位姿下评估某组关节对应的世界绝对位姿误差
+ */
+function evaluateHumanoidWorldError(DQ, vis, q, basePose, worldTargetDQArray) {
+    const localAbs = vis?._getHumanoidAbsolutePose?.(q);
+    if (!localAbs) return null;
+    const worldAbs = vis?._composeHumanoidWorldPose?.(basePose, localAbs) || localAbs;
+    return computePoseError(DQ, worldAbs, worldTargetDQArray);
 }
 
 /**
@@ -189,8 +223,9 @@ function startBaseMovement(DQ, currentWorldAbs, targetWorldAbs) {
     const baseTargetX = (basePose.x || 0) + deltaX;
     const baseTargetY = (basePose.y || 0) + deltaY;
 
-    // 底盘朝向：朝向目标方向
-    const baseTargetYaw = Math.atan2(deltaY, deltaX);
+    // 底盘朝向：朝向目标方向（位移极小时保持当前朝向，避免 atan2(0,0) 导致抖动）
+    const xyDist = Math.hypot(deltaX, deltaY);
+    const baseTargetYaw = xyDist > 1e-6 ? Math.atan2(deltaY, deltaX) : (basePose.yaw || 0);
 
     // 设置底盘目标
     appState.humanoidBaseTargetPose.x = baseTargetX;
@@ -291,19 +326,62 @@ function startArmCompensation() {
     const enableLimitAvoidance = document.getElementById('joint-limit-avoidance-toggle')?.checked ?? true;
 
     let targetQ;
+    let solvedError = null;
     try {
-        const success = vis.updateHumanoidJointsFromAbsolutePoseTargetRelativeFirst?.(
-            localTargetArray,
-            initialQ,
-            enableLimitAvoidance,
-            motionParams.armIKIncludeWaist
-        );
-        if (!success) {
-            updateStatus(STATE.DONE, '手臂 IK 未收敛');
+        // 自动多轮精修，避免“同一任务要点两次”
+        const maxPasses = Math.max(1, Math.floor(Number(motionParams.armRefineMaxPasses) || 1));
+        const posTolM = Math.max(0, (Number(motionParams.finalPosTolMm) || 0.5) / 1000);
+        const rotTolRad = Math.max(0, (Number(motionParams.finalRotTolDeg) || 0.2) * Math.PI / 180);
+
+        let workQ = initialQ.slice();
+        let bestQ = null;
+        let bestErr = null;
+
+        for (let pass = 0; pass < maxPasses; pass++) {
+            const ok = vis.updateHumanoidJointsFromAbsolutePoseTargetRelativeFirst?.(
+                localTargetArray,
+                workQ,
+                enableLimitAvoidance,
+                motionParams.armIKIncludeWaist
+            );
+            if (!ok) break;
+
+            const qNow = (appState.humanoidQ || window.humanoidQ)?.slice();
+            if (!qNow || qNow.length === 0) break;
+
+            const errNow = evaluateHumanoidWorldError(DQ, vis, qNow, basePose, motionTarget);
+            if (!errNow) break;
+
+            if (
+                !bestErr ||
+                errNow.posErr3D < bestErr.posErr3D - 1e-9 ||
+                (Math.abs(errNow.posErr3D - bestErr.posErr3D) <= 1e-9 && errNow.rotErrRad < bestErr.rotErrRad)
+            ) {
+                bestErr = errNow;
+                bestQ = qNow.slice();
+            }
+
+            updateStatus(
+                STATE.ARM_COMPENSATING,
+                `手臂补偿中… 第${pass + 1}/${maxPasses}轮 | ` +
+                `平移 ${(errNow.posErr3D * 1000).toFixed(2)} mm, 旋转 ${errNow.rotErrDeg.toFixed(3)} deg`
+            );
+
+            if (errNow.posErr3D <= posTolM && errNow.rotErrRad <= rotTolRad) {
+                break;
+            }
+
+            workQ = qNow;
+        }
+
+        if (!bestQ) {
+            updateStatus(STATE.ERROR, '手臂 IK 未收敛');
             motionTarget = null;
             return;
         }
-        targetQ = (appState.humanoidQ || window.humanoidQ).slice();
+
+        targetQ = bestQ;
+        solvedError = bestErr;
     } catch (e) {
         console.error('规划运动 - 手臂 IK 失败:', e);
         updateStatus(STATE.ERROR, `手臂 IK 失败: ${e.message}`);
@@ -353,9 +431,19 @@ function startArmCompensation() {
         if (t >= 1) {
             motionArmAnimationId = null;
             const finalWorldAbs = getCurrentWorldAbsolutePose(DQ);
-            if (finalWorldAbs) {
-                const finalError = computePositionError(DQ, finalWorldAbs, motionTarget);
-                updateStatus(STATE.DONE, `完成！残余误差 ${(finalError * 1000).toFixed(1)} mm`);
+            if (finalWorldAbs && motionTarget) {
+                const finalErr = computePoseError(DQ, finalWorldAbs, motionTarget);
+                updateStatus(
+                    STATE.DONE,
+                    `完成！残余误差: 平移 ${(finalErr.posErr3D * 1000).toFixed(2)} mm, ` +
+                    `旋转 ${finalErr.rotErrDeg.toFixed(3)} deg`
+                );
+            } else if (solvedError) {
+                updateStatus(
+                    STATE.DONE,
+                    `完成！残余误差: 平移 ${(solvedError.posErr3D * 1000).toFixed(2)} mm, ` +
+                    `旋转 ${solvedError.rotErrDeg.toFixed(3)} deg`
+                );
             } else {
                 updateStatus(STATE.DONE, '手臂补偿完成');
             }

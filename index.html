@@ -23,12 +23,15 @@
         <div class="panel-body">
                 <div class="panel-section">
                     <h2>关节控制</h2>
-                    <div class="joint-controls-toolbar" style="display: flex; justify-content: flex-end; gap: 0.5rem; margin-bottom: 0.75rem;">
+                    <div class="joint-controls-toolbar">
                         <button id="import-joint-angles-btn" class="demo-btn" style="padding: 0.35rem 0.75rem; font-size: 0.85rem;">
                             从剪贴板导入
                         </button>
                         <button id="copy-joint-angles-btn" class="demo-btn" style="padding: 0.35rem 0.75rem; font-size: 0.85rem;">
                             复制关节角度
+                        </button>
+                        <button id="copy-joint-limits-btn" class="demo-btn" style="padding: 0.35rem 0.75rem; font-size: 0.85rem;">
+                            复制关节限位
                         </button>
                         <button id="angle-unit-toggle" class="demo-btn" style="padding: 0.35rem 0.75rem; font-size: 0.85rem;">
                             切换为弧度
@@ -66,44 +69,7 @@
                 </div>
 
                 <div class="panel-section">
-                    <h2>预设位姿</h2>
-                    <div class="preset-buttons">
-                        <button class="preset-btn" data-preset="home">初始位置</button>
-                        <button class="preset-btn" data-preset="extended">伸展姿态</button>
-                        <button class="preset-btn" data-preset="folded">折叠姿态</button>
-                        <button class="preset-btn" data-preset="random">随机位置</button>
-                    </div>
-                    <div class="preset-buttons" style="margin-top: 0.75rem; display: flex; gap: 0.5rem; justify-content: flex-end;">
-                        <button id="copy-joint-limits-btn" class="demo-btn" style="padding: 0.35rem 0.75rem; font-size: 0.85rem;">
-                            复制关节限位
-                        </button>
-                    </div>
-                </div>
-
-                <div class="panel-section">
-                    <h2>DQ 演示</h2>
-                    <div class="dq-demo">
-                        <button id="dq-rotation-demo" class="demo-btn">旋转演示</button>
-                        <button id="dq-translation-demo" class="demo-btn">平移演示</button>
-                        <button id="dq-pose-demo" class="demo-btn">位姿演示</button>
-                    </div>
-                </div>
-
-                <div class="panel-section">
-                    <h2>URDF → MDH</h2>
-                    <div class="dq-demo">
-                        <button id="extract-mdh-btn" class="demo-btn">从URDF提取MDH</button>
-                        <button id="compare-mdh-btn" class="demo-btn">对比MDH参数</button>
-                        <button id="use-urdf-mdh-btn" class="demo-btn">使用URDF的MDH</button>
-                    </div>
-                    <div id="mdh-status" class="mdh-status"></div>
-                    <div style="margin-top: 1rem;">
-                        <label class="toggle-switch">
-                            <input type="checkbox" id="show-mdh-frames-toggle">
-                            <span class="toggle-slider"></span>
-                            <span class="toggle-label">显示MDH坐标系</span>
-                        </label>
-                    </div>
+                    <h2>坐标系与控制</h2>
                     <div style="margin-top: 1rem;">
                         <label class="toggle-switch">
                             <input type="checkbox" id="show-urdf-frames-toggle">

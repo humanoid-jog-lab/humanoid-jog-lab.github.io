@@ -9,7 +9,6 @@ import { appState, callbacks, updateWindowGlobals } from './state.js';
 import {
     FrankaPanda,
     KukaLw4,
-    DQ,
     SerialManipulator,
     DifferentialDriveRobot,
     CooperativeDualArm,
@@ -161,8 +160,14 @@ export function updateHumanoidPose() {
         if (!dqModule) return;
         const dq1 = appState.humanoidModel.fkmEffector(appState.humanoidQ, 1);
         const dq2 = appState.humanoidModel.fkmEffector(appState.humanoidQ, 2);
-        const baseDQ = DQ.pose(0, 0, 1, appState.humanoidBasePose.yaw || 0, appState.humanoidBasePose.x || 0, appState.humanoidBasePose.y || 0, 0).toArray();
-        const baseObj = dqModule.DQWrapper.createFromArray(baseDQ);
+        // 注意：DQWrapper.pose 在当前 WASM 实现中等价于 R*T（平移在局部坐标）
+        // 这里基座位姿需要世界坐标语义，统一使用 T*R，与规划运动模块保持一致。
+        const baseX = appState.humanoidBasePose.x || 0;
+        const baseY = appState.humanoidBasePose.y || 0;
+        const baseYaw = appState.humanoidBasePose.yaw || 0;
+        const baseTrans = dqModule.DQWrapper.translation(baseX, baseY, 0);
+        const baseRot = dqModule.DQWrapper.rotation(baseYaw, 0, 0, 1);
+        const baseObj = dqModule.DQWrapper.multiply(baseTrans, baseRot);
         const worldDq1 = dqModule.DQWrapper.toArray(dqModule.DQWrapper.multiply(baseObj, dqModule.DQWrapper.createFromArray(dq1)));
         const worldDq2 = dqModule.DQWrapper.toArray(dqModule.DQWrapper.multiply(baseObj, dqModule.DQWrapper.createFromArray(dq2)));
         const obj1 = dqModule.DQWrapper.createFromArray(worldDq1);

@@ -36,15 +36,33 @@ function setupEventListeners() {
         });
     });
     
-    // DQ 演示按钮
-    document.getElementById('dq-rotation-demo').addEventListener('click', demoRotation);
-    document.getElementById('dq-translation-demo').addEventListener('click', demoTranslation);
-    document.getElementById('dq-pose-demo').addEventListener('click', demoPose);
+    // DQ 演示按钮（可选）
+    const dqRotationDemoBtn = document.getElementById('dq-rotation-demo');
+    if (dqRotationDemoBtn) {
+        dqRotationDemoBtn.addEventListener('click', demoRotation);
+    }
+    const dqTranslationDemoBtn = document.getElementById('dq-translation-demo');
+    if (dqTranslationDemoBtn) {
+        dqTranslationDemoBtn.addEventListener('click', demoTranslation);
+    }
+    const dqPoseDemoBtn = document.getElementById('dq-pose-demo');
+    if (dqPoseDemoBtn) {
+        dqPoseDemoBtn.addEventListener('click', demoPose);
+    }
     
-    // URDF → MDH 按钮
-    document.getElementById('extract-mdh-btn').addEventListener('click', extractMDHFromCurrentURDF);
-    document.getElementById('compare-mdh-btn').addEventListener('click', compareMDHParameters);
-    document.getElementById('use-urdf-mdh-btn').addEventListener('click', useURDFMDH);
+    // URDF → MDH 按钮（可选）
+    const extractMdhBtn = document.getElementById('extract-mdh-btn');
+    if (extractMdhBtn) {
+        extractMdhBtn.addEventListener('click', extractMDHFromCurrentURDF);
+    }
+    const compareMdhBtn = document.getElementById('compare-mdh-btn');
+    if (compareMdhBtn) {
+        compareMdhBtn.addEventListener('click', compareMDHParameters);
+    }
+    const useUrdfMdhBtn = document.getElementById('use-urdf-mdh-btn');
+    if (useUrdfMdhBtn) {
+        useUrdfMdhBtn.addEventListener('click', useURDFMDH);
+    }
     
     // MDH坐标系显示开关
     const mdhFramesToggle = document.getElementById('show-mdh-frames-toggle');

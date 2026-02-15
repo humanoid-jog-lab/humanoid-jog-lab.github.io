@@ -409,6 +409,17 @@ body {
 }
 
 /* 关节控制 */
+.joint-controls-toolbar {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+}
+
+.joint-controls-toolbar .demo-btn {
+    width: 100%;
+}
+
 #joint-controls {
     display: flex;
     flex-direction: column;
@@ -843,6 +854,10 @@ body {
     }
     
     .preset-buttons {
+        grid-template-columns: 1fr;
+    }
+
+    .joint-controls-toolbar {
         grid-template-columns: 1fr;
     }
     
