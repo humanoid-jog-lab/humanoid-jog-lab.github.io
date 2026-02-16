@@ -195,6 +195,7 @@ export const callbacks = {
     setupROS2EventListeners: null,
 
     // planned-motion.js
+    planPlannedMotion: null,
     executePlannedMotion: null,
     cancelPlannedMotion: null,
     setupPlannedMotionListeners: null,
