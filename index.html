@@ -36,6 +36,9 @@
                         <button id="angle-unit-toggle" class="demo-btn" style="padding: 0.35rem 0.75rem; font-size: 0.85rem;">
                             切换为弧度
                         </button>
+                        <button id="top-down-view-btn" class="demo-btn" style="padding: 0.35rem 0.75rem; font-size: 0.85rem;">
+                            俯视视角
+                        </button>
                     </div>
                     <div id="joint-controls">
                         <!-- 动态生成的关节滑块 -->
@@ -177,13 +180,25 @@
                         </p>
                         <div style="margin-bottom: 0.5rem;">
                             <label style="font-size: 0.85rem; color: #cbd5e1; display: block; margin-bottom: 0.25rem;">
-                                目标双四元数（8 个数，空格/逗号分隔）：
+                                任务类型：
+                            </label>
+                            <select
+                                id="planned-motion-task-type-select"
+                                style="width: 100%; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;"
+                            >
+                                <option value="absolute">绝对位姿规划（现有）</option>
+                                <option value="dual-arm-sequence-place">左右臂顺序放置（先左后右）</option>
+                            </select>
+                        </div>
+                        <div id="planned-motion-absolute-target-row" style="margin-bottom: 0.5rem;">
+                            <label style="font-size: 0.85rem; color: #cbd5e1; display: block; margin-bottom: 0.25rem;">
+                                目标双四元数（8 个数）：
                             </label>
                             <div style="display: flex; gap: 0.35rem;">
                                 <input
                                     type="text"
                                     id="planned-motion-dq-input"
-                                    placeholder="qw qx qy qz qw' qx' qy' qz'"
+                                    placeholder="qw qx qy qz qw' qx' qy' qz"
                                     style="flex: 1; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;"
                                 >
                                 <button id="planned-motion-copy-current" class="demo-btn" style="padding: 0.35rem 0.6rem; font-size: 0.75rem; white-space: nowrap;">
@@ -191,7 +206,52 @@
                                 </button>
                             </div>
                         </div>
-                        <div style="margin-bottom: 0.5rem;">
+                        <div id="planned-motion-base-yaw-row" style="margin-bottom: 0.5rem;">
+                            <label style="font-size: 0.85rem; color: #cbd5e1; display: block; margin-bottom: 0.25rem;">
+                                底盘目标 yaw（可选，独立设置）：
+                            </label>
+                            <input
+                                type="text"
+                                id="planned-motion-base-yaw-input"
+                                value="0"
+                                placeholder="例如：30deg / 0.52rad / 30（默认 0 度）"
+                                style="width: 100%; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;"
+                            >
+                            <div style="font-size: 0.7rem; color: #64748b; margin-top: 0.15rem;">
+                                支持 <code>30deg</code> / <code>0.52rad</code> / 纯数字（默认度）；留空按 <code>0deg</code>
+                            </div>
+                        </div>
+                        <div id="planned-motion-placement-targets" style="margin-bottom: 0.5rem; display: none;">
+                            <label style="font-size: 0.85rem; color: #cbd5e1; display: block; margin-bottom: 0.25rem;">
+                                左臂放置点 A（世界坐标系 DQ）：
+                            </label>
+                            <div style="display: flex; gap: 0.35rem; margin-bottom: 0.35rem;">
+                                <input
+                                    type="text"
+                                    id="planned-motion-left-dq-input"
+                                    placeholder="qw qx qy qz qw' qx' qy' qz'"
+                                    style="flex: 1; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;"
+                                >
+                                <button id="planned-motion-copy-left-current" class="demo-btn" style="padding: 0.35rem 0.6rem; font-size: 0.75rem; white-space: nowrap;">
+                                    左臂当前
+                                </button>
+                            </div>
+                            <label style="font-size: 0.85rem; color: #cbd5e1; display: block; margin-bottom: 0.25rem;">
+                                右臂放置点 B（世界坐标系 DQ）：
+                            </label>
+                            <div style="display: flex; gap: 0.35rem;">
+                                <input
+                                    type="text"
+                                    id="planned-motion-right-dq-input"
+                                    placeholder="qw qx qy qz qw' qx' qy' qz'"
+                                    style="flex: 1; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;"
+                                >
+                                <button id="planned-motion-copy-right-current" class="demo-btn" style="padding: 0.35rem 0.6rem; font-size: 0.75rem; white-space: nowrap;">
+                                    右臂当前
+                                </button>
+                            </div>
+                        </div>
+                        <div id="planned-motion-threshold-row" style="margin-bottom: 0.5rem;">
                             <label style="font-size: 0.85rem; color: #cbd5e1; display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.25rem;">
                                 <span>底盘启动阈值</span>
                                 <span><code id="planned-motion-threshold-value">40</code> cm</span>
@@ -199,6 +259,21 @@
                             <input id="planned-motion-threshold" type="range" min="10" max="100" value="40" step="5" style="width: 100%;">
                             <div style="font-size: 0.7rem; color: #64748b; margin-top: 0.15rem;">
                                 偏差大于此值时先移动底盘，否则直接手臂补偿
+                            </div>
+                        </div>
+                        <div id="planned-motion-control-mode-row" style="margin-bottom: 0.5rem;">
+                            <label style="font-size: 0.85rem; color: #cbd5e1; display: block; margin-bottom: 0.25rem;">
+                                手臂补偿模式：
+                            </label>
+                            <select
+                                id="planned-motion-control-mode-select"
+                                style="width: 100%; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;"
+                            >
+                                <option value="decoupled">全身绝对位姿</option>
+                                <option value="decoupled-upright">全身绝对位姿（腰部竖直）</option>
+                            </select>
+                            <div style="font-size: 0.7rem; color: #64748b; margin-top: 0.15rem;">
+                                规划运动时手臂 IK 是否保持 body_link 的 z 轴竖直
                             </div>
                         </div>
                         <div style="display: flex; gap: 0.5rem; margin-bottom: 0.5rem;">
@@ -211,6 +286,91 @@
                             <button id="planned-motion-cancel-btn" class="demo-btn" style="flex: 0 0 auto; padding: 0.35rem 0.75rem;" disabled>
                                 取消
                             </button>
+                        </div>
+                        <div id="planned-motion-debug-row" style="margin-bottom: 0.5rem;">
+                            <div style="font-size: 0.75rem; color: #94a3b8; margin-bottom: 0.25rem;">
+                                Debug 分步查看：
+                            </div>
+                            <div id="planned-motion-debug-step-row" style="display: none; gap: 0.35rem; flex-wrap: wrap; margin-bottom: 0.3rem;">
+                                <button id="planned-motion-debug-step-left-btn" class="demo-btn" style="padding: 0.3rem 0.55rem; font-size: 0.72rem;">
+                                    左臂流程
+                                </button>
+                                <button id="planned-motion-debug-step-right-btn" class="demo-btn" style="padding: 0.3rem 0.55rem; font-size: 0.72rem;">
+                                    右臂流程
+                                </button>
+                            </div>
+                            <div style="display: flex; gap: 0.35rem; flex-wrap: wrap;">
+                                <button id="planned-motion-debug-start-btn" class="demo-btn" style="padding: 0.3rem 0.55rem; font-size: 0.72rem;">
+                                    起点
+                                </button>
+                                <button id="planned-motion-debug-waist-btn" class="demo-btn" style="padding: 0.3rem 0.55rem; font-size: 0.72rem;">
+                                    腰部对齐后
+                                </button>
+                                <button id="planned-motion-debug-base-btn" class="demo-btn" style="padding: 0.3rem 0.55rem; font-size: 0.72rem;">
+                                    底盘XY后
+                                </button>
+                                <button id="planned-motion-debug-final-btn" class="demo-btn" style="padding: 0.3rem 0.55rem; font-size: 0.72rem;">
+                                    最终IK
+                                </button>
+                                <button id="planned-motion-debug-dump-btn" class="demo-btn" style="padding: 0.3rem 0.55rem; font-size: 0.72rem;">
+                                    打印计划
+                                </button>
+                                <button id="planned-motion-debug-flow-btn" class="demo-btn" style="padding: 0.3rem 0.55rem; font-size: 0.72rem;">
+                                    流程可视化
+                                </button>
+                            </div>
+                            <div id="planned-motion-debug-info" style="font-size: 0.72rem; color: #93c5fd; margin-top: 0.3rem; line-height: 1.35;">
+                                -
+                            </div>
+                        </div>
+                        <div id="planned-motion-joint-monitor" class="planned-motion-joint-monitor">
+                            <div class="planned-motion-joint-monitor-header">
+                                <span>执行关节实时监控</span>
+                                <div class="planned-motion-joint-monitor-header-actions">
+                                    <button
+                                        id="planned-motion-joint-monitor-open-window"
+                                        class="demo-btn planned-motion-monitor-open-btn"
+                                        type="button"
+                                    >
+                                        新窗口查看
+                                    </button>
+                                    <code id="planned-motion-joint-monitor-state">等待人形数据</code>
+                                </div>
+                            </div>
+                            <div class="planned-motion-joint-monitor-grid">
+                                <div class="planned-motion-joint-card">
+                                    <div class="planned-motion-joint-card-head">
+                                        <span>腰部</span>
+                                        <code id="planned-motion-joint-waist-meta">0 joints</code>
+                                    </div>
+                                    <canvas id="planned-motion-joint-waist-canvas" class="planned-motion-joint-canvas" width="280" height="90"></canvas>
+                                    <div id="planned-motion-joint-waist-values" class="planned-motion-joint-values">-</div>
+                                </div>
+                                <div class="planned-motion-joint-card">
+                                    <div class="planned-motion-joint-card-head">
+                                        <span>左臂</span>
+                                        <code id="planned-motion-joint-left-meta">0 joints</code>
+                                    </div>
+                                    <canvas id="planned-motion-joint-left-canvas" class="planned-motion-joint-canvas" width="280" height="90"></canvas>
+                                    <div id="planned-motion-joint-left-values" class="planned-motion-joint-values">-</div>
+                                </div>
+                                <div class="planned-motion-joint-card">
+                                    <div class="planned-motion-joint-card-head">
+                                        <span>右臂</span>
+                                        <code id="planned-motion-joint-right-meta">0 joints</code>
+                                    </div>
+                                    <canvas id="planned-motion-joint-right-canvas" class="planned-motion-joint-canvas" width="280" height="90"></canvas>
+                                    <div id="planned-motion-joint-right-values" class="planned-motion-joint-values">-</div>
+                                </div>
+                                <div class="planned-motion-joint-card">
+                                    <div class="planned-motion-joint-card-head">
+                                        <span>头部</span>
+                                        <code id="planned-motion-joint-head-meta">0 joints</code>
+                                    </div>
+                                    <canvas id="planned-motion-joint-head-canvas" class="planned-motion-joint-canvas" width="280" height="90"></canvas>
+                                    <div id="planned-motion-joint-head-values" class="planned-motion-joint-values">-</div>
+                                </div>
+                            </div>
                         </div>
                         <div id="planned-motion-status" class="planned-motion-status">
                             就绪

@@ -19,7 +19,18 @@
 #include <dqrobotics/robots/FrankaEmikaPandaRobot.h>
 #include <dqrobotics/robots/KukaLw4Robot.h>
 #include <Eigen/Dense>
+#include <algorithm>
 #include <cmath>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+#if TOPPRA_AVAILABLE
+#include <toppra/algorithm/toppra.hpp>
+#include <toppra/constraint/linear_joint_acceleration.hpp>
+#include <toppra/constraint/linear_joint_velocity.hpp>
+#include <toppra/geometric_path/piecewise_poly_path.hpp>
+#endif
 
 using namespace emscripten;
 using namespace DQ_robotics;
@@ -74,6 +85,212 @@ MatrixXd jsArrayToMatrixXd(const val& jsArray2d) {
     }
     return mat;
 }
+
+val stdVectorToJsArray(const std::vector<double>& values) {
+    val jsArray = val::array();
+    for (double v : values) {
+        jsArray.call<void>("push", v);
+    }
+    return jsArray;
+}
+
+class TOPPRA_Wrapper {
+public:
+    static val retimeWaypoints(
+        const val& waypoints_js,
+        const val& max_vel_js,
+        const val& max_acc_js,
+        int gridpoints_hint = 0
+    ) {
+        val out = val::object();
+
+#if TOPPRA_AVAILABLE
+        try {
+            const int num_waypoints = waypoints_js["length"].as<int>();
+            if (num_waypoints < 2) {
+                throw std::runtime_error("waypoints 至少需要 2 个点");
+            }
+
+            const val first = waypoints_js[0];
+            const int dof = first["length"].as<int>();
+            if (dof <= 0) {
+                throw std::runtime_error("waypoints 维度无效");
+            }
+
+            toppra::Vectors positions;
+            positions.reserve(static_cast<std::size_t>(num_waypoints));
+            for (int i = 0; i < num_waypoints; ++i) {
+                val row = waypoints_js[i];
+                const int row_len = row["length"].as<int>();
+                if (row_len != dof) {
+                    throw std::runtime_error("waypoints 每个点维度必须一致");
+                }
+                toppra::Vector q(dof);
+                for (int j = 0; j < dof; ++j) {
+                    const double v = row[j].as<double>();
+                    if (!std::isfinite(v)) {
+                        throw std::runtime_error("waypoints 含非法数值");
+                    }
+                    q(j) = v;
+                }
+                positions.push_back(q);
+            }
+
+            auto parse_limit_vector = [&](const val& js, double fallback, const char* name) {
+                toppra::Vector limit(dof);
+                limit.setConstant(std::abs(fallback));
+
+                if (js.isUndefined() || js.isNull()) {
+                    return limit;
+                }
+
+                bool parsed_as_scalar = false;
+                try {
+                    std::string type = js.typeOf().as<std::string>();
+                    if (type == "number") {
+                        const double s = js.as<double>();
+                        if (!std::isfinite(s) || s <= 0) {
+                            throw std::runtime_error(std::string(name) + " 标量必须为正数");
+                        }
+                        limit.setConstant(std::abs(s));
+                        parsed_as_scalar = true;
+                    }
+                } catch (...) {
+                    parsed_as_scalar = false;
+                }
+                if (parsed_as_scalar) return limit;
+
+                const int len = js["length"].as<int>();
+                if (len != dof) {
+                    throw std::runtime_error(std::string(name) + " 维度需与 waypoint 维度一致");
+                }
+
+                for (int i = 0; i < dof; ++i) {
+                    const double v = js[i].as<double>();
+                    if (!std::isfinite(v) || v <= 0) {
+                        throw std::runtime_error(std::string(name) + " 每个维度都必须是正数");
+                    }
+                    limit(i) = std::abs(v);
+                }
+                return limit;
+            };
+
+            const toppra::Vector vel_abs = parse_limit_vector(max_vel_js, 0.45, "max_vel");
+            const toppra::Vector acc_abs = parse_limit_vector(max_acc_js, 0.90, "max_acc");
+            const toppra::Vector vel_lower = -vel_abs;
+            const toppra::Vector vel_upper = vel_abs;
+            const toppra::Vector acc_lower = -acc_abs;
+            const toppra::Vector acc_upper = acc_abs;
+
+            toppra::Vector knots = toppra::Vector::LinSpaced(
+                num_waypoints,
+                0.0,
+                static_cast<double>(num_waypoints - 1)
+            );
+            toppra::BoundaryCondFull bc_type = {
+                toppra::BoundaryCond("clamped"),
+                toppra::BoundaryCond("clamped"),
+            };
+            toppra::PiecewisePolyPath path_poly = toppra::PiecewisePolyPath::CubicSpline(
+                positions,
+                knots,
+                bc_type
+            );
+            toppra::GeometricPathPtr path = std::make_shared<toppra::PiecewisePolyPath>(path_poly);
+
+            toppra::LinearConstraintPtr c_vel =
+                std::make_shared<toppra::constraint::LinearJointVelocity>(vel_lower, vel_upper);
+            toppra::LinearConstraintPtr c_acc =
+                std::make_shared<toppra::constraint::LinearJointAcceleration>(acc_lower, acc_upper);
+            c_acc->discretizationType(toppra::DiscretizationType::Interpolation);
+
+            toppra::LinearConstraintPtrs constraints{c_vel, c_acc};
+            auto algo = std::make_shared<toppra::algorithm::TOPPRA>(constraints, path);
+
+            const int min_n = std::max(1, num_waypoints - 1);
+            const int suggested_n = std::max(min_n, (num_waypoints - 1) * 5);
+            const int final_n = gridpoints_hint > 0 ? std::max(gridpoints_hint, min_n) : suggested_n;
+            algo->setN(final_n);
+
+            const toppra::ReturnCode rc = algo->computePathParametrization(0.0, 0.0);
+            if (rc != toppra::ReturnCode::OK) {
+                throw std::runtime_error("TOPPRA 失败: " + algo->getErrorMessage());
+            }
+
+            const auto data = algo->getParameterizationData();
+            const toppra::Vector s_grid = data.gridpoints;
+            const toppra::Vector vsq = data.parametrization.cwiseMax(0.0);
+            const toppra::Vector v_grid = vsq.array().sqrt();
+
+            std::vector<double> t_grid(static_cast<std::size_t>(s_grid.size()), 0.0);
+            for (int i = 0; i < s_grid.size() - 1; ++i) {
+                const double ds = s_grid(i + 1) - s_grid(i);
+                const double denom = v_grid(i) + v_grid(i + 1);
+                double dt = 0.0;
+                if (denom > 1e-9 && ds > 0) {
+                    dt = 2.0 * ds / denom;
+                }
+                if (!std::isfinite(dt) || dt < 0) dt = 0.0;
+                t_grid[static_cast<std::size_t>(i + 1)] = t_grid[static_cast<std::size_t>(i)] + dt;
+            }
+
+            auto sample_time_from_s = [&](double s_query) {
+                if (s_query <= s_grid(0)) return t_grid.front();
+                if (s_query >= s_grid(s_grid.size() - 1)) return t_grid.back();
+
+                int lo = 0;
+                int hi = s_grid.size() - 2;
+                while (lo <= hi) {
+                    int mid = lo + (hi - lo) / 2;
+                    if (s_grid(mid + 1) < s_query) lo = mid + 1;
+                    else hi = mid - 1;
+                }
+                const int max_idx = static_cast<int>(s_grid.size()) - 2;
+                const int idx = std::max(0, std::min(max_idx, lo));
+                const double s0 = s_grid(idx);
+                const double s1 = s_grid(idx + 1);
+                const double t0 = t_grid[static_cast<std::size_t>(idx)];
+                const double t1 = t_grid[static_cast<std::size_t>(idx + 1)];
+                if (s1 - s0 <= 1e-12) return t0;
+                const double r = std::max(0.0, std::min(1.0, (s_query - s0) / (s1 - s0)));
+                return t0 + (t1 - t0) * r;
+            };
+
+            std::vector<double> waypoint_times(static_cast<std::size_t>(num_waypoints), 0.0);
+            for (int i = 0; i < num_waypoints; ++i) {
+                waypoint_times[static_cast<std::size_t>(i)] = sample_time_from_s(knots(i));
+                if (i > 0 && waypoint_times[static_cast<std::size_t>(i)] < waypoint_times[static_cast<std::size_t>(i - 1)]) {
+                    waypoint_times[static_cast<std::size_t>(i)] = waypoint_times[static_cast<std::size_t>(i - 1)];
+                }
+            }
+
+            out.set("ok", true);
+            out.set("message", std::string("ok"));
+            out.set("dof", dof);
+            out.set("numWaypoints", num_waypoints);
+            out.set("duration", waypoint_times.back());
+            out.set("waypointTimes", stdVectorToJsArray(waypoint_times));
+            out.set("gridpoints", vectorXdToJsArray(s_grid));
+            out.set("gridTimes", stdVectorToJsArray(t_grid));
+            out.set("pathVelocitySquared", vectorXdToJsArray(vsq));
+            out.set("solverCode", static_cast<int>(data.ret_code));
+            return out;
+        } catch (const std::exception& e) {
+            out.set("ok", false);
+            out.set("message", std::string(e.what()));
+            return out;
+        }
+#else
+        (void)waypoints_js;
+        (void)max_vel_js;
+        (void)max_acc_js;
+        (void)gridpoints_hint;
+        out.set("ok", false);
+        out.set("message", std::string("TOPPRA 不可用：WASM 构建未启用 TOPPRA"));
+        return out;
+#endif
+    }
+};
 
 // DQ 类的包装器，提供更友好的 JavaScript 接口
 class DQ_Wrapper {
@@ -937,6 +1154,10 @@ EMSCRIPTEN_BINDINGS(dqrobotics_module) {
         .class_function("getTranslation", &DQ_Wrapper::getTranslation)
         .class_function("getRotation", &DQ_Wrapper::getRotation)
         .class_function("getRotationMatrix", &DQ_Wrapper::getRotationMatrix);
+
+    // TOPPRA 路点时间参数化（waypoints -> timestamps）
+    class_<TOPPRA_Wrapper>("TOPPRAWrapper")
+        .class_function("retimeWaypoints", &TOPPRA_Wrapper::retimeWaypoints);
 
     // 运动学工具（静态函数）
     class_<Kinematics_Wrapper>("Kinematics")

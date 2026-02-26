@@ -35,4 +35,7 @@ yarn-error.log*
 # 临时文件
 *.tmp
 *.temp
+.em_cache/
 
+# 忽略本地论文目录
+2026_humanoid_robot/

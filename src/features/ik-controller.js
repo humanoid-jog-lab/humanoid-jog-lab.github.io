@@ -7,8 +7,6 @@
  */
 
 import { appState, callbacks } from '../core/state.js';
-import { DQ, getDQModule } from '../dqrobotics.js';
-
 // ──────────────────────────────────────────────────────────────
 // formatDualQuaternion
 // ──────────────────────────────────────────────────────────────
@@ -102,25 +100,30 @@ export function getCurrentRobotDQ(robotChoice) {
     try {
         if (appState.humanoidMode) {
             if (!appState.humanoidModel || !appState.humanoidQ?.length) return null;
-            const baseDQ = DQ.pose(
-                0, 0, 1,
-                appState.humanoidBasePose?.yaw || 0,
+            const dqWrapper = window.DQModule.DQWrapper;
+            const baseTrans = dqWrapper.translation(
                 appState.humanoidBasePose?.x || 0,
                 appState.humanoidBasePose?.y || 0,
                 0
-            ).toArray();
-            const baseObj = window.DQModule.DQWrapper.createFromArray(baseDQ);
+            );
+            const baseRot = dqWrapper.rotation(
+                appState.humanoidBasePose?.yaw || 0,
+                0,
+                0,
+                1
+            );
+            const baseObj = dqWrapper.multiply(baseTrans, baseRot);
 
             if (robotChoice === 'robot1') {
                 const local = appState.humanoidModel.fkmEffector(appState.humanoidQ, 1);
-                return window.DQModule.DQWrapper.toArray(
-                    window.DQModule.DQWrapper.multiply(baseObj, window.DQModule.DQWrapper.createFromArray(local))
+                return dqWrapper.toArray(
+                    dqWrapper.multiply(baseObj, dqWrapper.createFromArray(local))
                 );
             }
             if (robotChoice === 'robot2') {
                 const local = appState.humanoidModel.fkmEffector(appState.humanoidQ, 2);
-                return window.DQModule.DQWrapper.toArray(
-                    window.DQModule.DQWrapper.multiply(baseObj, window.DQModule.DQWrapper.createFromArray(local))
+                return dqWrapper.toArray(
+                    dqWrapper.multiply(baseObj, dqWrapper.createFromArray(local))
                 );
             }
             if (robotChoice === 'absolute') {
@@ -128,8 +131,8 @@ export function getCurrentRobotDQ(robotChoice) {
                     return null;
                 }
                 const local = appState.dualArmSystem.getAbsolutePose(appState.humanoidQ);
-                return window.DQModule.DQWrapper.toArray(
-                    window.DQModule.DQWrapper.multiply(baseObj, window.DQModule.DQWrapper.createFromArray(local))
+                return dqWrapper.toArray(
+                    dqWrapper.multiply(baseObj, dqWrapper.createFromArray(local))
                 );
             }
             if (robotChoice === 'relative') {

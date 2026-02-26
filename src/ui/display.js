@@ -34,8 +34,12 @@ export function updatePoseDisplay(pose) {
  * @param {Object} pose2 - 右臂/机器人2位姿
  * @param {Object|null} optionalAbsolutePose - 可选，预计算的绝对位姿（人形时传入）
  * @param {Object|null} optionalRelativePose - 可选，预计算的相对位姿（人形时传入）
+ * @param {Object|null} optionalDQData - 可选，预计算的原始 DQ 数据
  */
-export function updateDualArmPoseDisplay(pose1, pose2, optionalAbsolutePose, optionalRelativePose) {
+export function updateDualArmPoseDisplay(pose1, pose2, optionalAbsolutePose, optionalRelativePose, optionalDQData = null) {
+    const isDQArray = (arr) => Array.isArray(arr) && arr.length >= 8;
+    const providedDQ = optionalDQData || {};
+
     // 机器人1的位置和四元数
     const x1 = pose1.translation[1] || 0;
     const y1 = pose1.translation[2] || 0;
@@ -55,7 +59,7 @@ export function updateDualArmPoseDisplay(pose1, pose2, optionalAbsolutePose, opt
     const qz2 = pose2.rotation[3] || 0;
     
     // 获取绝对位姿（使用absolute_pose函数或人形预计算值）
-    let absX, absY, absZ, absQW, absQX, absQY, absQZ, absDQ = null;
+    let absX, absY, absZ, absQW, absQX, absQY, absQZ, absDQ = isDQArray(providedDQ.absoluteDQ) ? providedDQ.absoluteDQ : null;
     
     if (optionalAbsolutePose) {
         absX = optionalAbsolutePose.translation[1] || 0;
@@ -65,15 +69,17 @@ export function updateDualArmPoseDisplay(pose1, pose2, optionalAbsolutePose, opt
         absQX = optionalAbsolutePose.rotation[1] || 0;
         absQY = optionalAbsolutePose.rotation[2] || 0;
         absQZ = optionalAbsolutePose.rotation[3] || 0;
-        // 从位置和四元数构建DQ数组用于显示
-        try {
-            const dqModule = getDQModule();
-            if (dqModule && dqModule.DQWrapper) {
-                const absDQObj = dqModule.DQWrapper.fromQuaternionAndTranslation(absQW, absQX, absQY, absQZ, absX, absY, absZ);
-                absDQ = dqModule.DQWrapper.toArray(absDQObj);
+        if (!absDQ) {
+            // 从位置和四元数构建DQ数组用于显示（仅在未提供原始DQ时回退）
+            try {
+                const dqModule = getDQModule();
+                if (dqModule && dqModule.DQWrapper) {
+                    const absDQObj = dqModule.DQWrapper.fromQuaternionAndTranslation(absQW, absQX, absQY, absQZ, absX, absY, absZ);
+                    absDQ = dqModule.DQWrapper.toArray(absDQObj);
+                }
+            } catch (e) {
+                console.warn('构建绝对位姿DQ失败:', e);
             }
-        } catch (e) {
-            console.warn('构建绝对位姿DQ失败:', e);
         }
     } else if (appState.dualArmSystem && appState.jointAngles1.length > 0 && appState.jointAngles2.length > 0) {
         const allJointAngles = [...appState.jointAngles1, ...appState.jointAngles2];
@@ -115,7 +121,7 @@ export function updateDualArmPoseDisplay(pose1, pose2, optionalAbsolutePose, opt
     }
     
     // 计算相对位姿（使用relative_pose函数或人形预计算值）
-    let relX, relY, relZ, relQW, relQX, relQY, relQZ, relDQ = null;
+    let relX, relY, relZ, relQW, relQX, relQY, relQZ, relDQ = isDQArray(providedDQ.relativeDQ) ? providedDQ.relativeDQ : null;
     
     if (optionalRelativePose) {
         relX = optionalRelativePose.translation[1] || 0;
@@ -125,15 +131,17 @@ export function updateDualArmPoseDisplay(pose1, pose2, optionalAbsolutePose, opt
         relQX = optionalRelativePose.rotation[1] || 0;
         relQY = optionalRelativePose.rotation[2] || 0;
         relQZ = optionalRelativePose.rotation[3] || 0;
-        // 从位置和四元数构建DQ数组用于显示
-        try {
-            const dqModule = getDQModule();
-            if (dqModule && dqModule.DQWrapper) {
-                const relDQObj = dqModule.DQWrapper.fromQuaternionAndTranslation(relQW, relQX, relQY, relQZ, relX, relY, relZ);
-                relDQ = dqModule.DQWrapper.toArray(relDQObj);
+        if (!relDQ) {
+            // 从位置和四元数构建DQ数组用于显示（仅在未提供原始DQ时回退）
+            try {
+                const dqModule = getDQModule();
+                if (dqModule && dqModule.DQWrapper) {
+                    const relDQObj = dqModule.DQWrapper.fromQuaternionAndTranslation(relQW, relQX, relQY, relQZ, relX, relY, relZ);
+                    relDQ = dqModule.DQWrapper.toArray(relDQObj);
+                }
+            } catch (e) {
+                console.warn('构建相对位姿DQ失败:', e);
             }
-        } catch (e) {
-            console.warn('构建相对位姿DQ失败:', e);
         }
     } else if (appState.dualArmSystem && appState.jointAngles1.length > 0 && appState.jointAngles2.length > 0) {
         const allJointAngles = [...appState.jointAngles1, ...appState.jointAngles2];
@@ -208,19 +216,52 @@ export function updateDualArmPoseDisplay(pose1, pose2, optionalAbsolutePose, opt
     
     const relDistance = Math.sqrt(relX * relX + relY * relY + relZ * relZ);
     
-    // 获取机器人1和机器人2的DQ表示
-    let dq1 = null, dq2 = null;
+    // 优先显示原始运动学DQ（与计算器“加载当前姿态”一致）
+    let dq1 = isDQArray(providedDQ.robot1DQ) ? providedDQ.robot1DQ : null;
+    let dq2 = isDQArray(providedDQ.robot2DQ) ? providedDQ.robot2DQ : null;
     try {
-        if (appState.robot1) {
-            const dq1Array = appState.robot1.fkm(appState.jointAngles1);
-            dq1 = dq1Array;
+        const dqModule = getDQModule();
+        const dqWrapper = dqModule?.DQWrapper;
+
+        if ((!dq1 || !dq2) && dqWrapper && appState.humanoidMode && appState.humanoidModel && appState.humanoidQ?.length) {
+            const baseX = appState.humanoidBasePose?.x || 0;
+            const baseY = appState.humanoidBasePose?.y || 0;
+            const baseYaw = appState.humanoidBasePose?.yaw || 0;
+            const baseTrans = dqWrapper.translation(baseX, baseY, 0);
+            const baseRot = dqWrapper.rotation(baseYaw, 0, 0, 1);
+            const baseObj = dqWrapper.multiply(baseTrans, baseRot);
+
+            if (!dq1) {
+                const local1 = appState.humanoidModel.fkmEffector(appState.humanoidQ, 1);
+                dq1 = dqWrapper.toArray(dqWrapper.multiply(baseObj, dqWrapper.createFromArray(local1)));
+            }
+            if (!dq2) {
+                const local2 = appState.humanoidModel.fkmEffector(appState.humanoidQ, 2);
+                dq2 = dqWrapper.toArray(dqWrapper.multiply(baseObj, dqWrapper.createFromArray(local2)));
+            }
         }
-        if (appState.robot2) {
-            const dq2Array = appState.robot2.fkm(appState.jointAngles2);
-            dq2 = dq2Array;
+
+        if ((!dq1 || !dq2) && !appState.humanoidMode) {
+            if (!dq1 && appState.robot1 && appState.jointAngles1?.length) {
+                dq1 = appState.robot1.fkm(appState.jointAngles1);
+            }
+            if (!dq2 && appState.robot2 && appState.jointAngles2?.length) {
+                dq2 = appState.robot2.fkm(appState.jointAngles2);
+            }
+        }
+
+        if (dqWrapper) {
+            if (!dq1) {
+                const dq1Obj = dqWrapper.fromQuaternionAndTranslation(qw1, qx1, qy1, qz1, x1, y1, z1);
+                dq1 = dqWrapper.toArray(dq1Obj);
+            }
+            if (!dq2) {
+                const dq2Obj = dqWrapper.fromQuaternionAndTranslation(qw2, qx2, qy2, qz2, x2, y2, z2);
+                dq2 = dqWrapper.toArray(dq2Obj);
+            }
         }
     } catch (error) {
-        console.warn('获取机器人DQ表示失败:', error);
+        console.warn('获取左右臂DQ显示失败:', error);
     }
     
     // 更新机器人1位姿

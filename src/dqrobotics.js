@@ -61,6 +61,75 @@ export function getDQModule() {
 }
 
 /**
+ * 使用 WASM 里的 TOPPRA 对路点进行时间参数化。
+ * @param {number[][]} waypoints - 形状 [N, dof]，N>=2
+ * @param {Object} [options]
+ * @param {number|number[]} [options.maxVel=0.45] - 每维最大速度（绝对值）
+ * @param {number|number[]} [options.maxAcc=0.9] - 每维最大加速度（绝对值）
+ * @param {number} [options.gridpoints=0] - 离散网格段数（0 表示自动）
+ * @returns {{ok:boolean, message?:string, duration?:number, waypointTimes?:number[]}|null}
+ */
+export function retimeWaypointsWithTOPPRA(waypoints, options = {}) {
+    if (!DQModule?.TOPPRAWrapper || typeof DQModule.TOPPRAWrapper.retimeWaypoints !== 'function') {
+        return null;
+    }
+    if (!Array.isArray(waypoints) || waypoints.length < 2) {
+        return null;
+    }
+
+    const dof = Array.isArray(waypoints[0]) ? waypoints[0].length : 0;
+    if (!Number.isFinite(dof) || dof <= 0) return null;
+
+    const normalizedWaypoints = [];
+    for (let i = 0; i < waypoints.length; i++) {
+        const row = waypoints[i];
+        if (!Array.isArray(row) || row.length !== dof) return null;
+        const normalizedRow = row.map(Number);
+        if (normalizedRow.some(v => !Number.isFinite(v))) return null;
+        normalizedWaypoints.push(normalizedRow);
+    }
+
+    const buildLimitVector = (value, fallback) => {
+        if (Array.isArray(value)) {
+            if (value.length !== dof) return Array(dof).fill(fallback);
+            const arr = value.map(v => Math.abs(Number(v)));
+            if (arr.some(v => !Number.isFinite(v) || v <= 0)) return Array(dof).fill(fallback);
+            return arr;
+        }
+        const scalar = Math.abs(Number(value));
+        const v = Number.isFinite(scalar) && scalar > 0 ? scalar : fallback;
+        return Array(dof).fill(v);
+    };
+
+    const maxVel = buildLimitVector(options.maxVel, 0.45);
+    const maxAcc = buildLimitVector(options.maxAcc, 0.9);
+    const gridpoints = Number.isFinite(Number(options.gridpoints))
+        ? Math.max(0, Math.floor(Number(options.gridpoints)))
+        : 0;
+
+    try {
+        const result = DQModule.TOPPRAWrapper.retimeWaypoints(
+            normalizedWaypoints,
+            maxVel,
+            maxAcc,
+            gridpoints
+        );
+        if (!result || result.ok !== true) {
+            return result || { ok: false, message: 'TOPPRA retime failed' };
+        }
+        if (!Array.isArray(result.waypointTimes) || result.waypointTimes.length !== normalizedWaypoints.length) {
+            return { ok: false, message: 'TOPPRA 返回时间戳长度异常' };
+        }
+        return result;
+    } catch (error) {
+        return {
+            ok: false,
+            message: `TOPPRA retime exception: ${error?.message || error}`,
+        };
+    }
+}
+
+/**
  * DQ 类的 JavaScript 包装
  */
 export class DQ {

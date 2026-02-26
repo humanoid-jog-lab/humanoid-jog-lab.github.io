@@ -7,9 +7,14 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Emscripten 编译标志
 if(EMSCRIPTEN)
     set(CMAKE_EXECUTABLE_SUFFIX ".js")
+    if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
+        # 避免第三方子项目 install 到 emsdk 系统目录。
+        set(CMAKE_INSTALL_PREFIX "/tmp/dq_vizlab_wasm_install" CACHE PATH "Install prefix" FORCE)
+    endif()
     
     # 添加 DQ Robotics 源目录
-    set(DQROBOTICS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../dqrobotics-cpp)
+    set(DQROBOTICS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/dqrobotics-cpp)
+    set(TOPPRA_CPP_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/toppra/cpp)
     
     # 查找 Eigen3
     # 注意: 在 Emscripten 环境中，你需要确保 Eigen 可用
@@ -18,8 +23,37 @@ if(EMSCRIPTEN)
     
     if(NOT EIGEN3_FOUND)
         # 如果找不到系统的 Eigen，使用本地副本
-        set(EIGEN3_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../eigen)
+        set(EIGEN3_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/eigen)
+        if(NOT TARGET Eigen3::Eigen)
+            add_library(Eigen3::Eigen INTERFACE IMPORTED)
+            set_target_properties(Eigen3::Eigen PROPERTIES
+                INTERFACE_INCLUDE_DIRECTORIES "${EIGEN3_INCLUDE_DIR}"
+            )
+        endif()
+        if(NOT DEFINED EIGEN3_VERSION_STRING OR EIGEN3_VERSION_STRING STREQUAL "")
+            set(EIGEN3_VERSION_STRING "3.4.0")
+        endif()
         message(STATUS "Using local Eigen at: ${EIGEN3_INCLUDE_DIR}")
+    endif()
+
+    set(HAS_TOPPRA OFF)
+    if(EXISTS "${TOPPRA_CPP_DIR}/src/toppra/toppra.hpp")
+        # 仅编译核心 C++ 库，不启用 Python / tests / pinocchio / 第三方 QP 求解器。
+        set(BUILD_TESTS OFF CACHE BOOL "Build toppra tests" FORCE)
+        set(BUILD_WITH_PINOCCHIO OFF CACHE BOOL "Build toppra with pinocchio" FORCE)
+        set(BUILD_WITH_qpOASES OFF CACHE BOOL "Build toppra with qpOASES" FORCE)
+        set(BUILD_WITH_GLPK OFF CACHE BOOL "Build toppra with GLPK" FORCE)
+        set(PYTHON_BINDINGS OFF CACHE BOOL "Build toppra python bindings" FORCE)
+        set(TOPPRA_DEBUG_ON OFF CACHE BOOL "Enable toppra debug logging" FORCE)
+        set(TOPPRA_WARN_ON OFF CACHE BOOL "Enable toppra warnings" FORCE)
+        set(OPT_MSGPACK OFF CACHE BOOL "Enable toppra msgpack serialization" FORCE)
+        set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build toppra shared libraries" FORCE)
+
+        add_subdirectory(${TOPPRA_CPP_DIR}/src ${CMAKE_BINARY_DIR}/toppra_src)
+        set(HAS_TOPPRA ON)
+        message(STATUS "Configured TOPPRA C++ core from: ${TOPPRA_CPP_DIR}/src")
+    else()
+        message(WARNING "TOPPRA source not found at ${TOPPRA_CPP_DIR}/src, building without TOPPRA")
     endif()
     
     # 添加 DQ Robotics 库的源文件
@@ -54,6 +88,13 @@ if(EMSCRIPTEN)
         ${DQROBOTICS_DIR}/include
         ${EIGEN3_INCLUDE_DIR}
     )
+
+    if(HAS_TOPPRA)
+        target_link_libraries(dqrobotics PRIVATE toppra)
+        target_compile_definitions(dqrobotics PRIVATE TOPPRA_AVAILABLE=1)
+    else()
+        target_compile_definitions(dqrobotics PRIVATE TOPPRA_AVAILABLE=0)
+    endif()
     
     # Emscripten 链接标志
     set(EMSCRIPTEN_LINK_FLAGS
@@ -86,6 +127,7 @@ if(EMSCRIPTEN)
     message(STATUS "Configured DQ Robotics WASM build")
     message(STATUS "DQ Robotics directory: ${DQROBOTICS_DIR}")
     message(STATUS "Eigen3 include: ${EIGEN3_INCLUDE_DIR}")
+    message(STATUS "TOPPRA enabled: ${HAS_TOPPRA}")
     
 else()
     message(FATAL_ERROR "This project must be built with Emscripten")

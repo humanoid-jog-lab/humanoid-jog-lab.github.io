@@ -949,6 +949,103 @@ body {
     transition: all 0.2s ease;
 }
 
+.planned-motion-joint-monitor {
+    margin-bottom: 0.55rem;
+    padding: 0.45rem;
+    border-radius: 0.45rem;
+    background: rgba(15, 23, 42, 0.45);
+    border: 1px solid rgba(71, 85, 105, 0.3);
+}
+
+.planned-motion-joint-monitor-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.45rem;
+    margin-bottom: 0.4rem;
+    font-size: 0.74rem;
+    color: #cbd5e1;
+}
+
+.planned-motion-joint-monitor-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.32rem;
+}
+
+.planned-motion-joint-monitor-header code {
+    font-size: 0.7rem;
+    color: #93c5fd;
+    background: rgba(30, 41, 59, 0.7);
+    padding: 0.14rem 0.32rem;
+    border-radius: 0.3rem;
+}
+
+.planned-motion-monitor-open-btn {
+    padding: 0.14rem 0.38rem;
+    font-size: 0.62rem;
+    line-height: 1.2;
+    color: #e2e8f0;
+    border-color: rgba(56, 189, 248, 0.38);
+    background: rgba(30, 41, 59, 0.7);
+}
+
+.planned-motion-monitor-open-btn:hover {
+    background: rgba(14, 116, 144, 0.35);
+    border-color: rgba(56, 189, 248, 0.56);
+}
+
+.planned-motion-joint-monitor-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.42rem;
+}
+
+.planned-motion-joint-card {
+    background: rgba(2, 6, 23, 0.4);
+    border: 1px solid rgba(71, 85, 105, 0.28);
+    border-radius: 0.4rem;
+    padding: 0.3rem;
+}
+
+.planned-motion-joint-card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.35rem;
+    margin-bottom: 0.2rem;
+    font-size: 0.68rem;
+    color: #dbeafe;
+}
+
+.planned-motion-joint-card-head code {
+    font-size: 0.64rem;
+    color: #7dd3fc;
+    background: rgba(15, 23, 42, 0.85);
+    padding: 0.08rem 0.24rem;
+    border-radius: 0.25rem;
+}
+
+.planned-motion-joint-canvas {
+    width: 100%;
+    height: 84px;
+    display: block;
+    border-radius: 0.32rem;
+    background: rgba(15, 23, 42, 0.78);
+    border: 1px solid rgba(71, 85, 105, 0.25);
+}
+
+.planned-motion-joint-values {
+    margin-top: 0.22rem;
+    min-height: 1.9em;
+    max-height: 4.8em;
+    overflow: hidden;
+    font-size: 0.62rem;
+    line-height: 1.3;
+    color: #93c5fd;
+    word-break: break-word;
+}
+
 .planned-motion-status.status-running {
     color: #60a5fa;
     background: rgba(59, 130, 246, 0.1);
@@ -971,6 +1068,12 @@ body {
 @keyframes planned-motion-pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.7; }
+}
+
+@media (max-width: 640px) {
+    .planned-motion-joint-monitor-grid {
+        grid-template-columns: 1fr;
+    }
 }
 
 /* 示教器风格控制面板 */

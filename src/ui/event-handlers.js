@@ -6,6 +6,7 @@
  */
 
 import { DEG_TO_RAD } from '../core/constants.js';
+import yaml from 'js-yaml';
 import { appState, callbacks } from '../core/state.js';
 import { DQ, SerialManipulator, FrankaPanda, getDQModule } from '../dqrobotics.js';
 import { extractMDHFromURDF, createMDHTestSuite, formatMDHForDQ } from '../urdf-to-mdh.js';
@@ -96,6 +97,28 @@ function setupEventListeners() {
                 callbacks.refreshJointControlDisplay();
             }
             updateAngleUnitToggleLabel();
+        });
+    }
+
+    const topDownViewBtn = document.getElementById('top-down-view-btn');
+    if (topDownViewBtn) {
+        const defaultText = topDownViewBtn.textContent.trim();
+        topDownViewBtn.addEventListener('click', () => {
+            topDownViewBtn.disabled = true;
+            try {
+                if (appState.visualizer?.setTopDownView) {
+                    appState.visualizer.setTopDownView();
+                }
+                topDownViewBtn.textContent = '已切换俯视';
+            } catch (error) {
+                console.error('切换俯视视角失败:', error);
+                topDownViewBtn.textContent = '切换失败';
+            } finally {
+                setTimeout(() => {
+                    topDownViewBtn.textContent = defaultText;
+                    topDownViewBtn.disabled = false;
+                }, 1200);
+            }
         });
     }
 
@@ -511,7 +534,6 @@ async function applyPreset(preset) {
             const baseUrl = import.meta.env.BASE_URL || '/';
             const response = await fetch(`${baseUrl}robots/franka/robot_config.yaml`);
             if (response.ok) {
-                const yaml = await import('js-yaml');
                 const text = await response.text();
                 config = yaml.load(text);
                 jointNames = config.joint_chain?.joints || [];

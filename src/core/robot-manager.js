@@ -6,6 +6,7 @@
  */
 
 import { appState, callbacks, updateWindowGlobals } from './state.js';
+import yaml from 'js-yaml';
 import {
     FrankaPanda,
     KukaLw4,
@@ -19,6 +20,8 @@ import { RobotVisualizer } from '../visualizer.js';
 import { extractMDHFromURDF, loadHumanoidChainsFromURDF } from '../urdf-to-mdh.js';
 import { URDFPackageManager, loadURDFFromPackage } from '../urdf-loader.js';
 import { computeEffectorPoseFromURDF } from '../features/joint-clipboard.js';
+
+const ENABLE_SINGLE_ARM_FKM_LOG = false;
 
 // ---------------------------------------------------------------------------
 // initVisualizer
@@ -125,8 +128,8 @@ export function updateSingleArmPose() {
         // 更新 3D 可视化
         if (appState.visualizer) {
             const orderedNames = appState.customRobotConfig?.joint_chain?.joints || [];
-            // 调试：打印 DQ 返回的原始坐标
-            if (pose && pose.translation) {
+            // 可选调试日志：避免在高频更新路径中默认打印
+            if (ENABLE_SINGLE_ARM_FKM_LOG && pose && pose.translation) {
                 const [w, x, y, z] = pose.translation;
                 console.log(`[DQ fkm] translation: [${w.toFixed(3)}, ${x.toFixed(3)}, ${y.toFixed(3)}, ${z.toFixed(3)}]`);
             }
@@ -177,6 +180,8 @@ export function updateHumanoidPose() {
 
         // 使用 dualArmSystem（HumanoidDualArmAdapter）计算绝对位姿和相对位姿，保持与控制器一致
         let absPose, relPose;
+        let absDQForDisplay = null;
+        let relDQForDisplay = null;
         if (appState.dualArmSystem && typeof appState.dualArmSystem.getAbsolutePose === 'function') {
             const absDQLocal = appState.dualArmSystem.getAbsolutePose(appState.humanoidQ);
             const relDQArr = appState.dualArmSystem.getRelativePose(appState.humanoidQ);
@@ -185,6 +190,8 @@ export function updateHumanoidPose() {
             const relObj = dqModule.DQWrapper.createFromArray(relDQArr);
             absPose = { translation: dqModule.DQWrapper.getTranslation(absObj), rotation: dqModule.DQWrapper.getRotation(absObj) };
             relPose = { translation: dqModule.DQWrapper.getTranslation(relObj), rotation: dqModule.DQWrapper.getRotation(relObj) };
+            absDQForDisplay = absDQ;
+            relDQForDisplay = relDQArr;
         } else {
             // fallback: 简单计算
             absPose = {
@@ -196,7 +203,12 @@ export function updateHumanoidPose() {
             relPose = { translation: dqModule.DQWrapper.getTranslation(relDQ), rotation: dqModule.DQWrapper.getRotation(relDQ) };
         }
         if (appState.visualizer) appState.visualizer.updateDualArmRelativeVisualizations(pose1, pose2, absPose, null);
-        callbacks.updateDualArmPoseDisplay(pose1, pose2, absPose, relPose);
+        callbacks.updateDualArmPoseDisplay(pose1, pose2, absPose, relPose, {
+            robot1DQ: worldDq1,
+            robot2DQ: worldDq2,
+            absoluteDQ: absDQForDisplay,
+            relativeDQ: relDQForDisplay
+        });
     } catch (error) {
         console.error('更新人形位姿失败:', error);
     }
@@ -217,8 +229,17 @@ export function updateDualArmPose() {
         }
 
         // 计算两个机器人的位姿
+        const dq1Array = appState.robot1.fkm(appState.jointAngles1);
+        const dq2Array = appState.robot2.fkm(appState.jointAngles2);
         const pose1 = appState.robot1.getEndEffectorPose(appState.jointAngles1);
         const pose2 = appState.robot2.getEndEffectorPose(appState.jointAngles2);
+        const allJointAngles = [...appState.jointAngles1, ...appState.jointAngles2];
+        const absoluteDQArray = appState.dualArmSystem?.getAbsolutePose
+            ? appState.dualArmSystem.getAbsolutePose(allJointAngles)
+            : null;
+        const relativeDQArray = appState.dualArmSystem?.getRelativePose
+            ? appState.dualArmSystem.getRelativePose(allJointAngles)
+            : null;
 
         // 更新 3D 可视化
         if (appState.visualizer) {
@@ -229,9 +250,6 @@ export function updateDualArmPose() {
             appState.visualizer.updateRobotPose(appState.jointAngles2, pose2, jointNames2, 1);
 
             // 使用 absolute_pose 函数计算绝对位姿
-            // 合并两个机器人的关节角度：[robot1_joints..., robot2_joints...]
-            const allJointAngles = [...appState.jointAngles1, ...appState.jointAngles2];
-
             let absolutePose = null;
 
             if (appState.dualArmSystem && appState.dualArmSystem.getAbsoluteWorldPose) {
@@ -275,7 +293,12 @@ export function updateDualArmPose() {
         }
 
         // 更新 UI 显示
-        callbacks.updateDualArmPoseDisplay(pose1, pose2, null, null);
+        callbacks.updateDualArmPoseDisplay(pose1, pose2, null, null, {
+            robot1DQ: dq1Array,
+            robot2DQ: dq2Array,
+            absoluteDQ: absoluteDQArray,
+            relativeDQ: relativeDQArray
+        });
 
         // 同步双臂关节滑块和输入框显示
         callbacks.updateDualArmJointSlidersFromAngles();
@@ -1330,7 +1353,6 @@ export async function initRobot(robotType) {
             const baseUrl = import.meta.env.BASE_URL || '/';
             const response = await fetch(`${baseUrl}robots/franka/robot_config.yaml`);
             if (response.ok) {
-                const yaml = await import('js-yaml');
                 const text = await response.text();
                 frankaConfig = yaml.load(text);
                 console.log('✓ 已加载Franka配置文件，包含关节限位信息');

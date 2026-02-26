@@ -7,6 +7,11 @@ echo "================================"
 echo "DQ Robotics WASM 构建脚本"
 echo "================================"
 
+# 在工作区内使用 Emscripten 缓存，避免写入系统目录导致权限问题
+EM_CACHE_DIR="${PWD}/.em_cache"
+mkdir -p "$EM_CACHE_DIR"
+export EM_CACHE="$EM_CACHE_DIR"
+
 # 颜色输出
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -31,7 +36,8 @@ echo -e "${GREEN}✓ Emscripten 已安装${NC}"
 emcc --version | head -n 1
 
 # 检查是否需要下载 Eigen
-EIGEN_DIR="./eigen"
+EIGEN_DIR="./third_party/eigen"
+mkdir -p "$(dirname "$EIGEN_DIR")"
 if [ ! -d "$EIGEN_DIR" ]; then
     echo -e "${YELLOW}正在下载 Eigen 库...${NC}"
     git clone --depth 1 --branch 3.4.0 https://gitlab.com/libeigen/eigen.git $EIGEN_DIR
@@ -55,7 +61,7 @@ cd $BUILD_DIR
 
 # 使用 Emscripten 工具链配置 CMake
 emcmake cmake ../wasm \
-    -DEIGEN3_INCLUDE_DIR=../eigen \
+    -DEIGEN3_INCLUDE_DIR=../third_party/eigen \
     -DCMAKE_BUILD_TYPE=Release
 
 echo -e "${YELLOW}开始编译...${NC}"
@@ -78,4 +84,3 @@ echo "  1. 运行 'npm install' 安装前端依赖"
 echo "  2. 运行 'npm run dev' 启动开发服务器"
 echo "  3. 在浏览器中打开 http://localhost:5173"
 echo ""
-

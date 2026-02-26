@@ -8,6 +8,7 @@
  */
 
 import * as THREE from 'three';
+import URDFLoader from 'urdf-loader';
 
 /**
  * DQ 乘法：dq1 * dq2（用于累积变换）
@@ -1829,7 +1830,6 @@ function computeMDHFromJointChain(jointData, endEffectorPosition = null, baseCon
  */
 export async function parseMDHFromURDFFile(urdfPath, jointNames) {
     // 加载 URDF
-    const URDFLoader = (await import('urdf-loader')).default;
     const loader = new URDFLoader();
     
     return new Promise((resolve, reject) => {
@@ -2187,4 +2187,3 @@ export function createMDHTestSuite(urdfRobot) {
         comparison: comparison
     };
 }
-
