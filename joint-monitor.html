@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>关节实时监控</title>
+    <style>
+        :root {
+            --bg: #020617;
+            --panel: #0f172a;
+            --panel-border: rgba(71, 85, 105, 0.45);
+            --text: #dbeafe;
+            --muted: #94a3b8;
+            --accent: #38bdf8;
+            --warn: #f59e0b;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            font-family: "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
+            color: var(--text);
+            background:
+                radial-gradient(circle at 12% 8%, rgba(56, 189, 248, 0.16), transparent 38%),
+                radial-gradient(circle at 85% 10%, rgba(52, 211, 153, 0.12), transparent 42%),
+                linear-gradient(150deg, #020617 0%, #0b1220 58%, #020617 100%);
+        }
+
+        .monitor-shell {
+            width: min(1700px, 100vw - 24px);
+            margin: 10px auto;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .monitor-header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 10px 12px;
+            border: 1px solid var(--panel-border);
+            border-radius: 10px;
+            background: rgba(15, 23, 42, 0.72);
+        }
+
+        .monitor-title {
+            font-size: clamp(16px, 2vw, 22px);
+            font-weight: 700;
+            margin: 0;
+            letter-spacing: 0.02em;
+        }
+
+        .monitor-subtitle {
+            margin: 6px 0 0;
+            font-size: 12px;
+            color: var(--muted);
+            line-height: 1.4;
+        }
+
+        .monitor-meta {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 5px;
+            white-space: nowrap;
+        }
+
+        .monitor-state {
+            font-size: 13px;
+            color: #dbeafe;
+            padding: 4px 8px;
+            border-radius: 6px;
+            background: rgba(30, 41, 59, 0.84);
+            border: 1px solid rgba(56, 189, 248, 0.32);
+        }
+
+        .monitor-state.stale {
+            color: #fef3c7;
+            border-color: rgba(245, 158, 11, 0.45);
+            background: rgba(120, 53, 15, 0.3);
+        }
+
+        .monitor-updated {
+            font-size: 12px;
+            color: var(--muted);
+        }
+
+        .monitor-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px;
+        }
+
+        .monitor-card {
+            background: rgba(15, 23, 42, 0.8);
+            border: 1px solid var(--panel-border);
+            border-radius: 10px;
+            padding: 10px;
+            display: flex;
+            flex-direction: column;
+            min-height: 260px;
+        }
+
+        .monitor-card-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            margin-bottom: 8px;
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .monitor-card-meta {
+            font-size: 12px;
+            color: #93c5fd;
+            padding: 2px 6px;
+            border-radius: 5px;
+            border: 1px solid rgba(56, 189, 248, 0.34);
+            background: rgba(30, 41, 59, 0.8);
+        }
+
+        .monitor-canvas {
+            width: 100%;
+            height: 190px;
+            border-radius: 8px;
+            display: block;
+            border: 1px solid rgba(71, 85, 105, 0.5);
+            background: rgba(2, 6, 23, 0.8);
+        }
+
+        .monitor-values {
+            margin-top: 8px;
+            font-size: 12px;
+            color: #bae6fd;
+            line-height: 1.45;
+            min-height: 2.9em;
+            max-height: 5.8em;
+            overflow: auto;
+        }
+
+        @media (max-width: 980px) {
+            .monitor-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .monitor-canvas {
+                height: 168px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <main class="monitor-shell">
+        <header class="monitor-header">
+            <div>
+                <h1 class="monitor-title">关节实时监控</h1>
+                <p class="monitor-subtitle">数据来自主控制页。请保持主页面打开并处于人形模式。</p>
+            </div>
+            <div class="monitor-meta">
+                <code id="joint-monitor-window-state" class="monitor-state">等待主页面数据</code>
+                <span id="joint-monitor-window-updated" class="monitor-updated">最后更新: -</span>
+            </div>
+        </header>
+
+        <section class="monitor-grid">
+            <article class="monitor-card">
+                <div class="monitor-card-head">
+                    <span>腰部</span>
+                    <code id="joint-monitor-window-waist-meta" class="monitor-card-meta">0 joints</code>
+                </div>
+                <canvas id="joint-monitor-window-waist-canvas" class="monitor-canvas" width="720" height="200"></canvas>
+                <div id="joint-monitor-window-waist-values" class="monitor-values">-</div>
+            </article>
+
+            <article class="monitor-card">
+                <div class="monitor-card-head">
+                    <span>左臂</span>
+                    <code id="joint-monitor-window-left-meta" class="monitor-card-meta">0 joints</code>
+                </div>
+                <canvas id="joint-monitor-window-left-canvas" class="monitor-canvas" width="720" height="200"></canvas>
+                <div id="joint-monitor-window-left-values" class="monitor-values">-</div>
+            </article>
+
+            <article class="monitor-card">
+                <div class="monitor-card-head">
+                    <span>右臂</span>
+                    <code id="joint-monitor-window-right-meta" class="monitor-card-meta">0 joints</code>
+                </div>
+                <canvas id="joint-monitor-window-right-canvas" class="monitor-canvas" width="720" height="200"></canvas>
+                <div id="joint-monitor-window-right-values" class="monitor-values">-</div>
+            </article>
+
+            <article class="monitor-card">
+                <div class="monitor-card-head">
+                    <span>头部</span>
+                    <code id="joint-monitor-window-head-meta" class="monitor-card-meta">0 joints</code>
+                </div>
+                <canvas id="joint-monitor-window-head-canvas" class="monitor-canvas" width="720" height="200"></canvas>
+                <div id="joint-monitor-window-head-values" class="monitor-values">-</div>
+            </article>
+        </section>
+    </main>
+
+    <script type="module" src="/src/features/joint-monitor-window.js"></script>
+</body>
+</html>

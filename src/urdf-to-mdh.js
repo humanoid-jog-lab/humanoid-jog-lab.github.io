@@ -4,9 +4,57 @@
  * 参考: https://github.com/Democratizing-Dexterous/URDFly
  * 
  * 将 URDF 关节链转换为 Modified DH 参数，用于 DQ Robotics 运动学计算
+ * 同时提供 extractURDFChainFromURDF，用于 C++ DQ_SerialManipulatorURDF 的链格式。
  */
 
 import * as THREE from 'three';
+import URDFLoader from 'urdf-loader';
+
+/**
+ * DQ 乘法：dq1 * dq2（用于累积变换）
+ * dq = [p, d] 其中 p = [w, x, y, z] 是主部四元数，d = [dw, dx, dy, dz] 是对偶部
+ * (p1, d1) * (p2, d2) = (p1*p2, p1*d2 + d1*p2)
+ */
+function dqMultiply(dq1, dq2) {
+    // 四元数乘法：q1 * q2
+    function quatMul(q1, q2) {
+        const [w1, x1, y1, z1] = q1;
+        const [w2, x2, y2, z2] = q2;
+        return [
+            w1*w2 - x1*x2 - y1*y2 - z1*z2,
+            w1*x2 + x1*w2 + y1*z2 - z1*y2,
+            w1*y2 - x1*z2 + y1*w2 + z1*x2,
+            w1*z2 + x1*y2 - y1*x2 + z1*w2
+        ];
+    }
+    
+    // 四元数加法
+    function quatAdd(q1, q2) {
+        return [q1[0]+q2[0], q1[1]+q2[1], q1[2]+q2[2], q1[3]+q2[3]];
+    }
+    
+    const p1 = [dq1[0], dq1[1], dq1[2], dq1[3]];
+    const d1 = [dq1[4], dq1[5], dq1[6], dq1[7]];
+    const p2 = [dq2[0], dq2[1], dq2[2], dq2[3]];
+    const d2 = [dq2[4], dq2[5], dq2[6], dq2[7]];
+    
+    const pResult = quatMul(p1, p2);
+    const dResult = quatAdd(quatMul(p1, d2), quatMul(d1, p2));
+    
+    return [pResult[0], pResult[1], pResult[2], pResult[3],
+            dResult[0], dResult[1], dResult[2], dResult[3]];
+}
+
+/** 四元数和平移转为 DQ 的 8 元数组（与 C++ 约定一致：dq = r + ε·0.5·p·r） */
+function quaternionAndTranslationToDQ(qw, qx, qy, qz, tx, ty, tz) {
+    const n = Math.sqrt(qw * qw + qx * qx + qy * qy + qz * qz) || 1e-10;
+    qw /= n; qx /= n; qy /= n; qz /= n;
+    const dualW = -0.5 * (tx * qx + ty * qy + tz * qz);
+    const dualX = 0.5 * (qw * tx + ty * qz - tz * qy);
+    const dualY = 0.5 * (qw * ty + tz * qx - tx * qz);
+    const dualZ = 0.5 * (qw * tz + tx * qy - ty * qx);
+    return [qw, qx, qy, qz, dualW, dualX, dualY, dualZ];
+}
 
 const WORLD_Z = new THREE.Vector3(0, 0, 1);
 const WORLD_Y = new THREE.Vector3(0, 1, 0);
@@ -272,6 +320,253 @@ export function extractMDHFromURDF(urdfRobot, jointNames, convertToZUp = false, 
         allMDHFrames: allMDHFrames,  // 所有MDH坐标系信息（用于可视化）
         autoBasePose: autoBasePose,
         baseFrameInfo: baseFrameInfo
+    };
+}
+
+/**
+ * 从 URDF 机器人提取 DQ_SerialManipulatorURDF 所需的关节链格式。
+ * 仅包含 revolute(0) 与 prismatic(1)，跳过 fixed 等。
+ * 每项格式：{ joint_type: 0|1, axis: [x,y,z], origin: [q0..q7] }（origin 为 DQ 8 元数组）
+ *
+ * @param {Object} urdfRobot - urdf-loader 加载的机器人对象
+ * @param {Array<string>} jointNames - 关节名称列表（仅非 fixed）
+ * @returns {Array<{ joint_type: number, axis: [number,number,number], origin: number[] }>}
+ */
+export function extractURDFChainFromURDF(urdfRobot, jointNames) {
+    if (!urdfRobot || !jointNames || jointNames.length === 0) {
+        return [];
+    }
+    if (typeof urdfRobot.updateMatrixWorld === 'function') {
+        urdfRobot.updateMatrixWorld(true);
+    }
+    const chain = [];
+    for (let i = 0; i < jointNames.length; i++) {
+        const jointName = jointNames[i];
+        const joint = urdfRobot.joints[jointName];
+        if (!joint) continue;
+        const jtype = joint.jointType ?? joint.type;
+        if (jtype === 'fixed') continue; // 仅 revolute / prismatic
+        const jointType = (jtype === 'prismatic' || jtype === 1) ? 1 : 0;
+        const position = joint.position ? joint.position.clone() : new THREE.Vector3(0, 0, 0);
+        const quaternion = joint.quaternion ? joint.quaternion.clone() : new THREE.Quaternion();
+        if (typeof joint.updateMatrixWorld === 'function') {
+            joint.updateMatrixWorld(true);
+        }
+        let axis = joint.axis ? joint.axis.clone() : new THREE.Vector3(0, 0, 1);
+        axis.normalize();
+        const origin = quaternionAndTranslationToDQ(
+            quaternion.w, quaternion.x, quaternion.y, quaternion.z,
+            position.x, position.y, position.z
+        );
+        chain.push({
+            joint_type: jointType,
+            axis: [axis.x, axis.y, axis.z],
+            origin
+        });
+    }
+    return chain;
+}
+
+/**
+ * 从最后一个活动关节的 child link 到目标 end_link 之间，累积所有固定关节的变换作为 effector frame。
+ * 这处理 URDF 中最后一个活动关节后面有固定关节连接到末端执行器 link 的情况。
+ * 
+ * @param {Object} urdfRobot - urdf-loader 加载的机器人对象
+ * @param {Array<string>} activeJointNames - 活动关节名称列表（仅 revolute/prismatic/continuous）
+ * @param {string} endLinkName - 目标末端执行器 link 名称
+ * @returns {number[]} effector frame 作为 DQ 8 元数组，如果没有固定关节则返回 [1,0,0,0,0,0,0,0]
+ */
+export function extractEffectorFrameFromURDF(urdfRobot, activeJointNames, endLinkName) {
+    // 默认 effector frame = identity
+    const identity = [1, 0, 0, 0, 0, 0, 0, 0];
+    
+    if (!urdfRobot || !urdfRobot.joints || !activeJointNames || activeJointNames.length === 0 || !endLinkName) {
+        return identity;
+    }
+    
+    // 找到最后一个活动关节的 child link
+    const lastActiveJointName = activeJointNames[activeJointNames.length - 1];
+    const lastActiveJoint = urdfRobot.joints[lastActiveJointName];
+    if (!lastActiveJoint) {
+        return identity;
+    }
+    
+    const lastActiveChildLink = getChildLinkName(urdfRobot, lastActiveJoint);
+    if (!lastActiveChildLink) {
+        return identity;
+    }
+    
+    // 如果最后一个活动关节的 child link 就是 end link，则没有固定关节
+    if (lastActiveChildLink === endLinkName) {
+        return identity;
+    }
+    
+    // 构建 childToParent 映射
+    const joints = urdfRobot.joints;
+    const childToParent = new Map(); // childLinkName -> { jointName, parentLinkName, type, joint }
+    for (const jointName of Object.keys(joints)) {
+        const j = joints[jointName];
+        const childName = getChildLinkName(urdfRobot, j);
+        const parentName = getParentLinkName(urdfRobot, j);
+        if (!childName || !parentName) continue;
+        const type = (j.jointType ?? j.type ?? '').toString().toLowerCase();
+        childToParent.set(childName, { jointName, parentLinkName: parentName, type, joint: j });
+    }
+    
+    // 从 endLinkName 向后遍历直到 lastActiveChildLink，收集固定关节
+    let current = endLinkName;
+    const fixedJoints = []; // 倒序收集
+    while (current !== lastActiveChildLink) {
+        const entry = childToParent.get(current);
+        if (!entry) {
+            console.warn(`extractEffectorFrameFromURDF: 无法找到从 ${lastActiveChildLink} 到 ${endLinkName} 的路径`);
+            return identity;
+        }
+        
+        if (entry.type === 'fixed') {
+            fixedJoints.push(entry.joint);
+        } else {
+            // 遇到非固定关节，不应该发生
+            console.warn(`extractEffectorFrameFromURDF: 在尾随路径中发现非固定关节 ${entry.jointName}`);
+            return identity;
+        }
+        
+        current = entry.parentLinkName;
+    }
+    
+    if (fixedJoints.length === 0) {
+        return identity;
+    }
+    
+    // 反转以获得正序（从 lastActiveChildLink 到 endLinkName）
+    fixedJoints.reverse();
+    
+    // 累积固定关节的变换
+    let effectorDQ = [1, 0, 0, 0, 0, 0, 0, 0]; // identity
+    
+    for (const fj of fixedJoints) {
+        const position = fj.position ? fj.position.clone() : new THREE.Vector3(0, 0, 0);
+        const quaternion = fj.quaternion ? fj.quaternion.clone() : new THREE.Quaternion();
+        
+        const fjDQ = quaternionAndTranslationToDQ(
+            quaternion.w, quaternion.x, quaternion.y, quaternion.z,
+            position.x, position.y, position.z
+        );
+        
+        effectorDQ = dqMultiply(effectorDQ, fjDQ);
+    }
+    
+    console.log(`extractEffectorFrameFromURDF: 从 ${lastActiveChildLink} 到 ${endLinkName} 累积了 ${fixedJoints.length} 个固定关节变换:`, effectorDQ);
+    return effectorDQ;
+}
+
+/** 从关节对象解析子 link 名称（与 extractFixedJointOffset 等逻辑一致） */
+function getChildLinkName(urdfRobot, j) {
+    if (typeof j.child === 'string') return j.child;
+    if (j.childLink && typeof j.childLink === 'string') return j.childLink;
+    if (j.child && typeof j.child === 'object') {
+        const n = j.child.name || j.child.link || j.child.linkName || null;
+        if (n) return n;
+        if (urdfRobot.links) {
+            const linkNames = Object.keys(urdfRobot.links);
+            const found = linkNames.find(linkName => urdfRobot.links[linkName] === j.child || (urdfRobot.links[linkName]?.uuid === j.child?.uuid));
+            if (found) return found;
+        }
+    }
+    if (j.children?.length && urdfRobot.links) {
+        for (const childObj of j.children) {
+            for (const linkName of Object.keys(urdfRobot.links)) {
+                if (urdfRobot.links[linkName] === childObj) return linkName;
+            }
+        }
+    }
+    return null;
+}
+
+/** 从关节对象解析父 link 名称 */
+function getParentLinkName(urdfRobot, j) {
+    if (typeof j.parent === 'string') return j.parent;
+    if (j.parentLink && typeof j.parentLink === 'string') return j.parentLink;
+    if (j.parent && typeof j.parent === 'object') {
+        const n = j.parent.name || j.parent.link || j.parent.linkName || null;
+        if (n) return n;
+        if (urdfRobot.links) {
+            const linkNames = Object.keys(urdfRobot.links);
+            const found = linkNames.find(linkName => urdfRobot.links[linkName] === j.parent || (urdfRobot.links[linkName]?.uuid === j.parent?.uuid));
+            if (found) return found;
+        }
+    }
+    return null;
+}
+
+/**
+ * 从 start_link 到 end_link 的路径上，按顺序返回 revolute/prismatic/continuous 关节名。
+ * 用于人形等按 link 起止提取链。
+ * @param {Object} urdfRobot - urdf-loader 机器人
+ * @param {string} startLink - 起始 link 名
+ * @param {string} endLink - 终点 link 名
+ * @returns {string[]|null} 关节名数组（start→end），找不到路径则 null
+ */
+export function getJointNamesFromLinkToLink(urdfRobot, startLink, endLink) {
+    if (!urdfRobot?.joints) return null;
+    const joints = urdfRobot.joints;
+    const childToParent = new Map(); // childLinkName -> { jointName, parentLinkName, type }
+    for (const jointName of Object.keys(joints)) {
+        const j = joints[jointName];
+        const childName = getChildLinkName(urdfRobot, j);
+        const parentName = getParentLinkName(urdfRobot, j);
+        if (!childName || !parentName) continue;
+        const type = (j.jointType ?? j.type ?? '').toString().toLowerCase();
+        childToParent.set(childName, { jointName, parentLinkName: parentName, type });
+    }
+    let current = endLink;
+    const pathJointNames = [];
+    while (current !== startLink) {
+        const entry = childToParent.get(current);
+        if (!entry) return null;
+        if (entry.type === 'revolute' || entry.type === 'prismatic' || entry.type === 'continuous') {
+            pathJointNames.push(entry.jointName);
+        }
+        current = entry.parentLinkName;
+    }
+    pathJointNames.reverse();
+    return pathJointNames;
+}
+
+/**
+ * 人形：从 URDF 机器人按 link 名提取四条链（腰、左臂、右臂、头）。
+ * @param {Object} urdfRobot - urdf-loader 机器人
+ * @param {Object} linkNames - { base_link, waist_start, waist_end, left_arm_start, left_arm_end, right_arm_start, right_arm_end, head_start, head_end }
+ * @returns {{ waistJointNames: string[], leftArmJointNames: string[], rightArmJointNames: string[], headJointNames: string[], waistChain: Array, leftArmChain: Array, rightArmChain: Array, headChain: Array, waistEffector: number[], leftArmEffector: number[], rightArmEffector: number[], headEffector: number[] }|null}
+ */
+export function loadHumanoidChainsFromURDF(urdfRobot, linkNames) {
+    const waistJointNames = getJointNamesFromLinkToLink(urdfRobot, linkNames.waist_start, linkNames.waist_end);
+    const leftArmJointNames = getJointNamesFromLinkToLink(urdfRobot, linkNames.left_arm_start, linkNames.left_arm_end);
+    const rightArmJointNames = getJointNamesFromLinkToLink(urdfRobot, linkNames.right_arm_start, linkNames.right_arm_end);
+    const headJointNames = getJointNamesFromLinkToLink(urdfRobot, linkNames.head_start, linkNames.head_end);
+    if (!waistJointNames || !leftArmJointNames || !rightArmJointNames || !headJointNames) {
+        return null;
+    }
+    
+    // 提取 effector frames（尾随固定关节的累积变换）
+    const waistEffector = extractEffectorFrameFromURDF(urdfRobot, waistJointNames, linkNames.waist_end);
+    const leftArmEffector = extractEffectorFrameFromURDF(urdfRobot, leftArmJointNames, linkNames.left_arm_end);
+    const rightArmEffector = extractEffectorFrameFromURDF(urdfRobot, rightArmJointNames, linkNames.right_arm_end);
+    const headEffector = extractEffectorFrameFromURDF(urdfRobot, headJointNames, linkNames.head_end);
+    
+    return {
+        waistJointNames,
+        leftArmJointNames,
+        rightArmJointNames,
+        headJointNames,
+        waistChain: extractURDFChainFromURDF(urdfRobot, waistJointNames),
+        leftArmChain: extractURDFChainFromURDF(urdfRobot, leftArmJointNames),
+        rightArmChain: extractURDFChainFromURDF(urdfRobot, rightArmJointNames),
+        headChain: extractURDFChainFromURDF(urdfRobot, headJointNames),
+        waistEffector,
+        leftArmEffector,
+        rightArmEffector,
+        headEffector
     };
 }
 
@@ -1535,7 +1830,6 @@ function computeMDHFromJointChain(jointData, endEffectorPosition = null, baseCon
  */
 export async function parseMDHFromURDFFile(urdfPath, jointNames) {
     // 加载 URDF
-    const URDFLoader = (await import('urdf-loader')).default;
     const loader = new URDFLoader();
     
     return new Promise((resolve, reject) => {
@@ -1893,4 +2187,3 @@ export function createMDHTestSuite(urdfRobot) {
         comparison: comparison
     };
 }
-

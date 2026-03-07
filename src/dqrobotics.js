@@ -61,6 +61,75 @@ export function getDQModule() {
 }
 
 /**
+ * 使用 WASM 里的 TOPPRA 对路点进行时间参数化。
+ * @param {number[][]} waypoints - 形状 [N, dof]，N>=2
+ * @param {Object} [options]
+ * @param {number|number[]} [options.maxVel=0.45] - 每维最大速度（绝对值）
+ * @param {number|number[]} [options.maxAcc=0.9] - 每维最大加速度（绝对值）
+ * @param {number} [options.gridpoints=0] - 离散网格段数（0 表示自动）
+ * @returns {{ok:boolean, message?:string, duration?:number, waypointTimes?:number[]}|null}
+ */
+export function retimeWaypointsWithTOPPRA(waypoints, options = {}) {
+    if (!DQModule?.TOPPRAWrapper || typeof DQModule.TOPPRAWrapper.retimeWaypoints !== 'function') {
+        return null;
+    }
+    if (!Array.isArray(waypoints) || waypoints.length < 2) {
+        return null;
+    }
+
+    const dof = Array.isArray(waypoints[0]) ? waypoints[0].length : 0;
+    if (!Number.isFinite(dof) || dof <= 0) return null;
+
+    const normalizedWaypoints = [];
+    for (let i = 0; i < waypoints.length; i++) {
+        const row = waypoints[i];
+        if (!Array.isArray(row) || row.length !== dof) return null;
+        const normalizedRow = row.map(Number);
+        if (normalizedRow.some(v => !Number.isFinite(v))) return null;
+        normalizedWaypoints.push(normalizedRow);
+    }
+
+    const buildLimitVector = (value, fallback) => {
+        if (Array.isArray(value)) {
+            if (value.length !== dof) return Array(dof).fill(fallback);
+            const arr = value.map(v => Math.abs(Number(v)));
+            if (arr.some(v => !Number.isFinite(v) || v <= 0)) return Array(dof).fill(fallback);
+            return arr;
+        }
+        const scalar = Math.abs(Number(value));
+        const v = Number.isFinite(scalar) && scalar > 0 ? scalar : fallback;
+        return Array(dof).fill(v);
+    };
+
+    const maxVel = buildLimitVector(options.maxVel, 0.45);
+    const maxAcc = buildLimitVector(options.maxAcc, 0.9);
+    const gridpoints = Number.isFinite(Number(options.gridpoints))
+        ? Math.max(0, Math.floor(Number(options.gridpoints)))
+        : 0;
+
+    try {
+        const result = DQModule.TOPPRAWrapper.retimeWaypoints(
+            normalizedWaypoints,
+            maxVel,
+            maxAcc,
+            gridpoints
+        );
+        if (!result || result.ok !== true) {
+            return result || { ok: false, message: 'TOPPRA retime failed' };
+        }
+        if (!Array.isArray(result.waypointTimes) || result.waypointTimes.length !== normalizedWaypoints.length) {
+            return { ok: false, message: 'TOPPRA 返回时间戳长度异常' };
+        }
+        return result;
+    } catch (error) {
+        return {
+            ok: false,
+            message: `TOPPRA retime exception: ${error?.message || error}`,
+        };
+    }
+}
+
+/**
  * DQ 类的 JavaScript 包装
  */
 export class DQ {
@@ -328,6 +397,35 @@ export class SerialManipulator {
      */
     getDimConfigurationSpace() {
         return this._robot.getDimConfigurationSpace();
+    }
+}
+
+/**
+ * 差速底盘（DQ_DifferentialDriveRobot）
+ * 配置量 q=[x, y, yaw]，控制量 u=[w_r, w_l]
+ */
+export class DifferentialDriveRobot {
+    constructor(wheelRadius, wheelDistance) {
+        if (!DQModule) {
+            throw new Error('DQ Robotics 模块未初始化');
+        }
+        this._robot = new DQModule.DifferentialDriveRobot(wheelRadius, wheelDistance);
+    }
+
+    fkm(q) {
+        return this._robot.fkm(q);
+    }
+
+    poseJacobian(q) {
+        return this._robot.poseJacobian(q);
+    }
+
+    constraintJacobian(phi) {
+        return this._robot.constraintJacobian(phi);
+    }
+
+    constraintJacobianDerivative(phi, phiDot) {
+        return this._robot.constraintJacobianDerivative(phi, phiDot);
     }
 }
 
@@ -652,3 +750,139 @@ export class CooperativeDualArm {
     }
 }
 
+/**
+ * 人形双臂适配器：将 HumanoidURDF 的双臂暴露为与 CooperativeDualArm 一致的接口，
+ * 使用 DQ_CooperativeDualTaskSpace 的公式（相对位姿 conj(x2)*x1，绝对位姿 x2*pow(xr,0.5)）便于双臂控制。
+ * @param {Object} humanoidModel - WASM HumanoidURDF 实例
+ */
+export class HumanoidDualArmAdapter {
+    constructor(humanoidModel) {
+        if (!humanoidModel) {
+            throw new Error('HumanoidDualArmAdapter 需要 HumanoidURDF 实例');
+        }
+        this._humanoid = humanoidModel;
+        this.totalJointCount = humanoidModel.getDimConfigurationSpace?.() ?? 0;
+    }
+
+    /** WASM 是否暴露了双臂位姿接口（新版本有，旧版本无）；无则用 JS 回退 */
+    _hasDualArmWasm() {
+        return typeof this._humanoid.absolutePoseDualArm === 'function';
+    }
+
+    /** JS 回退：绝对位姿（中点平移 + 归一化平均旋转） */
+    _getAbsolutePoseJS(q) {
+        const p1 = this._humanoid.fkmEffector(q, 1);
+        const p2 = this._humanoid.fkmEffector(q, 2);
+        if (!p1 || !p2) return null;
+        const DQ = DQModule.DQWrapper;
+        const dq1 = DQ.createFromArray(p1);
+        const dq2 = DQ.createFromArray(p2);
+        const t1 = DQ.getTranslation(dq1);
+        const t2 = DQ.getTranslation(dq2);
+        const r1 = DQ.getRotation(dq1);
+        const r2 = DQ.getRotation(dq2);
+        const tMid = [0.5 * (t1[0] + t2[0]), 0.5 * (t1[1] + t2[1]), 0.5 * (t1[2] + t2[2]), 0.5 * (t1[3] + t2[3])];
+        let rw = 0.5 * (r1[0] + r2[0]), rx = 0.5 * (r1[1] + r2[1]), ry = 0.5 * (r1[2] + r2[2]), rz = 0.5 * (r1[3] + r2[3]);
+        const n = Math.sqrt(rw * rw + rx * rx + ry * ry + rz * rz) || 1;
+        rw /= n; rx /= n; ry /= n; rz /= n;
+        const rotDQ = DQ.createFromArray([rw, rx, ry, rz, 0, 0, 0, 0]);
+        const transDQ = DQ.translation(tMid[1], tMid[2], tMid[3]);
+        return DQ.toArray(DQ.multiply(transDQ, rotDQ));
+    }
+
+    /** JS 回退：相对位姿 conj(x2)*x1 用 inverse(x1)*x2 等价表示 */
+    _getRelativePoseJS(q) {
+        const p1 = this._humanoid.fkmEffector(q, 1);
+        const p2 = this._humanoid.fkmEffector(q, 2);
+        if (!p1 || !p2) return null;
+        const DQ = DQModule.DQWrapper;
+        const dq1 = DQ.createFromArray(p1);
+        const dq2 = DQ.createFromArray(p2);
+        const inv1 = DQ.inverse(dq1);
+        return DQ.toArray(DQ.multiply(dq2, inv1));
+    }
+
+    /** JS 回退：数值微分雅可比 */
+    _getJacobianJS(q, getPose, eps = 1e-7) {
+        const n = q.length;
+        const J = [];
+        for (let i = 0; i < 8; i++) J.push(new Array(n).fill(0));
+        for (let j = 0; j < n; j++) {
+            const qp = q.slice(); qp[j] += eps;
+            const qm = q.slice(); qm[j] -= eps;
+            const rp = getPose(qp);
+            const rm = getPose(qm);
+            if (!rp || !rm) return null;
+            for (let i = 0; i < 8; i++) J[i][j] = (rp[i] - rm[i]) / (2 * eps);
+        }
+        return J;
+    }
+
+    /**
+     * 获取相对位姿（左臂相对右臂：conj(x2)*x1）
+     * @param {number[]} jointAngles - 全关节角 [腰, 左臂, 右臂, 头]
+     * @returns {number[]} DQ 8 元素
+     */
+    getRelativePose(jointAngles) {
+        if (this._hasDualArmWasm()) return this._humanoid.relativePoseDualArm(jointAngles);
+        return this._getRelativePoseJS(jointAngles);
+    }
+
+    /**
+     * 获取绝对位姿（双臂几何中点位姿）
+     * @param {number[]} jointAngles
+     * @returns {number[]} DQ 8 元素
+     */
+    getAbsolutePose(jointAngles) {
+        if (this._hasDualArmWasm()) return this._humanoid.absolutePoseDualArm(jointAngles);
+        return this._getAbsolutePoseJS(jointAngles);
+    }
+
+    /**
+     * 获取相对位姿雅可比
+     * @param {number[]} jointAngles
+     * @returns {number[][]}
+     */
+    getRelativePoseJacobian(jointAngles) {
+        if (this._hasDualArmWasm()) return this._humanoid.relativePoseJacobianDualArm(jointAngles);
+        return this._getJacobianJS(jointAngles, (q) => this.getRelativePose(q));
+    }
+
+    /**
+     * 获取绝对位姿雅可比
+     * @param {number[]} jointAngles
+     * @returns {number[][]}
+     */
+    getAbsolutePoseJacobian(jointAngles) {
+        if (this._hasDualArmWasm()) return this._humanoid.absolutePoseJacobianDualArm(jointAngles);
+        return this._getJacobianJS(jointAngles, (q) => this.getAbsolutePose(q));
+    }
+
+    /** 左臂末端位姿（effector 1） */
+    getRobot1Pose(jointAngles) {
+        return this._humanoid.fkmEffector(jointAngles, 1);
+    }
+
+    /** 右臂末端位姿（effector 2） */
+    getRobot2Pose(jointAngles) {
+        return this._humanoid.fkmEffector(jointAngles, 2);
+    }
+
+    getAbsoluteWorldPose(jointAngles) {
+        const dqArray = this.getAbsolutePose(jointAngles);
+        const dqObj = DQModule.DQWrapper.createFromArray(dqArray);
+        return {
+            translation: DQModule.DQWrapper.getTranslation(dqObj),
+            rotation: DQModule.DQWrapper.getRotation(dqObj)
+        };
+    }
+
+    getRelativePoseStructured(jointAngles) {
+        const dqArray = this.getRelativePose(jointAngles);
+        const dqObj = DQModule.DQWrapper.createFromArray(dqArray);
+        return {
+            translation: DQModule.DQWrapper.getTranslation(dqObj),
+            rotation: DQModule.DQWrapper.getRotation(dqObj)
+        };
+    }
+}

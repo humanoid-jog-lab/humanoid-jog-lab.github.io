@@ -11,11 +11,26 @@
 #include <dqrobotics/robot_modeling/DQ_Kinematics.h>
 #include <dqrobotics/robot_modeling/DQ_SerialManipulatorDH.h>
 #include <dqrobotics/robot_modeling/DQ_SerialManipulatorMDH.h>
+#include <dqrobotics/robot_modeling/DQ_SerialManipulatorURDF.h>
+#include <dqrobotics/robot_modeling/DQ_HumanoidURDF.h>
+#include <dqrobotics/robot_modeling/DQ_DifferentialDriveRobot.h>
+#include <dqrobotics/robot_modeling/DQ_JointType.h>
 #include <dqrobotics/robot_modeling/DQ_CooperativeDualTaskSpace.h>
 #include <dqrobotics/robots/FrankaEmikaPandaRobot.h>
 #include <dqrobotics/robots/KukaLw4Robot.h>
 #include <Eigen/Dense>
+#include <algorithm>
 #include <cmath>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+#if TOPPRA_AVAILABLE
+#include <toppra/algorithm/toppra.hpp>
+#include <toppra/constraint/linear_joint_acceleration.hpp>
+#include <toppra/constraint/linear_joint_velocity.hpp>
+#include <toppra/geometric_path/piecewise_poly_path.hpp>
+#endif
 
 using namespace emscripten;
 using namespace DQ_robotics;
@@ -70,6 +85,212 @@ MatrixXd jsArrayToMatrixXd(const val& jsArray2d) {
     }
     return mat;
 }
+
+val stdVectorToJsArray(const std::vector<double>& values) {
+    val jsArray = val::array();
+    for (double v : values) {
+        jsArray.call<void>("push", v);
+    }
+    return jsArray;
+}
+
+class TOPPRA_Wrapper {
+public:
+    static val retimeWaypoints(
+        const val& waypoints_js,
+        const val& max_vel_js,
+        const val& max_acc_js,
+        int gridpoints_hint = 0
+    ) {
+        val out = val::object();
+
+#if TOPPRA_AVAILABLE
+        try {
+            const int num_waypoints = waypoints_js["length"].as<int>();
+            if (num_waypoints < 2) {
+                throw std::runtime_error("waypoints 至少需要 2 个点");
+            }
+
+            const val first = waypoints_js[0];
+            const int dof = first["length"].as<int>();
+            if (dof <= 0) {
+                throw std::runtime_error("waypoints 维度无效");
+            }
+
+            toppra::Vectors positions;
+            positions.reserve(static_cast<std::size_t>(num_waypoints));
+            for (int i = 0; i < num_waypoints; ++i) {
+                val row = waypoints_js[i];
+                const int row_len = row["length"].as<int>();
+                if (row_len != dof) {
+                    throw std::runtime_error("waypoints 每个点维度必须一致");
+                }
+                toppra::Vector q(dof);
+                for (int j = 0; j < dof; ++j) {
+                    const double v = row[j].as<double>();
+                    if (!std::isfinite(v)) {
+                        throw std::runtime_error("waypoints 含非法数值");
+                    }
+                    q(j) = v;
+                }
+                positions.push_back(q);
+            }
+
+            auto parse_limit_vector = [&](const val& js, double fallback, const char* name) {
+                toppra::Vector limit(dof);
+                limit.setConstant(std::abs(fallback));
+
+                if (js.isUndefined() || js.isNull()) {
+                    return limit;
+                }
+
+                bool parsed_as_scalar = false;
+                try {
+                    std::string type = js.typeOf().as<std::string>();
+                    if (type == "number") {
+                        const double s = js.as<double>();
+                        if (!std::isfinite(s) || s <= 0) {
+                            throw std::runtime_error(std::string(name) + " 标量必须为正数");
+                        }
+                        limit.setConstant(std::abs(s));
+                        parsed_as_scalar = true;
+                    }
+                } catch (...) {
+                    parsed_as_scalar = false;
+                }
+                if (parsed_as_scalar) return limit;
+
+                const int len = js["length"].as<int>();
+                if (len != dof) {
+                    throw std::runtime_error(std::string(name) + " 维度需与 waypoint 维度一致");
+                }
+
+                for (int i = 0; i < dof; ++i) {
+                    const double v = js[i].as<double>();
+                    if (!std::isfinite(v) || v <= 0) {
+                        throw std::runtime_error(std::string(name) + " 每个维度都必须是正数");
+                    }
+                    limit(i) = std::abs(v);
+                }
+                return limit;
+            };
+
+            const toppra::Vector vel_abs = parse_limit_vector(max_vel_js, 0.45, "max_vel");
+            const toppra::Vector acc_abs = parse_limit_vector(max_acc_js, 0.90, "max_acc");
+            const toppra::Vector vel_lower = -vel_abs;
+            const toppra::Vector vel_upper = vel_abs;
+            const toppra::Vector acc_lower = -acc_abs;
+            const toppra::Vector acc_upper = acc_abs;
+
+            toppra::Vector knots = toppra::Vector::LinSpaced(
+                num_waypoints,
+                0.0,
+                static_cast<double>(num_waypoints - 1)
+            );
+            toppra::BoundaryCondFull bc_type = {
+                toppra::BoundaryCond("clamped"),
+                toppra::BoundaryCond("clamped"),
+            };
+            toppra::PiecewisePolyPath path_poly = toppra::PiecewisePolyPath::CubicSpline(
+                positions,
+                knots,
+                bc_type
+            );
+            toppra::GeometricPathPtr path = std::make_shared<toppra::PiecewisePolyPath>(path_poly);
+
+            toppra::LinearConstraintPtr c_vel =
+                std::make_shared<toppra::constraint::LinearJointVelocity>(vel_lower, vel_upper);
+            toppra::LinearConstraintPtr c_acc =
+                std::make_shared<toppra::constraint::LinearJointAcceleration>(acc_lower, acc_upper);
+            c_acc->discretizationType(toppra::DiscretizationType::Interpolation);
+
+            toppra::LinearConstraintPtrs constraints{c_vel, c_acc};
+            auto algo = std::make_shared<toppra::algorithm::TOPPRA>(constraints, path);
+
+            const int min_n = std::max(1, num_waypoints - 1);
+            const int suggested_n = std::max(min_n, (num_waypoints - 1) * 5);
+            const int final_n = gridpoints_hint > 0 ? std::max(gridpoints_hint, min_n) : suggested_n;
+            algo->setN(final_n);
+
+            const toppra::ReturnCode rc = algo->computePathParametrization(0.0, 0.0);
+            if (rc != toppra::ReturnCode::OK) {
+                throw std::runtime_error("TOPPRA 失败: " + algo->getErrorMessage());
+            }
+
+            const auto data = algo->getParameterizationData();
+            const toppra::Vector s_grid = data.gridpoints;
+            const toppra::Vector vsq = data.parametrization.cwiseMax(0.0);
+            const toppra::Vector v_grid = vsq.array().sqrt();
+
+            std::vector<double> t_grid(static_cast<std::size_t>(s_grid.size()), 0.0);
+            for (int i = 0; i < s_grid.size() - 1; ++i) {
+                const double ds = s_grid(i + 1) - s_grid(i);
+                const double denom = v_grid(i) + v_grid(i + 1);
+                double dt = 0.0;
+                if (denom > 1e-9 && ds > 0) {
+                    dt = 2.0 * ds / denom;
+                }
+                if (!std::isfinite(dt) || dt < 0) dt = 0.0;
+                t_grid[static_cast<std::size_t>(i + 1)] = t_grid[static_cast<std::size_t>(i)] + dt;
+            }
+
+            auto sample_time_from_s = [&](double s_query) {
+                if (s_query <= s_grid(0)) return t_grid.front();
+                if (s_query >= s_grid(s_grid.size() - 1)) return t_grid.back();
+
+                int lo = 0;
+                int hi = s_grid.size() - 2;
+                while (lo <= hi) {
+                    int mid = lo + (hi - lo) / 2;
+                    if (s_grid(mid + 1) < s_query) lo = mid + 1;
+                    else hi = mid - 1;
+                }
+                const int max_idx = static_cast<int>(s_grid.size()) - 2;
+                const int idx = std::max(0, std::min(max_idx, lo));
+                const double s0 = s_grid(idx);
+                const double s1 = s_grid(idx + 1);
+                const double t0 = t_grid[static_cast<std::size_t>(idx)];
+                const double t1 = t_grid[static_cast<std::size_t>(idx + 1)];
+                if (s1 - s0 <= 1e-12) return t0;
+                const double r = std::max(0.0, std::min(1.0, (s_query - s0) / (s1 - s0)));
+                return t0 + (t1 - t0) * r;
+            };
+
+            std::vector<double> waypoint_times(static_cast<std::size_t>(num_waypoints), 0.0);
+            for (int i = 0; i < num_waypoints; ++i) {
+                waypoint_times[static_cast<std::size_t>(i)] = sample_time_from_s(knots(i));
+                if (i > 0 && waypoint_times[static_cast<std::size_t>(i)] < waypoint_times[static_cast<std::size_t>(i - 1)]) {
+                    waypoint_times[static_cast<std::size_t>(i)] = waypoint_times[static_cast<std::size_t>(i - 1)];
+                }
+            }
+
+            out.set("ok", true);
+            out.set("message", std::string("ok"));
+            out.set("dof", dof);
+            out.set("numWaypoints", num_waypoints);
+            out.set("duration", waypoint_times.back());
+            out.set("waypointTimes", stdVectorToJsArray(waypoint_times));
+            out.set("gridpoints", vectorXdToJsArray(s_grid));
+            out.set("gridTimes", stdVectorToJsArray(t_grid));
+            out.set("pathVelocitySquared", vectorXdToJsArray(vsq));
+            out.set("solverCode", static_cast<int>(data.ret_code));
+            return out;
+        } catch (const std::exception& e) {
+            out.set("ok", false);
+            out.set("message", std::string(e.what()));
+            return out;
+        }
+#else
+        (void)waypoints_js;
+        (void)max_vel_js;
+        (void)max_acc_js;
+        (void)gridpoints_hint;
+        out.set("ok", false);
+        out.set("message", std::string("TOPPRA 不可用：WASM 构建未启用 TOPPRA"));
+        return out;
+#endif
+    }
+};
 
 // DQ 类的包装器，提供更友好的 JavaScript 接口
 class DQ_Wrapper {
@@ -144,10 +365,8 @@ public:
     
     static DQ fromQuaternionAndTranslation(double qw, double qx, double qy, double qz,
                                             double tx, double ty, double tz) {
-        // 从四元数和平移创建对偶四元数
-        // DQ = translation_dq * rotation_quaternion
-        // 其中 translation_dq = 1 + 0.5 * E * (0, tx, ty, tz)
-        // 首先归一化四元数
+        // 从四元数和平移创建对偶四元数，与 DQ 库约定一致：dq = r + ε·(1/2)·p·r
+        // 这样 translation(dq) 才能正确得到 p，与 unitDQ / pose 一致
         double quatNorm = std::sqrt(qw*qw + qx*qx + qy*qy + qz*qz);
         if (quatNorm < 1e-10) {
             throw std::runtime_error("四元数不能为零");
@@ -157,9 +376,9 @@ public:
         qy /= quatNorm;
         qz /= quatNorm;
         
-        DQ r = DQ(qw, qx, qy, qz);  // 归一化的旋转四元数
-        DQ t = DQ(1) + 0.5 * DQ::E * DQ(0, tx, ty, tz);  // 平移对偶四元数
-        return t * r;  // 注意顺序：先平移再旋转
+        DQ r = DQ(qw, qx, qy, qz);
+        DQ p = DQ(0, tx, ty, tz);
+        return r + DQ::E * 0.5 * p * r;
     }
     
     static val getTranslation(const DQ& dq) {
@@ -217,6 +436,34 @@ public:
         DQ pose(pose_vec);
         MatrixXd Jd = DQ_Kinematics::distance_jacobian(J_pose, pose);
         return matrixXdToJsArray(Jd);
+    }
+
+    /**
+     * 线雅可比（对应 DQ_Kinematics::line_jacobian）
+     * 给定 vec8(pose_dot)=J_pose*q_dot，返回满足 vec8(line_dot)=Jline*q_dot 的 Jline（8xN）
+     *
+     * @param pose_jacobian_js 8xN 的位姿雅可比（二维数组）
+     * @param pose_dq_js 8 元素位姿双四元数（数组）
+     * @param line_direction_js 8 元素线方向（数组）。例如 body z 轴使用 [0,0,0,1,0,0,0,0]
+     * @return 8xN 的线雅可比（二维数组）
+     */
+    static val line_jacobian(const val& pose_jacobian_js, const val& pose_dq_js, const val& line_direction_js) {
+        MatrixXd J_pose = jsArrayToMatrixXd(pose_jacobian_js);
+
+        VectorXd pose_vec = jsArrayToVectorXd(pose_dq_js);
+        if (pose_vec.size() != 8) {
+            throw std::runtime_error("pose_dq must be an 8-element array");
+        }
+        DQ pose(pose_vec);
+
+        VectorXd line_direction_vec = jsArrayToVectorXd(line_direction_js);
+        if (line_direction_vec.size() != 8) {
+            throw std::runtime_error("line_direction must be an 8-element array");
+        }
+        DQ line_direction(line_direction_vec);
+
+        MatrixXd Jline = DQ_Kinematics::line_jacobian(J_pose, pose, line_direction);
+        return matrixXdToJsArray(Jline);
     }
 };
 
@@ -342,6 +589,236 @@ public:
         DQ t = 1 + E_ * 0.5 * DQ(0, tx, ty, tz);
         DQ eff = r * t; // 先旋转再平移（工具坐标）
         robot.set_effector(eff);
+    }
+};
+
+// URDF 串联机械臂包装器：从 JS 传入的关节链创建 (joint_type, axis, origin 每关节)
+// chain_js: 数组，每项为 { joint_type: 0|1, axis: [x,y,z], origin: [q0..q7] }
+static std::vector<URDFJointData> extractURDFChain(const val& chain_js) {
+    int n = chain_js["length"].as<int>();
+    if (n <= 0)
+        throw std::runtime_error("URDF chain array cannot be empty");
+    std::vector<URDFJointData> chain;
+    chain.reserve(static_cast<size_t>(n));
+    for (int i = 0; i < n; i++) {
+        val joint_js = chain_js[i];
+        int jtype = joint_js["joint_type"].as<int>();
+        if (jtype != 0 && jtype != 1)
+            throw std::runtime_error("joint_type must be 0 (REVOLUTE) or 1 (PRISMATIC)");
+        URDFJointData j;
+        j.joint_type = DQ_JointType(jtype);
+        val axis_js = joint_js["axis"];
+        if (axis_js["length"].as<int>() != 3)
+            throw std::runtime_error("axis must be [x, y, z]");
+        j.axis(0) = axis_js[0].as<double>();
+        j.axis(1) = axis_js[1].as<double>();
+        j.axis(2) = axis_js[2].as<double>();
+        val origin_js = joint_js["origin"];
+        if (origin_js["length"].as<int>() != 8)
+            throw std::runtime_error("origin must be DQ array of 8 elements");
+        j.origin = DQ(jsArrayToVectorXd(origin_js));
+        chain.push_back(j);
+    }
+    return chain;
+}
+
+class SerialManipulatorURDF_Wrapper {
+private:
+    DQ_SerialManipulatorURDF robot;
+
+public:
+    SerialManipulatorURDF_Wrapper(const val& chain_js)
+        : robot(extractURDFChain(chain_js)) {
+    }
+
+    val fkm(const val& joint_angles_js) {
+        VectorXd joint_angles = jsArrayToVectorXd(joint_angles_js);
+        DQ pose = robot.fkm(joint_angles);
+        return vectorXdToJsArray(pose.q);
+    }
+
+    val pose_jacobian(const val& joint_angles_js) {
+        VectorXd joint_angles = jsArrayToVectorXd(joint_angles_js);
+        MatrixXd J = robot.pose_jacobian(joint_angles);
+        return matrixXdToJsArray(J);
+    }
+
+    int get_dim_configuration_space() const {
+        return robot.get_dim_configuration_space();
+    }
+
+    void set_base_frame(double x, double y, double z) {
+        DQ base = 1 + E_ * 0.5 * DQ(0, x, y, z);
+        base = base.normalize();
+        robot.set_base_frame(base);
+        robot.set_reference_frame(base);
+    }
+
+    void set_base_frame_pose(double qw, double qx, double qy, double qz,
+                             double tx, double ty, double tz) {
+        double q_norm = std::sqrt(qw*qw + qx*qx + qy*qy + qz*qz);
+        if (q_norm > 1e-10) {
+            qw /= q_norm; qx /= q_norm; qy /= q_norm; qz /= q_norm;
+        }
+        double dual_w = -0.5 * (tx*qx + ty*qy + tz*qz);
+        double dual_x = 0.5 * (qw*tx + ty*qz - tz*qy);
+        double dual_y = 0.5 * (qw*ty + tz*qx - tx*qz);
+        double dual_z = 0.5 * (qw*tz + tx*qy - ty*qx);
+        DQ base(qw, qx, qy, qz, dual_w, dual_x, dual_y, dual_z);
+        robot.set_base_frame(base);
+        robot.set_reference_frame(base);
+    }
+
+    void set_base_frame_dq(const val& dq_array) {
+        VectorXd dq_vec = jsArrayToVectorXd(dq_array);
+        if (dq_vec.size() != 8)
+            throw std::runtime_error("双四元数必须是8元素数组");
+        DQ base(dq_vec);
+        base = base.normalize();
+        robot.set_base_frame(base);
+        robot.set_reference_frame(base);
+    }
+
+    void set_effector(double x, double y, double z) {
+        DQ eff = 1 + E_ * 0.5 * DQ(0, x, y, z);
+        robot.set_effector(eff);
+    }
+
+    void set_effector_pose(double qw, double qx, double qy, double qz,
+                          double tx, double ty, double tz) {
+        DQ r(qw, qx, qy, qz);
+        DQ t = 1 + E_ * 0.5 * DQ(0, tx, ty, tz);
+        DQ eff = r * t;
+        robot.set_effector(eff);
+    }
+};
+
+// 人形 URDF 包装器：底盘 + 腰 + 左臂 + 右臂 + 头；链由 JS 从 URDF 解析后传入
+class HumanoidURDF_Wrapper {
+private:
+    DQ_HumanoidURDF robot;
+
+    static DQ extractDQOrIdentity(const val& dq_js) {
+        if (dq_js.isUndefined() || dq_js.isNull()) return DQ(1);
+        return DQ(jsArrayToVectorXd(dq_js));
+    }
+
+public:
+    // base_frame_dq: 8 元素；waist/left/right/head_chain_js: 每链为 { joint_type, axis, origin } 数组
+    // effector frames: 可选的 8 元素 DQ 数组，用于末端固定关节的变换
+    HumanoidURDF_Wrapper(const val& base_frame_dq,
+                         const val& waist_chain_js,
+                         const val& left_arm_chain_js,
+                         const val& right_arm_chain_js,
+                         const val& head_chain_js,
+                         const val& waist_effector_js,
+                         const val& left_effector_js,
+                         const val& right_effector_js,
+                         const val& head_effector_js)
+        : robot(DQ(jsArrayToVectorXd(base_frame_dq)),
+                extractURDFChain(waist_chain_js),
+                extractURDFChain(left_arm_chain_js),
+                extractURDFChain(right_arm_chain_js),
+                extractURDFChain(head_chain_js),
+                extractDQOrIdentity(waist_effector_js),
+                extractDQOrIdentity(left_effector_js),
+                extractDQOrIdentity(right_effector_js),
+                extractDQOrIdentity(head_effector_js))
+    {}
+
+    val fkm(const val& q_js) {
+        VectorXd q = jsArrayToVectorXd(q_js);
+        DQ pose = robot.fkm(q);
+        return vectorXdToJsArray(pose.q);
+    }
+
+    val fkmEffector(const val& q_js, int effector_index) {
+        VectorXd q = jsArrayToVectorXd(q_js);
+        DQ pose = robot.fkm(q, effector_index);
+        return vectorXdToJsArray(pose.q);
+    }
+
+    val poseJacobian(const val& q_js) {
+        VectorXd q = jsArrayToVectorXd(q_js);
+        MatrixXd J = robot.pose_jacobian(q);
+        return matrixXdToJsArray(J);
+    }
+
+    val poseJacobianEffector(const val& q_js, int effector_index) {
+        VectorXd q = jsArrayToVectorXd(q_js);
+        MatrixXd J = robot.pose_jacobian(q, effector_index);
+        return matrixXdToJsArray(J);
+    }
+
+    int getDimConfigurationSpace() const {
+        return robot.get_dim_configuration_space();
+    }
+
+    void setReferenceFrame(const val& dq_array) {
+        VectorXd dq_vec = jsArrayToVectorXd(dq_array);
+        if (dq_vec.size() != 8)
+            throw std::runtime_error("双四元数必须是8元素数组");
+        robot.set_reference_frame(DQ(dq_vec).normalize());
+    }
+
+    // 双臂协作空间：与 DQ_CooperativeDualTaskSpace 一致的相对/绝对位姿与雅可比
+    val relativePoseDualArm(const val& q_js) {
+        VectorXd q = jsArrayToVectorXd(q_js);
+        DQ dq = robot.relativePoseDualArm(q);
+        return vectorXdToJsArray(dq.q);
+    }
+    val absolutePoseDualArm(const val& q_js) {
+        VectorXd q = jsArrayToVectorXd(q_js);
+        DQ dq = robot.absolutePoseDualArm(q);
+        return vectorXdToJsArray(dq.q);
+    }
+    val relativePoseJacobianDualArm(const val& q_js) {
+        VectorXd q = jsArrayToVectorXd(q_js);
+        MatrixXd J = robot.relativePoseJacobianDualArm(q);
+        return matrixXdToJsArray(J);
+    }
+    val absolutePoseJacobianDualArm(const val& q_js) {
+        VectorXd q = jsArrayToVectorXd(q_js);
+        MatrixXd J = robot.absolutePoseJacobianDualArm(q);
+        return matrixXdToJsArray(J);
+    }
+};
+
+// 差速底盘包装器（配置量 q=[x, y, yaw]，控制量 u=[w_r, w_l]）
+class DifferentialDriveRobot_Wrapper {
+private:
+    DQ_DifferentialDriveRobot robot;
+
+public:
+    DifferentialDriveRobot_Wrapper(double wheel_radius, double distance_between_wheels)
+        : robot(wheel_radius, distance_between_wheels) {}
+
+    val fkm(const val& q_js) {
+        VectorXd q = jsArrayToVectorXd(q_js);
+        if (q.size() != 3) {
+            throw std::runtime_error("DifferentialDriveRobot::fkm expects q=[x,y,yaw]");
+        }
+        DQ pose = robot.fkm(q);
+        return vectorXdToJsArray(pose.q);
+    }
+
+    val poseJacobian(const val& q_js) {
+        VectorXd q = jsArrayToVectorXd(q_js);
+        if (q.size() != 3) {
+            throw std::runtime_error("DifferentialDriveRobot::poseJacobian expects q=[x,y,yaw]");
+        }
+        MatrixXd J = robot.pose_jacobian(q);
+        return matrixXdToJsArray(J);
+    }
+
+    val constraintJacobian(double phi) {
+        MatrixXd Jc = robot.constraint_jacobian(phi);
+        return matrixXdToJsArray(Jc);
+    }
+
+    val constraintJacobianDerivative(double phi, double phi_dot) {
+        MatrixXd Jcd = robot.constraint_jacobian_derivative(phi, phi_dot);
+        return matrixXdToJsArray(Jcd);
     }
 };
 
@@ -678,9 +1155,14 @@ EMSCRIPTEN_BINDINGS(dqrobotics_module) {
         .class_function("getRotation", &DQ_Wrapper::getRotation)
         .class_function("getRotationMatrix", &DQ_Wrapper::getRotationMatrix);
 
+    // TOPPRA 路点时间参数化（waypoints -> timestamps）
+    class_<TOPPRA_Wrapper>("TOPPRAWrapper")
+        .class_function("retimeWaypoints", &TOPPRA_Wrapper::retimeWaypoints);
+
     // 运动学工具（静态函数）
     class_<Kinematics_Wrapper>("Kinematics")
-        .class_function("distanceJacobian", &Kinematics_Wrapper::distance_jacobian);
+        .class_function("distanceJacobian", &Kinematics_Wrapper::distance_jacobian)
+        .class_function("lineJacobian", &Kinematics_Wrapper::line_jacobian);
     
     // 串联机械臂
     class_<SerialManipulator_Wrapper>("SerialManipulator")
@@ -693,6 +1175,41 @@ EMSCRIPTEN_BINDINGS(dqrobotics_module) {
         .function("setBaseFrameDQ", &SerialManipulator_Wrapper::set_base_frame_dq)
         .function("setEffector", &SerialManipulator_Wrapper::set_effector)
         .function("setEffectorPose", &SerialManipulator_Wrapper::set_effector_pose);
+
+    // URDF 串联机械臂（由 JS 传入关节链：每关节 joint_type, axis, origin）
+    class_<SerialManipulatorURDF_Wrapper>("SerialManipulatorURDF")
+        .constructor<const val&>()
+        .function("fkm", &SerialManipulatorURDF_Wrapper::fkm)
+        .function("poseJacobian", &SerialManipulatorURDF_Wrapper::pose_jacobian)
+        .function("getDimConfigurationSpace", &SerialManipulatorURDF_Wrapper::get_dim_configuration_space)
+        .function("setBaseFrame", &SerialManipulatorURDF_Wrapper::set_base_frame)
+        .function("setBaseFramePose", &SerialManipulatorURDF_Wrapper::set_base_frame_pose)
+        .function("setBaseFrameDQ", &SerialManipulatorURDF_Wrapper::set_base_frame_dq)
+        .function("setEffector", &SerialManipulatorURDF_Wrapper::set_effector)
+        .function("setEffectorPose", &SerialManipulatorURDF_Wrapper::set_effector_pose);
+
+    // 人形 URDF（底盘 + 腰 + 左臂 + 右臂 + 头）；链由 JS 从 URDF 解析后传入
+    // effector_index: 0=腰, 1=左臂, 2=右臂, 3=头
+    class_<HumanoidURDF_Wrapper>("HumanoidURDF")
+        .constructor<const val&, const val&, const val&, const val&, const val&, const val&, const val&, const val&, const val&>()
+        .function("fkm", &HumanoidURDF_Wrapper::fkm)
+        .function("fkmEffector", &HumanoidURDF_Wrapper::fkmEffector)
+        .function("poseJacobian", &HumanoidURDF_Wrapper::poseJacobian)
+        .function("poseJacobianEffector", &HumanoidURDF_Wrapper::poseJacobianEffector)
+        .function("getDimConfigurationSpace", &HumanoidURDF_Wrapper::getDimConfigurationSpace)
+        .function("setReferenceFrame", &HumanoidURDF_Wrapper::setReferenceFrame)
+        .function("relativePoseDualArm", &HumanoidURDF_Wrapper::relativePoseDualArm)
+        .function("absolutePoseDualArm", &HumanoidURDF_Wrapper::absolutePoseDualArm)
+        .function("relativePoseJacobianDualArm", &HumanoidURDF_Wrapper::relativePoseJacobianDualArm)
+        .function("absolutePoseJacobianDualArm", &HumanoidURDF_Wrapper::absolutePoseJacobianDualArm);
+
+    // 差速底盘
+    class_<DifferentialDriveRobot_Wrapper>("DifferentialDriveRobot")
+        .constructor<double, double>()
+        .function("fkm", &DifferentialDriveRobot_Wrapper::fkm)
+        .function("poseJacobian", &DifferentialDriveRobot_Wrapper::poseJacobian)
+        .function("constraintJacobian", &DifferentialDriveRobot_Wrapper::constraintJacobian)
+        .function("constraintJacobianDerivative", &DifferentialDriveRobot_Wrapper::constraintJacobianDerivative);
     
     // Franka Panda 机器人
     class_<FrankaPanda_Wrapper>("FrankaPanda")
@@ -729,4 +1246,3 @@ EMSCRIPTEN_BINDINGS(dqrobotics_module) {
         .function("relativePoseJacobian", &CooperativeDualTaskSpace_Wrapper::relative_pose_jacobian)
         .function("absolutePoseJacobian", &CooperativeDualTaskSpace_Wrapper::absolute_pose_jacobian);
 }
-

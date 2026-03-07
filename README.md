@@ -57,7 +57,7 @@
    cd dq_vizlab
    ```
 
-2. **初始化子模块**（Eigen 和 DQ Robotics C++）
+2. **初始化子模块**（Eigen）
    ```bash
    git submodule update --init --recursive
    ```
@@ -154,8 +154,10 @@ dq_vizlab/
 │   ├── urdf-to-mdh.js   # URDF 到 MDH 转换
 │   └── styles.css       # 样式文件
 ├── wasm/                # WASM 源代码（C++）
-├── eigen/               # Eigen 数学库（子模块）
-├── dqrobotics-cpp/      # DQ Robotics C++ 库（子模块）
+├── third_party/         # 第三方依赖
+│   ├── eigen/           # Eigen 数学库（子模块）
+│   ├── dqrobotics-cpp/  # DQ Robotics C++ 库
+│   └── toppra/          # TOPPRA 源码
 ├── build.sh             # WASM 构建脚本
 ├── vite.config.js       # Vite 配置
 └── package.json         # 项目配置
@@ -213,5 +215,4 @@ MIT License
 - [Eigen](https://eigen.tuxfamily.org/) - C++ 线性代数库
 - [Three.js](https://threejs.org/) - 3D 图形库
 - [Emscripten](https://emscripten.org/) - WebAssembly 工具链
-
 
