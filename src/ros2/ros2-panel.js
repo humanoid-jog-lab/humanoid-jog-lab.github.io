@@ -468,6 +468,25 @@ function handleRealJointStateMessage(message) {
         return;
     }
 
+    // 人形模式：使用 humanoidQ / humanoidJointNames 驱动整机 URDF
+    if (appState.humanoidMode) {
+        const updatedHumanoid = applyHumanoidJointStatesFromMessage(names, positions);
+        if (updatedHumanoid) {
+            if (callbacks.updateHumanoidJointSlidersFromAngles) {
+                callbacks.updateHumanoidJointSlidersFromAngles();
+            }
+            if (callbacks.updateGlobalVariables) {
+                callbacks.updateGlobalVariables();
+            }
+            if (callbacks.updateRobotPose) {
+                callbacks.updateRobotPose();
+            }
+            setRos2JointStatus(`已接收 ${new Date().toLocaleTimeString()}`, 'success');
+        }
+        return;
+    }
+
+    // 单臂 / 双臂模式：使用关节角数组驱动 URDF
     const updated = applyJointStatesFromMessage(names, positions);
     if (updated) {
         if (callbacks.updateJointSlidersFromAngles) {
@@ -493,6 +512,45 @@ function applyJointStatesFromMessage(names, positions) {
         return updatedRight || updatedLeft;
     }
     return updateRobotAnglesFromJointState(names, positions, 'single');
+}
+
+/**
+ * 根据 JointState 消息更新人形机器人关节角（humanoidQ）
+ *  - 使用 appState.humanoidJointNames 与 message.name 做一一对应
+ *  - 仅在 appState.humanoidMode 为 true 时有效
+ */
+function applyHumanoidJointStatesFromMessage(names, positions) {
+    if (!appState.humanoidMode) {
+        return false;
+    }
+    const jointNames = Array.isArray(appState.humanoidJointNames) ? appState.humanoidJointNames : null;
+    const q = Array.isArray(appState.humanoidQ) ? appState.humanoidQ : null;
+
+    if (!jointNames || !q || jointNames.length === 0 || jointNames.length !== q.length) {
+        return false;
+    }
+
+    const newQ = [...q];
+    let updated = false;
+
+    jointNames.forEach((jointName, idx) => {
+        const nameIndex = names.indexOf(jointName);
+        if (nameIndex !== -1 && Number.isFinite(positions[nameIndex])) {
+            newQ[idx] = positions[nameIndex];
+            updated = true;
+        }
+    });
+
+    if (!updated) {
+        return false;
+    }
+
+    // 覆盖原有 humanoidQ（保持引用不变，方便其他模块使用同一数组）
+    newQ.forEach((value, idx) => {
+        q[idx] = value;
+    });
+
+    return true;
 }
 
 function updateRobotAnglesFromJointState(names, positions, robotKey) {
