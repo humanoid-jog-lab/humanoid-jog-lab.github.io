@@ -111,6 +111,43 @@
                                     在零空间中优化，避免关节到达极限
                                 </div>
                             </div>
+                            <div style="margin-top: 0.6rem;">
+                                <label style="font-size: 0.85rem; color: #cbd5e1; display: block; margin-bottom: 0.25rem;">点动求解器：</label>
+                                <select id="humanoid-jog-solver-select" style="width: 100%; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;">
+                                    <option value="vfi">VFI（约束优先）</option>
+                                    <option value="priority">Priority（原零空间）</option>
+                                </select>
+                                <div style="font-size: 0.7rem; color: #64748b; margin-top: 0.2rem;">
+                                    对人形协同点动模式生效，可随时切换。
+                                </div>
+                            </div>
+                            <div style="margin-top: 0.55rem;">
+                                <label style="font-size: 0.85rem; color: #cbd5e1; display: block; margin-bottom: 0.25rem;">VFI 步进后端：</label>
+                                <select id="humanoid-vfi-step-backend-select" style="width: 100%; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;">
+                                    <option value="projection">Projection（原实现）</option>
+                                    <option value="qp">QP（新）</option>
+                                </select>
+                                <div style="font-size: 0.7rem; color: #64748b; margin-top: 0.2rem;">
+                                    仅在 VFI 模式生效，用于切换步进子求解器。
+                                </div>
+                            </div>
+                            <div style="margin-top: 0.6rem;">
+                                <label class="toggle-switch" style="font-size: 0.85rem;">
+                                    <input type="checkbox" id="humanoid-task-equivalent-branching-toggle">
+                                    <span class="toggle-slider"></span>
+                                    <span class="toggle-label">任务等价多分支</span>
+                                </label>
+                                <div style="font-size: 0.7rem; color: #64748b; margin-top: 0.2rem;">
+                                    生成多个关节限位回避候选姿态，投影回同一双臂末端任务后选优。
+                                </div>
+                            </div>
+                            <div id="humanoid-vfi-diagnostics-panel" class="vfi-diagnostics-panel">
+                                <div class="vfi-diagnostics-head">
+                                    <span>实时约束诊断</span>
+                                    <code id="humanoid-vfi-diagnostics-timestamp">--:--:--.---</code>
+                                </div>
+                                <pre id="humanoid-vfi-diagnostics-text" class="vfi-diagnostics-text">等待点动命令...</pre>
+                            </div>
                         </div>
                         <div style="margin-bottom: 0.75rem;">
                             <label class="toggle-switch" style="font-size: 0.85rem;">
@@ -818,48 +855,6 @@
                 </div>
             </div>
             <div class="panel-section">
-                <h3>话题管理</h3>
-                <div style="margin-bottom: 0.75rem;">
-                    <label style="font-size: 0.85rem; color: #cbd5e1; display: block; margin-bottom: 0.25rem;">
-                        话题名称：
-                    </label>
-                    <div style="display: flex; gap: 0.5rem;">
-                        <input 
-                            type="text" 
-                            id="ros2-topic-name" 
-                            placeholder="/cmd_vel" 
-                            style="flex: 1; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;"
-                        >
-                        <button id="ros2-refresh-topics-btn" class="demo-btn" style="padding: 0.35rem 0.75rem; font-size: 0.85rem;">刷新</button>
-                    </div>
-                </div>
-                <div style="margin-bottom: 0.75rem;">
-                    <label style="font-size: 0.85rem; color: #cbd5e1; display: block; margin-bottom: 0.25rem;">
-                        消息类型：
-                    </label>
-                    <select 
-                        id="ros2-message-type" 
-                        style="width: 100%; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;"
-                    >
-                        <option value="geometry_msgs/msg/Twist">geometry_msgs/Twist (速度)</option>
-                        <option value="std_msgs/msg/Float64MultiArray">std_msgs/Float64MultiArray (关节命令)</option>
-                        <option value="geometry_msgs/msg/PoseStamped">geometry_msgs/PoseStamped (位姿)</option>
-                    </select>
-                </div>
-                <div style="display: flex; gap: 0.5rem;">
-                    <button id="ros2-subscribe-btn" class="demo-btn" style="flex: 1;">订阅</button>
-                    <button id="ros2-publish-btn" class="demo-btn" style="flex: 1;">发布</button>
-                </div>
-            </div>
-
-            <div class="panel-section">
-                <h3>活跃话题</h3>
-                <div id="ros2-active-topics" class="ros2-topics-list">
-                    <div style="color: #94a3b8; font-size: 0.85rem;">暂无活跃话题</div>
-                </div>
-            </div>
-
-            <div class="panel-section">
                 <h3>真机关节状态</h3>
                 <div style="margin-bottom: 0.5rem;">
                     <label style="font-size: 0.85rem; color: #cbd5e1; display: block; margin-bottom: 0.25rem;">
@@ -869,66 +864,19 @@
                         <input 
                             type="text" 
                             id="ros2-joint-topic" 
-                            value="/arm/joint_states"
-                            placeholder="/arm/joint_states" 
+                            value="/whole/joint_states"
+                            placeholder="/whole/joint_states" 
                             style="flex: 1; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;"
                         >
                         <button id="ros2-joint-subscribe-btn" class="demo-btn" style="padding: 0.35rem 0.75rem; font-size: 0.85rem;">订阅</button>
                     </div>
                     <div style="font-size: 0.75rem; color: #94a3b8; margin-top: 0.25rem;">
-                        优先写入右臂，再写入左臂
+                        人形模式按 joint name 匹配；轮子关节只订阅不写入界面姿态
                     </div>
                 </div>
                 <div id="ros2-joint-status" style="font-size: 0.75rem; color: #94a3b8;">
                     未订阅真机关节状态
                 </div>
-            </div>
-
-            <div class="panel-section">
-                <h3>Twist 消息编辑</h3>
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin-bottom: 0.75rem;">
-                    <div>
-                        <label style="font-size: 0.8rem; color: #94a3b8;">线速度 X (m/s)</label>
-                        <input 
-                            type="number" 
-                            id="ros2-twist-linear-x" 
-                            value="0" 
-                            step="0.1" 
-                            style="width: 100%; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;"
-                        >
-                    </div>
-                    <div>
-                        <label style="font-size: 0.8rem; color: #94a3b8;">线速度 Y (m/s)</label>
-                        <input 
-                            type="number" 
-                            id="ros2-twist-linear-y" 
-                            value="0" 
-                            step="0.1" 
-                            style="width: 100%; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;"
-                        >
-                    </div>
-                    <div>
-                        <label style="font-size: 0.8rem; color: #94a3b8;">线速度 Z (m/s)</label>
-                        <input 
-                            type="number" 
-                            id="ros2-twist-linear-z" 
-                            value="0" 
-                            step="0.1" 
-                            style="width: 100%; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;"
-                        >
-                    </div>
-                    <div>
-                        <label style="font-size: 0.8rem; color: #94a3b8;">角速度 Z (rad/s)</label>
-                        <input 
-                            type="number" 
-                            id="ros2-twist-angular-z" 
-                            value="0" 
-                            step="0.1" 
-                            style="width: 100%; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;"
-                        >
-                    </div>
-                </div>
-                <button id="ros2-send-twist-btn" class="demo-btn" style="width: 100%;">发送 Twist 消息</button>
             </div>
 
             <div class="panel-section">
@@ -955,6 +903,34 @@
                     </label>
                 </div>
                 <div id="ros2-joint-position-status" style="font-size: 0.75rem; color: #94a3b8;">
+                    开关关闭，未发布消息
+                </div>
+            </div>
+
+            <div class="panel-section">
+                <h3>腰部位置发布 (RobotServoMsg)</h3>
+                <div style="margin-bottom: 0.75rem;">
+                    <label style="font-size: 0.85rem; color: #cbd5e1; display: block; margin-bottom: 0.25rem;">
+                        话题名称：
+                    </label>
+                    <input
+                        type="text"
+                        id="ros2-waist-position-topic"
+                        placeholder="/axis_position_cmd"
+                        value="/axis_position_cmd"
+                        style="width: 100%; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;"
+                    >
+                </div>
+                <div style="margin-bottom: 0.75rem; display: flex; align-items: center; justify-content: space-between;">
+                    <label style="font-size: 0.85rem; color: #cbd5e1;">
+                        持续发布腰部关节
+                    </label>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="ros2-waist-position-toggle">
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                <div id="ros2-waist-position-status" style="font-size: 0.75rem; color: #94a3b8;">
                     开关关闭，未发布消息
                 </div>
             </div>

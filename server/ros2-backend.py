@@ -15,7 +15,6 @@ import asyncio
 import json
 import logging
 from typing import Dict, Set, Optional
-from datetime import datetime
 import os
 
 logging.basicConfig(
@@ -29,12 +28,13 @@ logger = logging.getLogger(__name__)
 
 logger.info(f"ROS_DOMAIN_ID: {os.environ['ROS_DOMAIN_ID']}")
 
+DEFAULT_REAL_JOINT_STATE_TOPIC = '/whole/joint_states'
+
 try:
     import rclpy
     from rclpy.node import Node
     from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
-    from std_msgs.msg import Float64MultiArray, String
-    from geometry_msgs.msg import Twist, PoseStamped
+    from std_msgs.msg import String
     from sensor_msgs.msg import JointState
     ROS2_AVAILABLE = True
 except ImportError:
@@ -56,10 +56,19 @@ logger = logging.getLogger(__name__)
 # 导入自定义消息类型（需要先编译你的消息包）
 try:
     from robot_control_msg.msg import Robotarmservomsg
-    CUSTOM_MSG_AVAILABLE = True
+    ROBOT_ARM_MSG_AVAILABLE = True
 except ImportError:
-    CUSTOM_MSG_AVAILABLE = False
-    logger.warning("robot_control_msg 未找到，将使用通用消息格式")
+    Robotarmservomsg = None
+    ROBOT_ARM_MSG_AVAILABLE = False
+    logger.warning("Robotarmservomsg 未找到，将禁用机械臂自定义消息发布")
+
+try:
+    from robot_control_msg.msg import Robotservomsg
+    ROBOT_SERVO_MSG_AVAILABLE = True
+except ImportError:
+    Robotservomsg = None
+    ROBOT_SERVO_MSG_AVAILABLE = False
+    logger.warning("Robotservomsg 未找到，将禁用腰部自定义消息发布")
 
 
 class ROS2Node(Node):
@@ -139,20 +148,17 @@ class ROS2Node(Node):
             return self._topic_publishers[topic_name]
         
         try:
-            if message_type == 'geometry_msgs/msg/Twist':
-                from geometry_msgs.msg import Twist
-                pub = self.create_publisher(Twist, topic_name, self.qos_profile)
-            elif message_type == 'geometry_msgs/msg/PoseStamped':
-                from geometry_msgs.msg import PoseStamped
-                pub = self.create_publisher(PoseStamped, topic_name, self.qos_profile)
-            elif message_type == 'sensor_msgs/msg/JointState':
-                from sensor_msgs.msg import JointState
-                pub = self.create_publisher(JointState, topic_name, self.qos_profile)
-            elif message_type == 'robot_control_msg/msg/Robotarmservomsg':
-                if CUSTOM_MSG_AVAILABLE:
+            if message_type == 'robot_control_msg/msg/Robotarmservomsg':
+                if ROBOT_ARM_MSG_AVAILABLE:
                     pub = self.create_publisher(Robotarmservomsg, topic_name, self.qos_profile)
                 else:
-                    logger.error("robot_control_msg 不可用")
+                    logger.error("Robotarmservomsg 不可用")
+                    return None
+            elif message_type == 'robot_control_msg/msg/Robotservomsg':
+                if ROBOT_SERVO_MSG_AVAILABLE:
+                    pub = self.create_publisher(Robotservomsg, topic_name, self.qos_profile)
+                else:
+                    logger.error("Robotservomsg 不可用")
                     return None
             
             else:
@@ -292,6 +298,9 @@ class ROS2BackendServer:
         
         if not topic_name or not message_type:
             raise Exception('话题名称和消息类型不能为空')
+
+        if topic_name == DEFAULT_REAL_JOINT_STATE_TOPIC and message_type == 'sensor_msgs/msg/JointState':
+            logger.info(f'订阅整机 JointState 话题: {topic_name}')
         
         client_topics = self.client_subscriptions.setdefault(ws, set())
         
@@ -381,7 +390,7 @@ class ROS2BackendServer:
         if not publisher:
             raise Exception('创建发布者失败')
         
-        if CUSTOM_MSG_AVAILABLE:
+        if ROBOT_ARM_MSG_AVAILABLE:
             msg = Robotarmservomsg()
             
             # 填充左臂关节位置
@@ -418,7 +427,47 @@ class ROS2BackendServer:
                 'message': f'机械臂控制消息已发送到: {topic_name}'
             }))
         else:
-            raise Exception('robot_control_msg 消息类型不可用')
+            raise Exception('Robotarmservomsg 消息类型不可用')
+
+    async def handle_publish_robot_servo_msg(self, ws: WebSocketServerProtocol, data: dict):
+        """发布腰部/下肢控制消息"""
+        if not self.ros2_node or not self.ros2_initialized:
+            raise Exception('ROS 2 未初始化')
+
+        topic_name = data.get('topicName')
+        message_data = data.get('messageData', {})
+
+        if not topic_name:
+            raise Exception('话题名称不能为空')
+
+        message_type = 'robot_control_msg/msg/Robotservomsg'
+        publisher = self.ros2_node.create_publisher_for_topic(topic_name, message_type)
+
+        if not publisher:
+            raise Exception('创建发布者失败')
+
+        if ROBOT_SERVO_MSG_AVAILABLE:
+            msg = Robotservomsg()
+            msg.run_mode = int(message_data.get('run_mode', 0))
+            msg.ankle_position = float(message_data.get('ankle_position', 0))
+            msg.knee_position = float(message_data.get('knee_position', 0))
+            msg.hip_pitch_position = float(message_data.get('hip_pitch_position', 0))
+            msg.hip_yaw_position = float(message_data.get('hip_yaw_position', 0))
+            msg.x = float(message_data.get('x', 0))
+            msg.y = float(message_data.get('y', 0))
+            msg.phi = float(message_data.get('phi', 0))
+            msg.mode_leg_select = int(message_data.get('mode_leg_select', 0))
+            msg.vel = float(message_data.get('vel', 0))
+
+            publisher.publish(msg)
+
+            await ws.send(json.dumps({
+                'type': 'published',
+                'topic': topic_name,
+                'message': f'腰部控制消息已发送到: {topic_name}'
+            }))
+        else:
+            raise Exception('Robotservomsg 消息类型不可用')
     
     async def handle_unsubscribe(self, ws: WebSocketServerProtocol, data: dict):
         """取消订阅话题"""
@@ -451,168 +500,6 @@ class ROS2BackendServer:
             'topic': topic_name,
             'message': f'已取消订阅: {topic_name}'
         }))
-    
-    async def handle_publish(self, ws: WebSocketServerProtocol, data: dict):
-        """发布通用消息"""
-        if not self.ros2_node or not self.ros2_initialized:
-            raise Exception('ROS 2 未初始化')
-        
-        topic_name = data.get('topicName')
-        message_type = data.get('messageType')
-        message = data.get('message', {})
-        
-        if not topic_name or not message_type:
-            raise Exception('话题名称和消息类型不能为空')
-        
-        publisher = self.ros2_node.create_publisher_for_topic(topic_name, message_type)
-        if not publisher:
-            raise Exception(f'不支持的消息类型: {message_type}')
-        
-        # 通用消息发布需要根据消息类型构造消息对象
-        # 这里提供基本框架，具体实现需要根据消息类型扩展
-        logger.warning(f'通用发布功能需要根据消息类型 {message_type} 进行扩展')
-        await ws.send(json.dumps({
-            'type': 'error',
-            'message': f'通用发布功能尚未完全实现，请使用具体的发布方法'
-        }))
-    
-    async def handle_publish_twist(self, ws: WebSocketServerProtocol, data: dict):
-        """发布 Twist 消息"""
-        if not self.ros2_node or not self.ros2_initialized:
-            raise Exception('ROS 2 未初始化')
-        
-        topic_name = data.get('topicName')
-        linear = data.get('linear', {'x': 0, 'y': 0, 'z': 0})
-        angular = data.get('angular', {'x': 0, 'y': 0, 'z': 0})
-        
-        if not topic_name:
-            raise Exception('话题名称不能为空')
-        
-        message_type = 'geometry_msgs/msg/Twist'
-        publisher = self.ros2_node.create_publisher_for_topic(topic_name, message_type)
-        if not publisher:
-            raise Exception('创建发布者失败')
-        
-        msg = Twist()
-        msg.linear.x = float(linear.get('x', 0))
-        msg.linear.y = float(linear.get('y', 0))
-        msg.linear.z = float(linear.get('z', 0))
-        msg.angular.x = float(angular.get('x', 0))
-        msg.angular.y = float(angular.get('y', 0))
-        msg.angular.z = float(angular.get('z', 0))
-        
-        publisher.publish(msg)
-        
-        await ws.send(json.dumps({
-            'type': 'published',
-            'topic': topic_name,
-            'message': f'Twist 消息已发送到: {topic_name}'
-        }))
-    
-    async def handle_publish_joint_commands(self, ws: WebSocketServerProtocol, data: dict):
-        """发布关节指令"""
-        if not self.ros2_node or not self.ros2_initialized:
-            raise Exception('ROS 2 未初始化')
-        
-        topic_name = data.get('topicName')
-        joint_angles = data.get('jointAngles', [])
-        
-        if not topic_name or not isinstance(joint_angles, list):
-            raise Exception('话题名称和关节角度不能为空')
-        
-        message_type = 'sensor_msgs/msg/JointState'
-        publisher = self.ros2_node.create_publisher_for_topic(topic_name, message_type)
-        if not publisher:
-            raise Exception('创建发布者失败')
-        
-        msg = JointState()
-        msg.header.stamp = self.ros2_node.get_current_time().to_msg()
-        msg.name = [f'joint{i+1}' for i in range(len(joint_angles))]
-        msg.position = [float(angle) for angle in joint_angles]
-        msg.velocity = [0.0] * len(joint_angles)
-        msg.effort = [0.0] * len(joint_angles)
-        
-        publisher.publish(msg)
-        
-        await ws.send(json.dumps({
-            'type': 'published',
-            'topic': topic_name,
-            'message': f'关节指令已发送到: {topic_name}'
-        }))
-    
-    async def handle_publish_pose(self, ws: WebSocketServerProtocol, data: dict):
-        """发布位姿消息"""
-        if not self.ros2_node or not self.ros2_initialized:
-            raise Exception('ROS 2 未初始化')
-        
-        topic_name = data.get('topicName')
-        position = data.get('position', {})
-        orientation = data.get('orientation', {})
-        
-        if not topic_name or not position or not orientation:
-            raise Exception('话题名称、位置和方向不能为空')
-        
-        message_type = 'geometry_msgs/msg/PoseStamped'
-        publisher = self.ros2_node.create_publisher_for_topic(topic_name, message_type)
-        if not publisher:
-            raise Exception('创建发布者失败')
-        
-        msg = PoseStamped()
-        msg.header.stamp = self.ros2_node.get_current_time().to_msg()
-        msg.header.frame_id = 'world'
-        msg.pose.position.x = float(position.get('x', 0))
-        msg.pose.position.y = float(position.get('y', 0))
-        msg.pose.position.z = float(position.get('z', 0))
-        msg.pose.orientation.w = float(orientation.get('w', 1))
-        msg.pose.orientation.x = float(orientation.get('x', 0))
-        msg.pose.orientation.y = float(orientation.get('y', 0))
-        msg.pose.orientation.z = float(orientation.get('z', 0))
-        
-        publisher.publish(msg)
-        
-        await ws.send(json.dumps({
-            'type': 'published',
-            'topic': topic_name,
-            'message': f'位姿消息已发送到: {topic_name}'
-        }))
-    
-    async def handle_get_topics(self, ws: WebSocketServerProtocol):
-        """获取话题列表"""
-        if not self.ros2_node or not self.ros2_initialized:
-            await ws.send(json.dumps({
-                'type': 'topics',
-                'topics': []
-            }))
-            return
-        
-        try:
-            # 获取节点名和命名空间
-            node_name = self.ros2_node.get_name()
-            namespace = self.ros2_node.get_namespace()
-            
-            # 获取所有话题（这里需要扩展，因为 rclpy 没有直接的方法）
-            # 可以使用 ros2 topic list 命令或通过其他方式获取
-            # 简化实现：返回空列表，或通过 DDS 发现机制获取
-            topics = []
-            
-            # 如果有订阅者或发布者，可以从中获取话题名称
-            for topic_name in self.topic_subscribers.keys():
-                topics.append(topic_name)
-            for topic_name in self.ros2_node._topic_publishers.keys():
-                if topic_name not in topics:
-                    topics.append(topic_name)
-            
-            await ws.send(json.dumps({
-                'type': 'topics',
-                'topics': topics
-            }))
-        except Exception as e:
-            logger.error(f'获取话题列表失败: {e}')
-            await ws.send(json.dumps({
-                'type': 'topics',
-                'topics': [],
-                'error': str(e)
-            }))
     
     def ros2_msg_to_dict(self, msg, msg_type: str) -> dict:
         """将 ROS2 消息转换为字典（类似 Node.js 的 normalizeMessageData）"""
@@ -684,6 +571,8 @@ class ROS2BackendServer:
         """专门处理 JointState 消息的转换"""
         result = {}
         try:
+            joint_names = []
+
             # Header
             if hasattr(msg, 'header'):
                 header = msg.header
@@ -694,13 +583,17 @@ class ROS2BackendServer:
             
             # Name (关节名称列表)
             if hasattr(msg, 'name'):
-                result['name'] = list(msg.name) if hasattr(msg.name, '__iter__') else []
-            
+                joint_names = [str(name) for name in msg.name] if hasattr(msg.name, '__iter__') else []
+                result['name'] = joint_names
+
+            joint_count = len(joint_names)
+
             # Position (关节位置列表)
             if hasattr(msg, 'position'):
                 positions = msg.position
                 if hasattr(positions, '__iter__') and not isinstance(positions, str):
-                    result['position'] = [float(p) for p in positions]
+                    normalized = [float(p) for p in positions]
+                    result['position'] = normalized[:joint_count] if joint_count > 0 else normalized
                 else:
                     result['position'] = []
             
@@ -708,7 +601,8 @@ class ROS2BackendServer:
             if hasattr(msg, 'velocity'):
                 velocities = msg.velocity
                 if hasattr(velocities, '__iter__') and not isinstance(velocities, str):
-                    result['velocity'] = [float(v) for v in velocities]
+                    normalized = [float(v) for v in velocities]
+                    result['velocity'] = normalized[:joint_count] if joint_count > 0 else normalized
                 else:
                     result['velocity'] = []
             
@@ -716,9 +610,12 @@ class ROS2BackendServer:
             if hasattr(msg, 'effort'):
                 efforts = msg.effort
                 if hasattr(efforts, '__iter__') and not isinstance(efforts, str):
-                    result['effort'] = [float(e) for e in efforts]
+                    normalized = [float(e) for e in efforts]
+                    result['effort'] = normalized[:joint_count] if joint_count > 0 else normalized
                 else:
                     result['effort'] = []
+
+            result['joint_count'] = joint_count
             
         except Exception as e:
             logger.error(f"转换 JointState 消息失败: {e}", exc_info=True)
@@ -792,23 +689,15 @@ class ROS2BackendServer:
                 await self.handle_subscribe(ws, data)
             elif msg_type == 'unsubscribe':
                 await self.handle_unsubscribe(ws, data)
-            elif msg_type == 'publish':
-                await self.handle_publish(ws, data)
-            elif msg_type == 'publishTwist':
-                await self.handle_publish_twist(ws, data)
-            elif msg_type == 'publishJointCommands':
-                await self.handle_publish_joint_commands(ws, data)
-            elif msg_type == 'publishPose':
-                await self.handle_publish_pose(ws, data)
             elif msg_type == 'publishRobotArmServoMsg':
                 await self.handle_publish_robot_arm_servo_msg(ws, data)
+            elif msg_type == 'publishRobotServoMsg':
+                await self.handle_publish_robot_servo_msg(ws, data)
             elif msg_type == 'getStatus':
                 await ws.send(json.dumps({
                     'type': 'status',
                     'status': 'connected' if self.ros2_initialized else 'not-initialized'
                 }))
-            elif msg_type == 'getTopics':
-                await self.handle_get_topics(ws)
             elif msg_type == "switchMode":
                 logger.info(f"switch mode ===> {data}")
                 self.robot_control_mode = data
@@ -896,4 +785,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-

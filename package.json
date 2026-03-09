@@ -24,6 +24,7 @@
   "dependencies": {
     "express": "^4.18.2",
     "js-yaml": "^4.1.0",
+    "numeric": "^1.2.6",
     "rclnodejs": "^1.6.0",
     "three": "^0.160.1",
     "three-stdlib": "^2.36.0",

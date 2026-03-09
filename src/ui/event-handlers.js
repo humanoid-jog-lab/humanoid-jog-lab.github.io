@@ -285,6 +285,92 @@ function setupEventListeners() {
             applyTeachSpeedPercent(e.target?.value);
         });
     }
+
+    // 人形点动求解后端切换（VFI / Priority）
+    const humanoidJogSolverSelect = document.getElementById('humanoid-jog-solver-select');
+    const humanoidVFIStepBackendSelect = document.getElementById('humanoid-vfi-step-backend-select');
+    const humanoidTaskEquivalentBranchingToggle = document.getElementById('humanoid-task-equivalent-branching-toggle');
+    const HUMANOID_JOG_SOLVER_STORAGE_KEY = 'humanoid-jog-solver-mode';
+    const HUMANOID_VFI_STEP_BACKEND_STORAGE_KEY = 'humanoid-vfi-step-backend';
+    const HUMANOID_TASK_EQ_BRANCHING_STORAGE_KEY = 'humanoid-task-equivalent-branching';
+    const applyHumanoidJogSolverMode = (modeRaw) => {
+        const mode = modeRaw === 'priority' ? 'priority' : 'vfi';
+        if (humanoidJogSolverSelect) humanoidJogSolverSelect.value = mode;
+        if (typeof window !== 'undefined') {
+            window.humanoidJogSolverMode = mode;
+        }
+        if (appState.visualizer?.setHumanoidJogSolverMode) {
+            appState.visualizer.setHumanoidJogSolverMode(mode);
+        }
+        try {
+            localStorage.setItem(HUMANOID_JOG_SOLVER_STORAGE_KEY, mode);
+        } catch (_) {}
+    };
+    const applyHumanoidVFIStepBackend = (backendRaw) => {
+        const backend = backendRaw === 'qp' ? 'qp' : 'projection';
+        if (humanoidVFIStepBackendSelect) humanoidVFIStepBackendSelect.value = backend;
+        if (typeof window !== 'undefined') {
+            window.humanoidVFIStepBackend = backend;
+        }
+        if (appState.visualizer?.setHumanoidVFIStepBackend) {
+            appState.visualizer.setHumanoidVFIStepBackend(backend);
+        }
+        try {
+            localStorage.setItem(HUMANOID_VFI_STEP_BACKEND_STORAGE_KEY, backend);
+        } catch (_) {}
+    };
+    const applyHumanoidTaskEquivalentBranching = (enabledRaw) => {
+        const enabled = Boolean(enabledRaw);
+        if (humanoidTaskEquivalentBranchingToggle) humanoidTaskEquivalentBranchingToggle.checked = enabled;
+        if (typeof window !== 'undefined') {
+            window.humanoidVFITaskEquivalentBranching = enabled;
+        }
+        if (appState.visualizer?.setHumanoidVFITaskEquivalentBranching) {
+            appState.visualizer.setHumanoidVFITaskEquivalentBranching(enabled);
+        }
+        try {
+            localStorage.setItem(HUMANOID_TASK_EQ_BRANCHING_STORAGE_KEY, enabled ? '1' : '0');
+        } catch (_) {}
+    };
+    if (humanoidJogSolverSelect || humanoidVFIStepBackendSelect || humanoidTaskEquivalentBranchingToggle) {
+        const saved = (() => {
+            try { return localStorage.getItem(HUMANOID_JOG_SOLVER_STORAGE_KEY); } catch (_) { return null; }
+        })();
+        const savedStepBackend = (() => {
+            try { return localStorage.getItem(HUMANOID_VFI_STEP_BACKEND_STORAGE_KEY); } catch (_) { return null; }
+        })();
+        const savedBranching = (() => {
+            try { return localStorage.getItem(HUMANOID_TASK_EQ_BRANCHING_STORAGE_KEY); } catch (_) { return null; }
+        })();
+        applyHumanoidVFIStepBackend(savedStepBackend ?? (typeof window !== 'undefined' ? window.humanoidVFIStepBackend : null) ?? 'projection');
+        if (humanoidJogSolverSelect) {
+            applyHumanoidJogSolverMode(saved ?? humanoidJogSolverSelect.value ?? 'vfi');
+            humanoidJogSolverSelect.addEventListener('change', (e) => {
+                applyHumanoidJogSolverMode(e.target?.value);
+            });
+        }
+        if (humanoidVFIStepBackendSelect) {
+            humanoidVFIStepBackendSelect.addEventListener('change', (e) => {
+                applyHumanoidVFIStepBackend(e.target?.value);
+            });
+        }
+        applyHumanoidTaskEquivalentBranching(
+            savedBranching != null
+                ? savedBranching === '1'
+                : ((typeof window !== 'undefined' && typeof window.humanoidVFITaskEquivalentBranching === 'boolean')
+                    ? window.humanoidVFITaskEquivalentBranching
+                    : false)
+        );
+        if (humanoidTaskEquivalentBranchingToggle) {
+            humanoidTaskEquivalentBranchingToggle.addEventListener('change', (e) => {
+                applyHumanoidTaskEquivalentBranching(Boolean(e.target?.checked));
+            });
+        }
+        if (typeof window !== 'undefined') {
+            window.setHumanoidVFIStepBackend = applyHumanoidVFIStepBackend;
+            window.setHumanoidVFITaskEquivalentBranching = applyHumanoidTaskEquivalentBranching;
+        }
+    }
     
     // 示教器控制按钮（移除拖动末端执行器模式）
     const teachButtons = document.querySelectorAll('.teach-btn');

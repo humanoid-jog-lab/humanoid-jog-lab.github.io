@@ -1148,6 +1148,43 @@ body {
     transform: none;
 }
 
+.vfi-diagnostics-panel {
+    margin-top: 0.65rem;
+    padding: 0.45rem 0.55rem;
+    border-radius: 0.5rem;
+    border: 1px solid rgba(51, 65, 85, 0.8);
+    background: rgba(15, 23, 42, 0.65);
+}
+
+.vfi-diagnostics-panel.inactive {
+    border-color: rgba(100, 116, 139, 0.65);
+    background: rgba(15, 23, 42, 0.35);
+}
+
+.vfi-diagnostics-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 0.72rem;
+    color: #bfdbfe;
+    margin-bottom: 0.3rem;
+}
+
+.vfi-diagnostics-head code {
+    color: #94a3b8;
+    font-size: 0.68rem;
+}
+
+.vfi-diagnostics-text {
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: 0.69rem;
+    line-height: 1.34;
+    color: #cbd5e1;
+    min-height: 5.8em;
+}
+
 /* ROS 2 通讯面板样式 */
 .ros2-panel {
     bottom: 4rem;

@@ -390,6 +390,33 @@ export class ROS2Communicator {
     }
 
     /**
+     * 创建和发送 robot_control_msg/Robotservomsg 消息（腰部/下肢控制消息）
+     */
+    async publishRobotServoMsg(topicName, messageData) {
+        if (!this.isInitialized) return false;
+
+        try {
+            const message = this.rclnodejs.createMessageObject('robot_control_msg/msg/Robotservomsg');
+
+            message.run_mode = messageData.run_mode ?? 0;
+            message.ankle_position = messageData.ankle_position ?? 0;
+            message.knee_position = messageData.knee_position ?? 0;
+            message.hip_pitch_position = messageData.hip_pitch_position ?? 0;
+            message.hip_yaw_position = messageData.hip_yaw_position ?? 0;
+            message.x = messageData.x ?? 0;
+            message.y = messageData.y ?? 0;
+            message.phi = messageData.phi ?? 0;
+            message.mode_leg_select = messageData.mode_leg_select ?? 0;
+            message.vel = messageData.vel ?? 0;
+
+            return await this.publish(topicName, 'robot_control_msg/msg/Robotservomsg', message);
+        } catch (error) {
+            console.error('发送腰部控制消息失败:', error);
+            return false;
+        }
+    }
+
+    /**
      * 将 ROS 2 消息中的 TypedArray 等结构转换为普通 JS 数据，便于序列化
      */
     normalizeMessageData(data) {
@@ -442,4 +469,3 @@ export class ROS2Communicator {
 }
 
 export default ROS2Communicator;
-
