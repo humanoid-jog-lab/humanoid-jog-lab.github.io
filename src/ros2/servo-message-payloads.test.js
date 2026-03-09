@@ -64,7 +64,7 @@ test('buildRobotArmServoMessageData keeps existing dual-arm mapping', () => {
     assert.equal(result.messageData.rjoint7_position, 7);
 });
 
-test('buildRobotServoMessageData uses humanoid waist joints and defaults run_mode to 0', () => {
+test('buildRobotServoMessageData uses humanoid waist joints and defaults run_mode to 0 and vel to 0.1', () => {
     const result = buildRobotServoMessageData({
         humanoidMode: true,
         humanoidQ: [-0.3, 0.9, -0.6, 0.2, 10, 11]
@@ -81,7 +81,7 @@ test('buildRobotServoMessageData uses humanoid waist joints and defaults run_mod
         y: 0,
         phi: 0,
         mode_leg_select: 0,
-        vel: 0
+        vel: 0.1
     });
 });
 

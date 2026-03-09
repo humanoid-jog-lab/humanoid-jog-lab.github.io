@@ -457,7 +457,7 @@ class ROS2BackendServer:
             msg.y = float(message_data.get('y', 0))
             msg.phi = float(message_data.get('phi', 0))
             msg.mode_leg_select = int(message_data.get('mode_leg_select', 0))
-            msg.vel = float(message_data.get('vel', 0))
+            msg.vel = float(message_data.get('vel', 0.1))
 
             publisher.publish(msg)
 
