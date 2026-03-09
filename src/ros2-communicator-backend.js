@@ -407,7 +407,7 @@ export class ROS2Communicator {
             message.y = messageData.y ?? 0;
             message.phi = messageData.phi ?? 0;
             message.mode_leg_select = messageData.mode_leg_select ?? 0;
-            message.vel = messageData.vel ?? 0.1;
+            message.vel = messageData.vel ?? 0.3;
 
             return await this.publish(topicName, 'robot_control_msg/msg/Robotservomsg', message);
         } catch (error) {

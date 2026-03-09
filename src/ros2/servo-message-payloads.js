@@ -102,7 +102,7 @@ export function buildRobotServoMessageData({
     y = 0,
     phi = 0,
     modeLegSelect = 0,
-    vel = 0.1
+    vel = 0.3
 } = {}) {
     const waistValues = readHumanoidSlice(humanoidQ, 0, HUMANOID_WAIST_JOINT_NAMES.length);
 
@@ -118,7 +118,7 @@ export function buildRobotServoMessageData({
             y: toFiniteNumber(y, 0),
             phi: toFiniteNumber(phi, 0),
             mode_leg_select: toFiniteNumber(modeLegSelect, 0),
-            vel: toFiniteNumber(vel, 0.1)
+            vel: toFiniteNumber(vel, 0.3)
         }
     };
 }
