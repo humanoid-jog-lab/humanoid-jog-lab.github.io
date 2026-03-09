@@ -37,5 +37,9 @@ yarn-error.log*
 *.temp
 .em_cache/
 
+# Python 缓存
+__pycache__/
+*.pyc
+
 # 忽略本地论文目录
 2026_humanoid_robot/
