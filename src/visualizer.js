@@ -13,13 +13,14 @@ import {
     solveQPNumericActiveSet
 } from './core/vfi-utils.js';
 import { minimizeLBFGS } from './core/lbfgs-utils.js';
+import { buildBodyVerticalLineTask } from './core/body-vertical-utils.js';
 import {
     applyTaskEquivalentBranchHysteresis,
     buildTaskEquivalentBranches,
     computeMinJointMarginRatio,
     summarizeTaskEquivalentBranchCandidates
 } from './core/humanoid-branch-utils.js';
-import { evaluateHumanoidJogCommandOutcome } from './core/humanoid-jog-outcome.js';
+import { evaluateHumanoidJogCommandOutcome, resolveHumanoidJogCommandResult } from './core/humanoid-jog-outcome.js';
 
 export class RobotVisualizer {
     constructor(canvas) {
@@ -580,22 +581,14 @@ export class RobotVisualizer {
         if (!waistPose || !JWaistFull) return null;
 
         const JLineFull = Kinematics.lineJacobian(JWaistFull, waistPose, bodyZLineDirection);
-        if (!Array.isArray(JLineFull) || !Array.isArray(JLineFull[1]) || !Array.isArray(JLineFull[2])) {
-            return null;
-        }
-
         const waistPoseDQ = DQ.createFromArray(waistPose);
         const rotMat = DQ.getRotationMatrix(waistPoseDQ);
-        const ex = -(rotMat?.[0]?.[2] ?? 0);
-        const ey = -(rotMat?.[1]?.[2] ?? 0);
-
-        return {
-            error: [ex, ey],
-            Jrows: [
-                JLineFull[1].slice(armStart, armStart + activeCount),
-                JLineFull[2].slice(armStart, armStart + activeCount)
-            ]
-        };
+        return buildBodyVerticalLineTask({
+            rotMat,
+            lineJacobianFull: JLineFull,
+            armStart,
+            activeCount
+        });
     }
 
     _projectHumanoidTaskEquivalentBranch({
@@ -655,11 +648,8 @@ export class RobotVisualizer {
             if (bodyReference) {
                 const bodyNow = this._getHumanoidBodyVerticalState(qProjected, armStart, activeCount);
                 if (!bodyNow) return null;
-                eCmd.push(
-                    (bodyReference.error[0] || 0) - (bodyNow.error[0] || 0),
-                    (bodyReference.error[1] || 0) - (bodyNow.error[1] || 0)
-                );
-                Jcmd.push(bodyNow.Jrows[0], bodyNow.Jrows[1]);
+                eCmd.push((bodyReference.mismatchSquared || 0) - (bodyNow.mismatchSquared || 0));
+                Jcmd.push(bodyNow.Jrows[0]);
             }
 
             finalErrorNorm = Math.sqrt(eCmd.reduce((sum, value) => sum + value * value, 0));
@@ -5745,7 +5735,6 @@ export class RobotVisualizer {
             && Kinematics && typeof Kinematics.lineJacobian === 'function'
             && typeof this.humanoidModel.fkmEffector === 'function'
             && typeof this.humanoidModel.poseJacobianEffector === 'function';
-        const bodyZLineDirection = [0, 0, 0, 1, 0, 0, 0, 0];
 
         const qInitial = [...currentQ];
         let q = [...qInitial];
@@ -5776,10 +5765,7 @@ export class RobotVisualizer {
                     stopReason = 'body_task_fail';
                     break;
                 }
-                eInvariantCurrent.push(
-                    bodyKappa * (bodyStateCurrent.error[0] || 0),
-                    bodyKappa * (bodyStateCurrent.error[1] || 0)
-                );
+                eInvariantCurrent.push(bodyKappa * (bodyStateCurrent.error[0] || 0));
             }
             lastInvariantNorm = Math.sqrt(eInvariantCurrent.reduce((s, v) => s + v * v, 0));
             if (cmdNorm < hardCmdTol && lastInvariantNorm < hardInvariantTol) {
@@ -5811,11 +5797,8 @@ export class RobotVisualizer {
                     if (enableBodyVerticalTask) {
                         const bodyStateBranch = this._getHumanoidBodyVerticalState(qCandidate, armStart, activeCount);
                         if (!bodyStateBranch) return null;
-                        eInvariantBranch.push(
-                            bodyKappa * (bodyStateBranch.error[0] || 0),
-                            bodyKappa * (bodyStateBranch.error[1] || 0)
-                        );
-                        Jinvariant.push(bodyStateBranch.Jrows[0], bodyStateBranch.Jrows[1]);
+                        eInvariantBranch.push(bodyKappa * (bodyStateBranch.error[0] || 0));
+                        Jinvariant.push(bodyStateBranch.Jrows[0]);
                     }
 
                     const qActiveBranch = qCandidate.slice(armStart, armStart + activeCount);
@@ -6094,7 +6077,6 @@ export class RobotVisualizer {
             console.warn('全身绝对位姿控制：未启用 body_link z 轴竖直约束（缺少 Kinematics.lineJacobian 或腰部接口）');
             this._missingBodyZConstraintWarned = true;
         }
-        const bodyZLineDirection = [0, 0, 0, 1, 0, 0, 0, 0];
         const tolBodyZ = 1e-14;
         const cfg = this.vfiConfig || {};
         const hardCmdTol = Number.isFinite(cfg.hardCommandTolPose) ? cfg.hardCommandTolPose : 1e-6;
@@ -6106,13 +6088,8 @@ export class RobotVisualizer {
         const vectorNorm = (values) => Math.sqrt((Array.isArray(values) ? values : []).reduce((sum, value) => sum + (value || 0) * (value || 0), 0));
         const computeBodyVerticalResidual = (qEval) => {
             if (!enableBodyVerticalTask) return 0;
-            const waistPose = this.humanoidModel.fkmEffector?.(qEval, 0);
-            if (!waistPose) return Number.POSITIVE_INFINITY;
-            const waistPoseDQ = DQ.createFromArray(waistPose);
-            const rotMat = DQ.getRotationMatrix(waistPoseDQ);
-            const ex = -(rotMat?.[0]?.[2] ?? 0);
-            const ey = -(rotMat?.[1]?.[2] ?? 0);
-            return Math.sqrt(ex * ex + ey * ey);
+            const bodyState = this._getHumanoidBodyVerticalState(qEval, armStart, activeCount);
+            return bodyState ? (bodyState.errorNorm ?? Math.abs(bodyState.error?.[0] || 0)) : Number.POSITIVE_INFINITY;
         };
         const initialCmdNorm = vectorNorm(this._signedPoseError(absTargetArray, absCurrentArray));
         
@@ -6160,35 +6137,19 @@ export class RobotVisualizer {
             }
 
             // === 任务1附加约束：body_link 的 z 轴保持垂直地面（世界 Z）===
-            // 通过 line_jacobian 获取 body_link z 轴方向对关节的雅可比，约束其 x/y 分量为 0
+            // 通过 line_jacobian 构造 Plucker line 方向误差 f=(l-l_z)^T(l-l_z)
             let JBodyZ = null;
             let eBodyZNorm2 = 0;
             if (enableBodyVerticalTask) {
-                const waistPose = this.humanoidModel.fkmEffector(q, 0); // body_link
-                const JWaistFull = this.humanoidModel.poseJacobianEffector(q, 0);
-                if (!waistPose || !JWaistFull) {
+                const bodyState = this._getHumanoidBodyVerticalState(q, armStart, activeCount);
+                if (!bodyState) {
                     stopReason = 'body_task_fail';
                     break;
                 }
-
-                const JLineFull = Kinematics.lineJacobian(JWaistFull, waistPose, bodyZLineDirection);
-                if (!Array.isArray(JLineFull) || JLineFull.length < 3) {
-                    stopReason = 'body_task_fail';
-                    break;
-                }
-
-                const waistPoseDQ = DQ.createFromArray(waistPose);
-                const rotMat = DQ.getRotationMatrix(waistPoseDQ);
-                const ex = -(rotMat?.[0]?.[2] ?? 0);
-                const ey = -(rotMat?.[1]?.[2] ?? 0);
-                e1.push(ex, ey);
-                eBodyZNorm2 = ex * ex + ey * ey;
+                e1.push(bodyState.error[0] || 0);
+                eBodyZNorm2 = (bodyState.errorNorm || 0) ** 2;
                 e1Norm2 += eBodyZNorm2;
-
-                JBodyZ = [
-                    JLineFull[1].slice(armStart, armStart + activeCount),
-                    JLineFull[2].slice(armStart, armStart + activeCount)
-                ];
+                JBodyZ = [bodyState.Jrows[0]];
             }
             
             // === 计算任务2误差：绝对位姿跟踪 ===
@@ -6242,7 +6203,7 @@ export class RobotVisualizer {
                 J1.push(JrelFull[i].slice(armStart, armStart + activeCount));
             }
             if (JBodyZ) {
-                J1.push(JBodyZ[0], JBodyZ[1]);
+                J1.push(JBodyZ[0]);
             }
             
             // J_abs: 绝对位姿对活动关节的雅可比 (8 x activeCount)
@@ -8177,9 +8138,18 @@ export class RobotVisualizer {
         const dStart = Math.sqrt((tStart[1] || 0) ** 2 + (tStart[2] || 0) ** 2 + (tStart[3] || 0) ** 2);
         const dTarget = Math.max(0.01, dStart + deltaDistance);  // 最小距离0.01m防止奇异
         const d2Target = dTarget * dTarget;
-        
+
         // 获取关节限位
         const jointLimits = this._getHumanoidJointLimits();
+        const cfg = this.vfiConfig || {};
+        const hardCmdTol = Number.isFinite(cfg.hardCommandTolDistanceSq) ? cfg.hardCommandTolDistanceSq : 1e-8;
+        const hardInvariantTol = Number.isFinite(cfg.hardInvariantTol) ? cfg.hardInvariantTol : 5e-5;
+        const practicalCmdTol = Number.isFinite(cfg.practicalCommandTolDistanceSq) ? cfg.practicalCommandTolDistanceSq : 1e-5;
+        const practicalInvariantTol = Number.isFinite(cfg.practicalInvariantTol) ? cfg.practicalInvariantTol : 2.5e-4;
+        const mismatchTol = Number.isFinite(cfg.qpMismatchTol) ? cfg.qpMismatchTol : 1e-3;
+        const mismatchRequiredReduction = Number.isFinite(cfg.qpMismatchRequiredReduction) ? cfg.qpMismatchRequiredReduction : 0.8;
+        const vectorNorm = (values) => Math.sqrt((Array.isArray(values) ? values : []).reduce((sum, value) => sum + (value || 0) * (value || 0), 0));
+        const initialCmdNorm = Math.abs(d2Target - dStart * dStart);
         
         // 增益参数
         const kappa1 = 0.2;     // 任务1增益（绝对位姿+相对姿态保持 - 最高优先级）
@@ -8194,13 +8164,18 @@ export class RobotVisualizer {
         const damping = 0.00001;
         const maxStep = 0.003;
         
-        let q = [...currentQ];
+        const qInitial = [...currentQ];
+        let q = [...qInitial];
+        let stopReason = 'max_iter';
         
         for (let iter = 0; iter < maxIter; iter++) {
             // === 计算任务1误差：绝对位姿 + 相对姿态保持（最高优先级）===
             const absNow = this._getHumanoidAbsolutePose(q);
             const relNow = this._getHumanoidRelativePose(q);
-            if (!absNow || !relNow) break;
+            if (!absNow || !relNow) {
+                stopReason = 'fk_fail';
+                break;
+            }
             
             // 处理DQ双覆盖 - 绝对位姿
             let dotAbs = 0;
@@ -8238,6 +8213,7 @@ export class RobotVisualizer {
             
             // 收敛检查
             if (e1Norm2 < tol && e2Norm2 < tol) {
+                stopReason = 'converged';
                 break;
             }
             
@@ -8249,7 +8225,10 @@ export class RobotVisualizer {
             // J1: 绝对位姿雅可比(8行) + 相对姿态雅可比(4行) = 12 x activeCount
             const JabsFull = this._getHumanoidAbsolutePoseJacobian(q);
             const JrelFull = this._getHumanoidRelativePoseJacobian(q);
-            if (!JabsFull || !JrelFull) break;
+            if (!JabsFull || !JrelFull) {
+                stopReason = 'jacobian_fail';
+                break;
+            }
             
             const J1 = [];
             // 添加绝对位姿雅可比 (8行)
@@ -8264,7 +8243,10 @@ export class RobotVisualizer {
             // J2: 距离雅可比 (1 x activeCount)
             const Jd2Full = window.DQModule.Kinematics.distanceJacobian(JrelFull, relNow);
             const jacobianD2Row = Array.isArray(Jd2Full) && Jd2Full[0] ? [...Jd2Full[0]] : null;
-            if (!jacobianD2Row) break;
+            if (!jacobianD2Row) {
+                stopReason = 'jacobian_fail';
+                break;
+            }
             const J2 = [jacobianD2Row.slice(armStart, armStart + activeCount)];
             
             // === 计算关节权重矩阵 W ===
@@ -8276,7 +8258,10 @@ export class RobotVisualizer {
             
             // === 计算任务1（绝对位姿+相对姿态）的加权伪逆和零空间投影 ===
             const J1Pinv = this._weightedDampedPseudoInverse(J1, W, damping);
-            if (!J1Pinv) break;
+            if (!J1Pinv) {
+                stopReason = 'jacobian_fail';
+                break;
+            }
             
             // P1 = I - J1_pinv * J1
             const P1 = this._computeNullspaceProjection(J1Pinv, J1, activeCount);
@@ -8285,7 +8270,10 @@ export class RobotVisualizer {
             // J2_bar = J2 * P1
             const J2Bar = this._matMul(J2, P1);
             const J2BarPinv = this._weightedDampedPseudoInverse(J2Bar, W, damping);
-            if (!J2BarPinv) break;
+            if (!J2BarPinv) {
+                stopReason = 'jacobian_fail';
+                break;
+            }
             
             // === 计算增广雅可比的零空间投影 P12 ===
             const P12 = this._computeNullspaceProjection2(P1, J2BarPinv, J2Bar, activeCount);
@@ -8343,13 +8331,74 @@ export class RobotVisualizer {
                 }
             }
         }
-        
+
+        const absEndArray = this._getHumanoidAbsolutePose(q);
+        const relEndArray = this._getHumanoidRelativePose(q);
+        const finalCmdNorm = relEndArray
+            ? Math.abs(d2Target - (() => {
+                const tEnd = DQ.getTranslation(DQ.createFromArray(relEndArray));
+                return (tEnd[1] || 0) ** 2 + (tEnd[2] || 0) ** 2 + (tEnd[3] || 0) ** 2;
+            })())
+            : Number.POSITIVE_INFINITY;
+        const finalInvariantNorm = (() => {
+            const invariantTerms = [];
+            if (absEndArray) {
+                invariantTerms.push(...this._signedPoseError(absCurrentArray, absEndArray));
+            }
+            if (relEndArray) {
+                const relRotEnd = relEndArray.slice(0, 4);
+                let dotRotEnd = 0;
+                for (let i = 0; i < 4; i++) dotRotEnd += (relRotTarget[i] || 0) * (relRotEnd[i] || 0);
+                const signRotEnd = dotRotEnd < 0 ? -1 : 1;
+                for (let i = 0; i < 4; i++) {
+                    invariantTerms.push((relRotTarget[i] || 0) - signRotEnd * (relRotEnd[i] || 0));
+                }
+            }
+            return vectorNorm(invariantTerms);
+        })();
+        const messageMap = {
+            converged: '距离误差已收敛。',
+            practical_converged: '距离任务达到实用收敛阈值。',
+            command_mismatch: '无法到达该位置（目标未达成）。',
+            max_iter: '达到最大迭代次数。',
+            fk_fail: '姿态计算失败，提前终止。',
+            jacobian_fail: '雅可比计算失败，提前终止。'
+        };
+        const resolved = resolveHumanoidJogCommandResult({
+            stopReason,
+            initialCommandNorm: initialCmdNorm,
+            finalCommandNorm: finalCmdNorm,
+            finalInvariantNorm,
+            hardCommandTol: hardCmdTol,
+            hardInvariantTol: hardInvariantTol,
+            practicalCommandTol: practicalCmdTol,
+            practicalInvariantTol: practicalInvariantTol,
+            mismatchTol,
+            mismatchRequiredReduction,
+            q,
+            qInitial,
+            messageMap,
+            defaultMessage: 'Priority 已执行。'
+        });
+        if (resolved.outcome.reason === 'command_mismatch') {
+            this._notifyHumanoidJogUnreachable('无法到达该位置');
+        }
+        this.lastIKSolveStatus = {
+            solver: 'priority',
+            mode: 'humanoid_distance',
+            converged: resolved.outcome.converged,
+            reason: resolved.outcome.reason,
+            message: resolved.message,
+            finalResidual: finalCmdNorm,
+            invariantResidual: finalInvariantNorm
+        };
+
         // 更新
-        for (let i = 0; i < window.humanoidQ.length && i < q.length; i++) {
-            window.humanoidQ[i] = q[i];
+        for (let i = 0; i < window.humanoidQ.length && i < resolved.qApplied.length; i++) {
+            window.humanoidQ[i] = resolved.qApplied[i];
         }
         if (window.clampJointAngles && this.humanoidURDF && window.customRobotConfig) {
-            const clamped = window.clampJointAngles(q, this.humanoidJointNames || [], this.humanoidURDF, window.customRobotConfig);
+            const clamped = window.clampJointAngles(resolved.qApplied, this.humanoidJointNames || [], this.humanoidURDF, window.customRobotConfig);
             for (let i = 0; i < window.humanoidQ.length && i < clamped.length; i++) {
                 window.humanoidQ[i] = clamped[i];
             }
@@ -8943,7 +8992,6 @@ export class RobotVisualizer {
             console.warn('单臂+腰部控制：未启用 body_link z 轴竖直约束（缺少 Kinematics.lineJacobian 或腰部接口）');
             this._missingSingleArmBodyZConstraintWarned = true;
         }
-        const bodyZLineDirection = [0, 0, 0, 1, 0, 0, 0, 0];
         
         let q = [...currentQ];
         
@@ -8978,27 +9026,17 @@ export class RobotVisualizer {
             let bodyErrNorm = 0;
             let errStack = err.slice();
             if (enableBodyVerticalTask) {
-                const waistPose = this.humanoidModel.fkmEffector(q, 0);
-                const JWaistFull = this.humanoidModel.poseJacobianEffector(q, 0);
-                if (!waistPose || !JWaistFull) return false;
-                const JLineFull = Kinematics.lineJacobian(JWaistFull, waistPose, bodyZLineDirection);
-                if (!Array.isArray(JLineFull) || JLineFull.length < 3) return false;
+                const bodyState = this._getHumanoidBodyVerticalState(q, 0, currentQ.length);
+                if (!bodyState) return false;
+                bodyErrNorm = bodyState.errorNorm || 0;
+                errStack.push(kappaBodyZ * (bodyState.error[0] || 0));
 
-                const waistPoseDQ = DQ.createFromArray(waistPose);
-                const rotMat = DQ.getRotationMatrix(waistPoseDQ);
-                const ex = -(rotMat?.[0]?.[2] ?? 0);
-                const ey = -(rotMat?.[1]?.[2] ?? 0);
-                bodyErrNorm = Math.hypot(ex, ey);
-                errStack.push(kappaBodyZ * ex, kappaBodyZ * ey);
-
-                const jBodyX = [];
-                const jBodyY = [];
+                const jBody = [];
                 for (let j = 0; j < activeCount; j++) {
                     const qIdx = activeIndices[j];
-                    jBodyX.push((JLineFull[1]?.[qIdx] || 0) * kappaBodyZ);
-                    jBodyY.push((JLineFull[2]?.[qIdx] || 0) * kappaBodyZ);
+                    jBody.push((bodyState.Jrows[0]?.[qIdx] || 0) * kappaBodyZ);
                 }
-                Jactive.push(jBodyX, jBodyY);
+                Jactive.push(jBody);
             }
 
             const armErrNorm = Math.sqrt(err.reduce((s, e) => s + e * e, 0));

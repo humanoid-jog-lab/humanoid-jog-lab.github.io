@@ -79,3 +79,16 @@ export function evaluateHumanoidJogCommandOutcome(options = {}) {
         reductionSatisfied
     };
 }
+
+export function resolveHumanoidJogCommandResult(options = {}) {
+    const outcome = evaluateHumanoidJogCommandOutcome(options);
+    const q = Array.isArray(options.q) ? options.q : [];
+    const qInitial = Array.isArray(options.qInitial) ? options.qInitial : [];
+    const messageMap = options.messageMap && typeof options.messageMap === 'object' ? options.messageMap : {};
+
+    return {
+        outcome,
+        qApplied: outcome.applyResult ? q : qInitial,
+        message: messageMap[outcome.reason] || options.defaultMessage || '已执行。'
+    };
+}

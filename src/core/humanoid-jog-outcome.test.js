@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { evaluateHumanoidJogCommandOutcome } from './humanoid-jog-outcome.js';
+import { evaluateHumanoidJogCommandOutcome, resolveHumanoidJogCommandResult } from './humanoid-jog-outcome.js';
 
 test('evaluateHumanoidJogCommandOutcome rejects large command mismatch without enough reduction', () => {
     const outcome = evaluateHumanoidJogCommandOutcome({
@@ -71,4 +71,28 @@ test('evaluateHumanoidJogCommandOutcome does not apply solver output after a Jac
     assert.equal(outcome.reason, 'jacobian_fail');
     assert.equal(outcome.applyResult, false);
     assert.equal(outcome.converged, false);
+});
+
+test('resolveHumanoidJogCommandResult falls back to the initial joints on command mismatch', () => {
+    const result = resolveHumanoidJogCommandResult({
+        stopReason: 'max_iter',
+        initialCommandNorm: 0.1,
+        finalCommandNorm: 0.08,
+        finalInvariantNorm: 1e-5,
+        hardCommandTol: 1e-6,
+        hardInvariantTol: 5e-5,
+        practicalCommandTol: 1e-4,
+        practicalInvariantTol: 2.5e-4,
+        mismatchTol: 1e-3,
+        mismatchRequiredReduction: 0.8,
+        q: [1, 2, 3],
+        qInitial: [4, 5, 6],
+        messageMap: {
+            command_mismatch: '无法到达该位置（目标未达成）。'
+        }
+    });
+
+    assert.equal(result.outcome.reason, 'command_mismatch');
+    assert.deepEqual(result.qApplied, [4, 5, 6]);
+    assert.equal(result.message, '无法到达该位置（目标未达成）。');
 });
