@@ -1,3 +1,7 @@
 [submodule "eigen"]
 	path = third_party/eigen
 	url = https://github.com/eigenteam/eigen-git-mirror.git
+[submodule "toppra"]
+    path = third_party/toppra
+    url = https://github.com/hungpham2511/toppra.git
+

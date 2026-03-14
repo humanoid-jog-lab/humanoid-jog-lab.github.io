@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 
 import time
-
+import os
+import sys
 import rclpy
+
+
+# sys.path.append(os.path.join(os.path.dirname(__file__), '/home/user/dq_vizlab/python_sdk/python'))
 
 from sailor_sdk import (
     AbsolutePoseTOPPRAPlanner,
@@ -14,7 +18,7 @@ from sailor_sdk import (
 )
 
 
-DROP_DISTANCE_Z = 0.30
+DROP_DISTANCE_Z = 0.05
 WAYPOINT_COUNT = 16
 SAMPLE_COUNT = 160
 INCLUDE_WAIST = True

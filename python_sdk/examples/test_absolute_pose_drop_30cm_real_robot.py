@@ -11,7 +11,7 @@ from sailor_sdk import (
 )
 
 
-DROP_DISTANCE_Z = 0.30
+DROP_DISTANCE_Z = -0.05
 WAYPOINT_COUNT = 16
 SAMPLE_COUNT = 160
 INCLUDE_WAIST = True
