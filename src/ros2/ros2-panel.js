@@ -84,10 +84,27 @@ function setupROS2EventListeners() {
                 
                 await initROS2Communication(customUrl);
             } else if (appState.ros2Communicator.getStatus() === 'connected') {
+                // 断开连接前，先取消真机关节状态订阅，避免残留状态影响下次自动订阅
+                try {
+                    if (appState.ros2JointStateSubscribed && appState.ros2JointStateTopic) {
+                        appState.ros2Communicator.unsubscribe(appState.ros2JointStateTopic);
+                        appState.ros2JointStateSubscribed = false;
+                        updateJointStateSubscribeButton();
+                        setRos2JointStatus('已取消订阅（准备断开连接）', 'warn');
+                        addROS2LogEntry(`断开前已取消真机关节订阅: ${appState.ros2JointStateTopic}`, 'info');
+                    }
+                } catch (error) {
+                    console.warn('断开前取消真机关节订阅失败:', error);
+                }
+
                 await appState.ros2Communicator.shutdown();
                 updateROS2StatusDisplay('disconnected');
             } else {
-                await appState.ros2Communicator.init();
+                const ok = await appState.ros2Communicator.init();
+                if (ok) {
+                    // 重新连接成功后自动订阅真机关节状态
+                    await autoSubscribeRealJointState();
+                }
             }
         });
     }
@@ -144,7 +161,7 @@ function setupROS2EventListeners() {
     }
 
     setupRealJointStateControls();
-
+    
     // 关节位置发布控制（开关模式）
     const jointPositionToggle = document.getElementById('ros2-joint-position-toggle');
     if (jointPositionToggle) {
@@ -290,6 +307,15 @@ async function publishWaistPositionMessage() {
  * 开始持续发布关节位置
  */
 function startJointPositionPublishing() {
+    // 与真机关节订阅互锁：若当前已订阅真机关节状态，则不允许开启持续发布
+    if (appState.ros2JointStateSubscribed) {
+        updateJointPositionStatus('当前已订阅真机关节状态，如需持续发布关节位置，请先取消真机关节订阅。', 'warn');
+        const toggle = document.getElementById('ros2-joint-position-toggle');
+        if (toggle) toggle.checked = false;
+        addROS2LogEntry('开启持续发布关节位置被阻止：已订阅真机关节状态，请先取消订阅。', 'warn');
+        return;
+    }
+
     // 如果已经在发布，先停止
     if (appState.jointPositionPublishTimer !== null) {
         clearInterval(appState.jointPositionPublishTimer);
@@ -343,6 +369,15 @@ function stopJointPositionPublishing() {
 }
 
 function startWaistPositionPublishing() {
+    // 与真机关节订阅互锁：若当前已订阅真机关节状态，则不允许开启持续发布
+    if (appState.ros2JointStateSubscribed) {
+        updateWaistPositionStatus('当前已订阅真机关节状态，如需持续发布腰部关节，请先取消真机关节订阅。', 'warn');
+        const toggle = document.getElementById('ros2-waist-position-toggle');
+        if (toggle) toggle.checked = false;
+        addROS2LogEntry('开启持续发布腰部关节被阻止：已订阅真机关节状态，请先取消订阅。', 'warn');
+        return;
+    }
+
     if (appState.waistPositionPublishTimer !== null) {
         clearInterval(appState.waistPositionPublishTimer);
     }
@@ -414,6 +449,13 @@ function setupRealJointStateControls() {
         const topic = topicInput?.value.trim() || DEFAULT_REAL_JOINT_STATE_TOPIC;
 
         if (!appState.ros2JointStateSubscribed) {
+            // 与持续发布互锁：若当前已开启任一持续发布，则不允许订阅真机关节状态
+            if (appState.jointPositionPublishTimer !== null || appState.waistPositionPublishTimer !== null) {
+                setRos2JointStatus('当前已开启持续发布关节/腰部关节，请先关闭相应发布，再订阅真机关节状态。', 'warn');
+                addROS2LogEntry('订阅真机关节状态被阻止：存在持续发布关节/腰部关节，请先关闭相应发布。', 'warn');
+                return;
+            }
+
             const success = await appState.ros2Communicator.subscribe(topic, 'sensor_msgs/msg/JointState', handleRealJointStateMessage);
             if (success) {
                 appState.ros2JointStateSubscribed = true;
@@ -432,6 +474,45 @@ function setupRealJointStateControls() {
             addROS2LogEntry('已取消真机关节订阅', 'info');
         }
     });
+}
+
+/**
+ * 连接成功后自动订阅真机关节状态（使用当前输入框或默认话题）
+ * - 仅在尚未订阅时执行，避免重复订阅
+ * - 可在首次连接和后续重新连接时复用
+ */
+async function autoSubscribeRealJointState() {
+    if (!appState.ros2Communicator || !appState.ros2Communicator.isInitialized) {
+        return;
+    }
+    if (appState.ros2JointStateSubscribed) {
+        return;
+    }
+
+    // 与持续发布互锁：若当前已开启任一持续发布，则跳过自动订阅，仅给出提示
+    if (appState.jointPositionPublishTimer !== null || appState.waistPositionPublishTimer !== null) {
+        addROS2LogEntry('检测到已开启持续发布关节/腰部关节，已跳过自动订阅真机关节状态。如需订阅，请先关闭持续发布。', 'warn');
+        return;
+    }
+
+    try {
+        const topicInput = document.getElementById('ros2-joint-topic');
+        const topic = topicInput?.value?.trim() || DEFAULT_REAL_JOINT_STATE_TOPIC;
+        const success = await appState.ros2Communicator.subscribe(
+            topic,
+            'sensor_msgs/msg/JointState',
+            handleRealJointStateMessage
+        );
+        if (success) {
+            appState.ros2JointStateSubscribed = true;
+            appState.ros2JointStateTopic = topic;
+            updateJointStateSubscribeButton();
+            setRos2JointStatus(`已订阅 ${topic}`, 'success');
+            addROS2LogEntry(`已订阅真机关节: ${topic}`, 'info');
+        }
+    } catch (error) {
+        console.warn('自动订阅真机关节状态失败:', error);
+    }
 }
 
 function handleRealJointStateMessage(message) {
@@ -622,7 +703,14 @@ function setRos2JointStatus(message, type = 'info') {
         return;
     }
     appState.ros2JointStatusElement.textContent = message;
-    appState.ros2JointStatusElement.style.color = type === 'success' ? '#10b981' : type === 'error' ? '#f87171' : '#94a3b8';
+    const colorMap = {
+        success: '#10b981',
+        error: '#f87171',
+        warn: '#f59e0b',
+        info: '#94a3b8'
+    };
+    const color = colorMap[type] || colorMap.info;
+    appState.ros2JointStatusElement.style.color = color;
 }
 
 // ═══════════════════════════════════════════
@@ -868,6 +956,8 @@ async function initROS2Communication(customUrl = null) {
             } catch (error) {
                 console.warn('订阅电池状态失败:', error);
             }
+            // 连接成功后自动订阅真机关节状态（使用设置的话题）
+            await autoSubscribeRealJointState();
         } else {
             addROS2LogEntry('ROS 2 初始化失败', 'error');
         }
@@ -883,6 +973,7 @@ async function initROS2Communication(customUrl = null) {
 function updateROS2StatusDisplay(status) {
     const indicator = document.getElementById('ros2-status-indicator');
     const text = document.getElementById('ros2-status-text');
+    const connectBtn = document.getElementById('ros2-connect-btn');
     
     if (!indicator || !text) return;
     
@@ -900,6 +991,11 @@ function updateROS2StatusDisplay(status) {
         'error': '错误'
     };
     text.textContent = statusMap[status] || status;
+    
+    // 未连接时按钮显示「连接」，已连接时显示「断开」
+    if (connectBtn) {
+        connectBtn.textContent = status === 'connected' ? '断开' : '连接';
+    }
 }
 
 /**
