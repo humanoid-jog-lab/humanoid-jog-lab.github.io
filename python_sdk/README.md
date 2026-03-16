@@ -1,0 +1,157 @@
+# Sailor Python SDK
+
+`python_sdk/` 是从当前项目里抽出来的独立接口层，目标是让别的 Python 工程直接复用现在这套人形 ROS2 话题和原 `nullspace / priority` 求解链路，而不依赖前端界面。
+
+当前版本包含两部分：
+
+- `python/sailor_sdk/`：Python ROS2 封装和求解器客户端
+- `src/sailor_nullspace_solver.cpp`：C++ nullspace 内核，默认加载当前项目的 `Sailor R1 Pro` URDF
+
+## 默认模型
+
+默认机器人模型固定为当前仓库里的：
+
+- `public/robots/sailor_r1_pro_description/urdf/sailor_r1_pro_description.urdf`
+
+默认关节顺序与现有项目一致：
+
+```text
+[ankle_joint, knee_joint, hip_pitch_joint, hip_yaw_joint,
+ ljoint1..7,
+ rjoint1..7,
+ head_yaw_joint, head_pitch_joint]
+```
+
+## 提供的 ROS2 接口
+
+- 订阅 `/whole/joint_states`
+- 发布 `/arm_axis_position_cmd` (`robot_control_msg/msg/Robotarmservomsg`)
+- 发布 `/axis_position_cmd` (`robot_control_msg/msg/Robotservomsg`)
+
+轮子关节不会写回 `current_q`，行为与当前前端一致。
+
+## 提供的求解模式
+
+只保留原零空间优先级解法，不包含 VFI / QP：
+
+- `absolute`: 跟踪双臂绝对位姿，同时保持当前相对位姿
+- `relative`: 跟踪双臂相对位姿，同时保持当前绝对位姿
+
+## 当前状态接口
+
+Python 层现在直接提供当前状态查询：
+
+- `solver.get_state(q)`
+- `solver.get_absolute_pose(q)`
+- `solver.get_relative_pose(q)`
+- `ros.get_current_state(solver)`
+- `ros.get_current_absolute_pose(solver)`
+- `ros.get_current_relative_pose(solver)`
+
+返回内容包含：
+
+- 当前关节角
+- 双臂绝对位姿
+- 双臂相对位姿
+- 左臂末端位姿
+- 右臂末端位姿
+
+这里的绝对位姿含义与当前项目一致，都是双臂任务空间的 `absolutePoseDualArm`。
+
+## 绝对位姿 TOPPRA 规划
+
+`python_sdk` 现在还提供了一个“类似 MoveIt 的绝对位姿规划”最小接口：
+
+- 先在绝对位姿空间插补 waypoint
+- 每个 waypoint 用当前 `nullspace` 求解器求一遍关节解
+- 最后对整条关节路径做 TOPPRA 时间参数化
+
+入口类：
+
+- `AbsolutePoseTOPPRAPlanner`
+
+入口方法：
+
+- `planner.plan_absolute_pose(...)`
+
+返回内容包含：
+
+- 插补后的绝对位姿 waypoint
+- 对应的关节 waypoint
+- 每一步 nullspace 求解结果
+- TOPPRA 重定时后的 `sample_times / positions / velocities / accelerations`
+
+## 构建 C++ 求解器
+
+```bash
+cd /home/echoz/dq_vizlab
+cmake -S python_sdk -B python_sdk/build
+cmake --build python_sdk/build -j
+```
+
+生成的求解器默认在：
+
+```text
+python_sdk/build/sailor_nullspace_solver
+```
+
+## Python 使用示例
+
+先把包路径加到 `PYTHONPATH`：
+
+```bash
+export PYTHONPATH=/home/echoz/dq_vizlab/python_sdk/python:$PYTHONPATH
+```
+
+示例：
+
+```python
+import rclpy
+
+from sailor_sdk import (
+    AbsolutePoseTOPPRAPlanner,
+    NullspaceSolverClient,
+    SailorROS2Interface,
+    pose_dq_from_quaternion_translation,
+)
+
+rclpy.init()
+
+ros = SailorROS2Interface()
+solver = NullspaceSolverClient()
+planner = AbsolutePoseTOPPRAPlanner()
+
+current_state = solver.get_state(ros.current_q)
+abs_target = pose_dq_from_quaternion_translation(
+    qw=1.0, qx=0.0, qy=0.0, qz=0.0,
+    x=0.45, y=0.0, z=1.05,
+)
+
+result = solver.solve_absolute(
+    q=ros.current_q,
+    target_pose=abs_target,
+    include_waist=True,
+)
+
+if result.apply_result:
+    ros.publish_arm_command(result.q)
+    ros.publish_waist_command(result.q)
+
+plan = planner.plan_absolute_pose(
+    solver,
+    q_start=ros.current_q,
+    target_pose=abs_target,
+    include_waist=True,
+    waypoint_count=10,
+)
+ros.execute_timed_trajectory(plan.trajectory)
+
+ros.destroy_node()
+rclpy.shutdown()
+```
+
+完整示例见：
+
+- [examples/basic_usage.py](/home/echoz/dq_vizlab/python_sdk/examples/basic_usage.py)
+- [examples/absolute_pose_toppra_plan.py](/home/echoz/dq_vizlab/python_sdk/examples/absolute_pose_toppra_plan.py)
+- [examples/test_absolute_pose_drop_30cm_joint_state.py](/home/echoz/dq_vizlab/python_sdk/examples/test_absolute_pose_drop_30cm_joint_state.py)

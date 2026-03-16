@@ -246,6 +246,7 @@ export function setupInverseKinematicsControls() {
         }
 
         try {
+            vis.lastIKSolveStatus = null;
             let success = false;
             if (appState.humanoidMode && (robotChoice === 'absolute' || robotChoice === 'relative')) {
                 const allQ = appState.humanoidQ;
@@ -270,6 +271,20 @@ export function setupInverseKinematicsControls() {
                     ) === true;
                 }
                 if (success) callbacks.refreshJointControlDisplay?.();
+            } else if (appState.humanoidMode && robotChoice === 'robot1') {
+                success = vis.updateHumanoidSingleArmPoseTargetLBFGS?.(
+                    dqArray,
+                    appState.humanoidQ,
+                    1,
+                    false
+                ) === true;
+            } else if (appState.humanoidMode && robotChoice === 'robot2') {
+                success = vis.updateHumanoidSingleArmPoseTargetLBFGS?.(
+                    dqArray,
+                    appState.humanoidQ,
+                    2,
+                    false
+                ) === true;
             } else if (!appState.dualArmMode) {
                 success = vis.updateSingleArmJointsWithLBFGS?.(dqArray) === true;
             } else if (robotChoice === 'robot1') {
@@ -292,9 +307,23 @@ export function setupInverseKinematicsControls() {
                 return;
             }
             if (!success) {
-                callbacks.addROS2LogEntry?.('逆运动学求解失败：L-BFGS 未收敛', 'warn');
+                const solveInfo = vis.lastIKSolveStatus;
+                let detail = '逆运动学求解失败：未达到目标精度';
+                if (solveInfo?.solver === 'lbfgs') {
+                    detail = `逆运动学求解失败：未达到目标精度（reason=${solveInfo.reason || 'unknown'}, residual=${Number.isFinite(solveInfo.finalResidual) ? solveInfo.finalResidual.toExponential(2) : 'n/a'})`;
+                } else if (solveInfo?.solver === 'vfi') {
+                    detail = `逆运动学求解失败：${solveInfo.message || 'VFI 求解失败'}（reason=${solveInfo.reason || 'unknown'}, residual=${Number.isFinite(solveInfo.finalResidual) ? solveInfo.finalResidual.toExponential(2) : 'n/a'}${typeof solveInfo.qpConverged === 'boolean' ? `, qp=${solveInfo.qpConverged ? 'yes' : 'no'}` : ''}${solveInfo.qpMessage ? `, qp_message=${solveInfo.qpMessage}` : ''})`;
+                } else if (typeof solveInfo?.message === 'string' && solveInfo.message.trim()) {
+                    detail = `逆运动学求解失败：${solveInfo.message.trim()}`;
+                } else {
+                    const backend = appState.humanoidMode
+                        ? ((window.humanoidJogSolverMode || vis.humanoidJogSolverMode || 'unknown').toString())
+                        : (appState.dualArmMode ? 'dual-arm' : 'single-arm');
+                    detail = `逆运动学求解失败：未达到目标精度（mode=${robotChoice}, humanoid=${appState.humanoidMode ? 'yes' : 'no'}, backend=${backend}, diagnostic=missing）`;
+                }
+                callbacks.addROS2LogEntry?.(detail, 'warn');
                 if (ikStatus) {
-                    ikStatus.textContent = '逆运动学求解失败：L-BFGS 未收敛';
+                    ikStatus.textContent = detail;
                     ikStatus.style.color = '#f87171';
                 }
                 return;

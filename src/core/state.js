@@ -115,12 +115,13 @@ export const appState = {
 
     // 关节位置发布定时器
     jointPositionPublishTimer: null,
+    waistPositionPublishTimer: null,
 
     // ROS 2 通讯
     ros2Communicator: null,
     ros2MessageLog: [],
     ros2JointStateSubscribed: false,
-    ros2JointStateTopic: '/arm/joint_states',
+    ros2JointStateTopic: '/whole/joint_states',
     ros2JointStateButton: null,
     ros2JointStatusElement: null,
     ros2BatteryStateSubscribed: false,

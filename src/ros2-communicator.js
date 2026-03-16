@@ -360,6 +360,24 @@ export class ROS2Communicator {
     }
 
     /**
+     * 发布腰部/下肢控制消息（自定义消息格式）
+     */
+    async publishRobotServoMsg(topicName, messageData) {
+        if (!this.isInitialized) return false;
+
+        try {
+            this.send({
+                type: 'publishRobotServoMsg',
+                data: { topicName, messageData }
+            });
+            return true;
+        } catch (error) {
+            console.error('发送腰部控制消息失败:', error);
+            return false;
+        }
+    }
+
+    /**
      * 获取话题列表
      */
     async getTopicNames() {

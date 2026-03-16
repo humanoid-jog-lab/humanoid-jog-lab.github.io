@@ -4,6 +4,23 @@
 
 import * as THREE from 'three';
 import URDFLoader from 'urdf-loader';
+import {
+    appendEqualityConstraints,
+    appendVFIErrorTubeConstraints,
+    appendComponentBounds,
+    appendJointLimitStepConstraints,
+    projectOntoHalfspaces,
+    solveQPNumericActiveSet
+} from './core/vfi-utils.js';
+import { minimizeLBFGS } from './core/lbfgs-utils.js';
+import { buildBodyVerticalLineTask } from './core/body-vertical-utils.js';
+import {
+    applyTaskEquivalentBranchHysteresis,
+    buildTaskEquivalentBranches,
+    computeMinJointMarginRatio,
+    summarizeTaskEquivalentBranchCandidates
+} from './core/humanoid-branch-utils.js';
+import { evaluateHumanoidJogCommandOutcome, resolveHumanoidJogCommandResult } from './core/humanoid-jog-outcome.js';
 
 export class RobotVisualizer {
     constructor(canvas) {
@@ -108,12 +125,72 @@ export class RobotVisualizer {
         this.selectedArrow = null;  // 当前选中的箭头
         this.arrowType = null;  // 'translation' 或 'rotation'
         this.arrowAxis = null;  // 'x', 'y', 或 'z'
+        this._humanoidTaskEquivalentBranchMemory = new Map();
 
         // 示教器乘法顺序（默认局部增量：Δ × 当前）
         this.teachMultiplicationOrder = 'delta-first';
 
         // 示教器速度百分比（影响“每一步”的平移/旋转增量，不改变按键重复频率）
         this.teachSpeedPercent = 100;
+
+        // 人形点动求解后端：'vfi' | 'priority'
+        this.humanoidJogSolverMode = 'vfi';
+        this.vfiConfig = {
+            maxIter: 240,
+            damping: 1e-3,
+            kappaCommand: 0.6,
+            kappaInvariant: 0.4,
+            invariantBandBase: 1e-4,
+            invariantBandGain: 0.15,
+            // distance-target mode specific options
+            distanceQPUseInvariantEquality: false,   // default: avoid over-constraining distance command
+            distanceKeepRelativeRotation: true,      // keep relative orientation as invariant task
+            distanceKeepHandOrientation: true,       // keep both hand orientations during distance jog
+            distanceInvariantKappa: 0.7,
+            distanceInvariantBandBase: 2e-3,
+            distanceInvariantBandGain: 0.3,
+            distanceInvariantSoftWeight: 6.0,
+            stepBackend: 'qp', // 'projection' | 'qp'
+            maxStep: 0.01,
+            projectionPasses: 10,
+            qpMaxIter: 240,
+            qpStepTol: 1e-12,
+            qpGradTol: 1e-12,
+            qpRegularization: 1e-6,
+            qpProjectionPasses: 12,
+            qpUseInvariantEquality: true,
+            qpEqualityTolerance: 1e-7,
+            qpOuterMaxIter: 8,
+            qpMismatchTol: 1e-12,
+            qpMismatchRequiredReduction: 0.8,
+            jointLimitEta: 1.2,
+            bodyVerticalKappa: 0.8,
+            hardCommandTolPose: 1e-6,
+            hardCommandTolDistanceSq: 1e-8,
+            practicalCommandTolPose: 1e-4,
+            practicalCommandTolDistanceSq: 1e-5,
+            hardInvariantTol: 5e-5,
+            practicalInvariantTol: 2.5e-4,
+            practicalStepNormTol: 2e-5,
+            practicalViolationTol: 1e-8,
+            taskEquivalentBranchingEnabled: false,
+            taskEquivalentBranchScales: [0, 0.5, 1.0, 1.5],
+            taskEquivalentBranchSeedStep: 0.045,
+            taskEquivalentBranchActivationRatio: 0.3,
+            taskEquivalentBranchPressureExponent: 2.0,
+            taskEquivalentBranchMinPressureNorm: 0.08,
+            taskEquivalentBranchProjectionMaxIter: 14,
+            taskEquivalentBranchProjectionTol: 2e-4,
+            taskEquivalentBranchProjectionMaxStep: 0.01,
+            taskEquivalentBranchProjectionDamping: 2e-3,
+            taskEquivalentBranchSeedDistanceWeight: 0.03,
+            taskEquivalentBranchContinuityWeight: 0.08,
+            taskEquivalentBranchMarginWeight: 0.35,
+            taskEquivalentBranchHysteresisAbsMargin: 5e-4,
+            taskEquivalentBranchHysteresisRelMargin: 0.2,
+            taskEquivalentBranchMinHoldSteps: 2,
+            taskEquivalentBranchDiagnosticsMaxLines: 4
+        };
 
         // ── Regulated Pure Pursuit 路径可视化 ──
         this.rppPathLine = null;           // THREE.Line - 路径折线
@@ -314,6 +391,921 @@ export class RobotVisualizer {
      */
     isWorldTranslationMode() {
         return this.teachMultiplicationOrder === 'current-first';
+    }
+
+    setHumanoidJogSolverMode(mode) {
+        if (mode !== 'vfi' && mode !== 'priority') {
+            console.warn('无效的人形点动求解后端:', mode);
+            return;
+        }
+        this.humanoidJogSolverMode = mode;
+        if (typeof window !== 'undefined') {
+            window.humanoidJogSolverMode = mode;
+        }
+        this._publishHumanoidJogDiagnostics({
+            solverMode: mode,
+            modeTag: 'idle',
+            active: mode === 'vfi',
+            message: mode === 'vfi'
+                ? 'VFI 已启用，等待点动输入。'
+                : '当前为 Priority 后端，VFI 约束诊断暂停。'
+        });
+    }
+
+    setHumanoidVFIStepBackend(backend) {
+        const normalized = backend === 'qp' ? 'qp' : 'projection';
+        if (!this.vfiConfig) this.vfiConfig = {};
+        this.vfiConfig.stepBackend = normalized;
+        if (normalized !== 'qp' && this._humanoidTaskEquivalentBranchMemory) {
+            this._humanoidTaskEquivalentBranchMemory.clear();
+        }
+        if (typeof window !== 'undefined') {
+            window.humanoidVFIStepBackend = normalized;
+        }
+        this._publishHumanoidJogDiagnostics({
+            solverMode: this._isHumanoidVFISolverEnabled() ? 'vfi' : 'priority',
+            modeTag: 'idle',
+            active: this._isHumanoidVFISolverEnabled(),
+            message: `VFI 子求解器: ${normalized.toUpperCase()}`
+        });
+    }
+
+    setHumanoidVFITaskEquivalentBranching(enabled) {
+        if (!this.vfiConfig) this.vfiConfig = {};
+        const normalized = Boolean(enabled);
+        this.vfiConfig.taskEquivalentBranchingEnabled = normalized;
+        if (!normalized && this._humanoidTaskEquivalentBranchMemory) {
+            this._humanoidTaskEquivalentBranchMemory.clear();
+        }
+        if (typeof window !== 'undefined') {
+            window.humanoidVFITaskEquivalentBranching = normalized;
+        }
+        this._publishHumanoidJogDiagnostics({
+            solverMode: this._isHumanoidVFISolverEnabled() ? 'vfi' : 'priority',
+            modeTag: 'idle',
+            active: this._isHumanoidVFISolverEnabled(),
+            message: normalized
+                ? '任务等价多分支已启用。'
+                : '任务等价多分支已关闭。',
+            taskEquivalentBranching: normalized
+        });
+    }
+
+    _getHumanoidVFIStepBackend() {
+        if (typeof window !== 'undefined' && (window.humanoidVFIStepBackend === 'qp' || window.humanoidVFIStepBackend === 'projection')) {
+            return window.humanoidVFIStepBackend;
+        }
+        return (this.vfiConfig?.stepBackend === 'qp') ? 'qp' : 'projection';
+    }
+
+    _isHumanoidTaskEquivalentBranchingEnabled() {
+        if (typeof window !== 'undefined' && typeof window.humanoidVFITaskEquivalentBranching === 'boolean') {
+            return window.humanoidVFITaskEquivalentBranching;
+        }
+        return this.vfiConfig?.taskEquivalentBranchingEnabled === true;
+    }
+
+    _getHumanoidTaskEquivalentBranchMemory(memoryKey) {
+        if (!memoryKey || !this._humanoidTaskEquivalentBranchMemory) return null;
+        return this._humanoidTaskEquivalentBranchMemory.get(memoryKey) || null;
+    }
+
+    _setHumanoidTaskEquivalentBranchMemory(memoryKey, state) {
+        if (!memoryKey || !this._humanoidTaskEquivalentBranchMemory) return;
+        if (state && typeof state.branchId === 'string' && state.branchId.length > 0) {
+            this._humanoidTaskEquivalentBranchMemory.set(memoryKey, state);
+            return;
+        }
+        this._humanoidTaskEquivalentBranchMemory.delete(memoryKey);
+    }
+
+    _summarizeHumanoidBranchSelection(branchSelection) {
+        if (!branchSelection || !Array.isArray(branchSelection.candidates) || branchSelection.candidates.length === 0) {
+            return [];
+        }
+        const cfg = this.vfiConfig || {};
+        return summarizeTaskEquivalentBranchCandidates(branchSelection.candidates, {
+            selectedCandidate: branchSelection.selected,
+            heldBranchId: branchSelection.branchKeptByHysteresis ? branchSelection.selected?.branchId : null,
+            maxLines: cfg.taskEquivalentBranchDiagnosticsMaxLines,
+            seedDistanceWeight: cfg.taskEquivalentBranchSeedDistanceWeight,
+            continuityWeight: cfg.taskEquivalentBranchContinuityWeight,
+            marginWeight: cfg.taskEquivalentBranchMarginWeight
+        });
+    }
+
+    _isHumanoidVFISolverEnabled() {
+        if (typeof window !== 'undefined' && typeof window.humanoidJogSolverMode === 'string') {
+            return window.humanoidJogSolverMode === 'vfi';
+        }
+        return this.humanoidJogSolverMode === 'vfi';
+    }
+
+    _signedPoseError(target, current) {
+        const n = Math.min(target?.length || 0, current?.length || 0);
+        if (n === 0) return [];
+        let dot = 0;
+        for (let i = 0; i < n; i++) dot += (target[i] || 0) * (current[i] || 0);
+        const sign = dot < 0 ? -1 : 1;
+        const err = new Array(n).fill(0);
+        for (let i = 0; i < n; i++) err[i] = (target[i] || 0) - sign * (current[i] || 0);
+        return err;
+    }
+
+    _getHumanoidActiveSliceInfo(includeWaist = false) {
+        const waistCount = this.humanoidWaistLength;
+        const leftArmCount = this.humanoidLeftArmLength;
+        const rightArmCount = this.humanoidRightArmLength;
+        const armStart = includeWaist ? 0 : waistCount;
+        const activeCount = includeWaist
+            ? (waistCount + leftArmCount + rightArmCount)
+            : (leftArmCount + rightArmCount);
+        return {
+            waistCount,
+            leftArmCount,
+            rightArmCount,
+            armStart,
+            activeCount
+        };
+    }
+
+    _sliceHumanoidActiveJoints(q, armStart, activeCount) {
+        if (!Array.isArray(q) || activeCount <= 0) return [];
+        return q.slice(armStart, armStart + activeCount);
+    }
+
+    _writeHumanoidActiveJoints(qBase, qActive, armStart, activeCount) {
+        const qOut = Array.isArray(qBase) ? [...qBase] : [];
+        for (let i = 0; i < activeCount && i < qActive.length; i++) {
+            qOut[armStart + i] = qActive[i];
+        }
+        return qOut;
+    }
+
+    _clampHumanoidActiveJoints(q, armStart, hardLimits) {
+        if (!Array.isArray(q) || !Array.isArray(hardLimits)) return q;
+        for (let i = 0; i < hardLimits.length; i++) {
+            const lim = hardLimits[i];
+            if (!lim) continue;
+            q[armStart + i] = Math.max(lim.lower, Math.min(lim.upper, q[armStart + i]));
+        }
+        return q;
+    }
+
+    _computeHumanoidActiveJointDistance(qA, qB, armStart, activeCount) {
+        if (!Array.isArray(qA) || !Array.isArray(qB) || activeCount <= 0) return Number.POSITIVE_INFINITY;
+        let norm2 = 0;
+        for (let i = 0; i < activeCount; i++) {
+            const diff = (qA[armStart + i] || 0) - (qB[armStart + i] || 0);
+            norm2 += diff * diff;
+        }
+        return Math.sqrt(norm2);
+    }
+
+    _getHumanoidBodyVerticalState(q, armStart, activeCount) {
+        const DQ = window.DQModule?.DQWrapper;
+        const Kinematics = window.DQModule?.Kinematics;
+        if (
+            !DQ ||
+            !Kinematics?.lineJacobian ||
+            !this.humanoidModel ||
+            typeof this.humanoidModel.fkmEffector !== 'function' ||
+            typeof this.humanoidModel.poseJacobianEffector !== 'function'
+        ) {
+            return null;
+        }
+
+        const bodyZLineDirection = [0, 0, 0, 1, 0, 0, 0, 0];
+        const waistPose = this.humanoidModel.fkmEffector(q, 0);
+        const JWaistFull = this.humanoidModel.poseJacobianEffector(q, 0);
+        if (!waistPose || !JWaistFull) return null;
+
+        const JLineFull = Kinematics.lineJacobian(JWaistFull, waistPose, bodyZLineDirection);
+        const waistPoseDQ = DQ.createFromArray(waistPose);
+        const rotMat = DQ.getRotationMatrix(waistPoseDQ);
+        return buildBodyVerticalLineTask({
+            rotMat,
+            lineJacobianFull: JLineFull,
+            armStart,
+            activeCount
+        });
+    }
+
+    _projectHumanoidTaskEquivalentBranch({
+        seedQ,
+        qReference,
+        includeWaist = false,
+        keepBodyZVertical = false,
+        hardLimits = null
+    }) {
+        const cfg = this.vfiConfig || {};
+        const { armStart, activeCount } = this._getHumanoidActiveSliceInfo(includeWaist);
+        if (activeCount <= 0 || !Array.isArray(seedQ) || !Array.isArray(qReference)) return null;
+
+        const referencePose1 = this._getHumanoidPose1(qReference);
+        const referencePose2 = this._getHumanoidPose2(qReference);
+        if (!referencePose1 || !referencePose2) return null;
+
+        const projectionTol = Number.isFinite(cfg.taskEquivalentBranchProjectionTol)
+            ? cfg.taskEquivalentBranchProjectionTol
+            : 2e-4;
+        const projectionMaxIter = Number.isFinite(cfg.taskEquivalentBranchProjectionMaxIter)
+            ? Math.max(1, Math.floor(cfg.taskEquivalentBranchProjectionMaxIter))
+            : 14;
+        const projectionMaxStep = Number.isFinite(cfg.taskEquivalentBranchProjectionMaxStep)
+            ? cfg.taskEquivalentBranchProjectionMaxStep
+            : 0.01;
+        const projectionDamping = Number.isFinite(cfg.taskEquivalentBranchProjectionDamping)
+            ? cfg.taskEquivalentBranchProjectionDamping
+            : 2e-3;
+        const bodyReference = keepBodyZVertical
+            ? this._getHumanoidBodyVerticalState(qReference, armStart, activeCount)
+            : null;
+
+        let qProjected = [...seedQ];
+        let initialErrorNorm = Number.NaN;
+        let finalErrorNorm = Number.NaN;
+        let executedIterations = 0;
+
+        for (let iter = 0; iter < projectionMaxIter; iter++) {
+            const pose1Now = this._getHumanoidPose1(qProjected);
+            const pose2Now = this._getHumanoidPose2(qProjected);
+            if (!pose1Now || !pose2Now) return null;
+
+            const Jpose1Full = this._getHumanoidSingleArmPoseJacobian?.(qProjected, 1) || this._getHumanoidPose1Jacobian(qProjected);
+            const Jpose2Full = this._getHumanoidSingleArmPoseJacobian?.(qProjected, 2) || this._getHumanoidPose2Jacobian(qProjected);
+            if (!Jpose1Full || !Jpose2Full) return null;
+
+            const eCmd = [
+                ...this._signedPoseError(referencePose1, pose1Now),
+                ...this._signedPoseError(referencePose2, pose2Now)
+            ];
+            const Jcmd = [
+                ...Jpose1Full.map((row) => row.slice(armStart, armStart + activeCount)),
+                ...Jpose2Full.map((row) => row.slice(armStart, armStart + activeCount))
+            ];
+
+            if (bodyReference) {
+                const bodyNow = this._getHumanoidBodyVerticalState(qProjected, armStart, activeCount);
+                if (!bodyNow) return null;
+                eCmd.push((bodyReference.mismatchSquared || 0) - (bodyNow.mismatchSquared || 0));
+                Jcmd.push(bodyNow.Jrows[0]);
+            }
+
+            finalErrorNorm = Math.sqrt(eCmd.reduce((sum, value) => sum + value * value, 0));
+            if (!Number.isFinite(initialErrorNorm)) initialErrorNorm = finalErrorNorm;
+            if (finalErrorNorm <= projectionTol) break;
+
+            const qActive = this._sliceHumanoidActiveJoints(qProjected, armStart, activeCount);
+            const stepResult = this._solveVFICommandStep({
+                Jcmd,
+                eCmd,
+                Jinvariant: [],
+                eInvariant: [],
+                qActive,
+                activeLimits: null,
+                maxStep: projectionMaxStep,
+                damping: projectionDamping
+            });
+            if (!stepResult || !Array.isArray(stepResult.dq)) return null;
+            if (this._getHumanoidVFIStepBackend() === 'qp' && stepResult.stats?.qpConverged === false) {
+                return null;
+            }
+
+            const qNext = [...qProjected];
+            for (let i = 0; i < activeCount; i++) {
+                qNext[armStart + i] += stepResult.dq[i] || 0;
+            }
+            this._clampHumanoidActiveJoints(qNext, armStart, hardLimits);
+            qProjected = qNext;
+            executedIterations = iter + 1;
+
+            if (Number.isFinite(stepResult.stats?.stepNorm) && stepResult.stats.stepNorm <= 1e-10) {
+                break;
+            }
+        }
+
+        if (!Number.isFinite(finalErrorNorm)) return null;
+        if (finalErrorNorm > projectionTol) return null;
+
+        return {
+            qProjected,
+            iterations: executedIterations,
+            initialErrorNorm,
+            errorNorm: finalErrorNorm,
+            projected: executedIterations > 0
+        };
+    }
+
+    _selectHumanoidTaskEquivalentBranch({
+        qCurrent,
+        memoryKey = null,
+        includeWaist = false,
+        keepBodyZVertical = false,
+        hardLimits = null,
+        enableJointLimitAvoidance = true,
+        buildStepProblem
+    }) {
+        const cfg = this.vfiConfig || {};
+        const { armStart, activeCount } = this._getHumanoidActiveSliceInfo(includeWaist);
+        if (activeCount <= 0 || typeof buildStepProblem !== 'function') return null;
+
+        const qActiveCurrent = this._sliceHumanoidActiveJoints(qCurrent, armStart, activeCount);
+        const branchScales = Array.isArray(cfg.taskEquivalentBranchScales)
+            ? cfg.taskEquivalentBranchScales
+            : [0, 0.5, 1.0, 1.5];
+        const branchingEnabled = (
+            this._isHumanoidTaskEquivalentBranchingEnabled() &&
+            this._getHumanoidVFIStepBackend() === 'qp' &&
+            enableJointLimitAvoidance &&
+            Array.isArray(hardLimits) &&
+            hardLimits.length >= activeCount
+        );
+
+        const branchDefs = branchingEnabled
+            ? buildTaskEquivalentBranches(qActiveCurrent, hardLimits, {
+                scales: branchScales,
+                stepSize: cfg.taskEquivalentBranchSeedStep,
+                activationRatio: cfg.taskEquivalentBranchActivationRatio,
+                exponent: cfg.taskEquivalentBranchPressureExponent,
+                minPressureNorm: cfg.taskEquivalentBranchMinPressureNorm
+            })
+            : [{
+                id: 'real',
+                label: 'real',
+                scale: 0,
+                qSeed: [...qActiveCurrent],
+                minMarginRatio: computeMinJointMarginRatio(qActiveCurrent, hardLimits)
+            }];
+
+        const candidates = [];
+        let projectedCount = 0;
+        for (const branchDef of branchDefs) {
+            let qSeedFull = [...qCurrent];
+            if (branchDef.id !== 'real') {
+                qSeedFull = this._writeHumanoidActiveJoints(qCurrent, branchDef.qSeed, armStart, activeCount);
+                this._clampHumanoidActiveJoints(qSeedFull, armStart, hardLimits);
+            }
+
+            let projectionInfo = {
+                qProjected: qSeedFull,
+                iterations: 0,
+                errorNorm: 0,
+                projected: false
+            };
+            if (branchingEnabled && branchDef.id !== 'real') {
+                projectionInfo = this._projectHumanoidTaskEquivalentBranch({
+                    seedQ: qSeedFull,
+                    qReference: qCurrent,
+                    includeWaist,
+                    keepBodyZVertical,
+                    hardLimits
+                });
+                if (!projectionInfo) continue;
+                if (projectionInfo.projected) projectedCount += 1;
+            }
+
+            const branchProblem = buildStepProblem(projectionInfo.qProjected);
+            if (!branchProblem?.stepResult || !Array.isArray(branchProblem.stepResult.dq)) continue;
+
+            const qAfter = [...projectionInfo.qProjected];
+            for (let i = 0; i < activeCount; i++) {
+                qAfter[armStart + i] += branchProblem.stepResult.dq[i] || 0;
+            }
+            this._clampHumanoidActiveJoints(qAfter, armStart, hardLimits);
+
+            candidates.push({
+                branchId: branchDef.id,
+                branchLabel: branchDef.label,
+                scale: branchDef.scale,
+                qProjected: projectionInfo.qProjected,
+                qAfter,
+                projectionIterations: projectionInfo.iterations,
+                projectionErrorNorm: projectionInfo.errorNorm,
+                stepResult: branchProblem.stepResult,
+                stats: branchProblem.stepResult.stats || null,
+                commandNorm: branchProblem.commandNorm,
+                invariantNorm: branchProblem.invariantNorm,
+                qpConverged: branchProblem.stepResult.stats?.qpConverged !== false,
+                commandResidualNorm: branchProblem.stepResult.stats?.cmdResidualNorm,
+                maxViolationAfter: branchProblem.stepResult.stats?.maxViolationAfter,
+                minJointMarginRatio: computeMinJointMarginRatio(
+                    this._sliceHumanoidActiveJoints(qAfter, armStart, activeCount),
+                    hardLimits
+                ),
+                seedDistance: this._computeHumanoidActiveJointDistance(projectionInfo.qProjected, qCurrent, armStart, activeCount),
+                continuityCost: this._computeHumanoidActiveJointDistance(qAfter, qCurrent, armStart, activeCount)
+            });
+        }
+
+        if (candidates.length === 0) return null;
+
+        const rankingOptions = {
+            seedDistanceWeight: cfg.taskEquivalentBranchSeedDistanceWeight,
+            continuityWeight: cfg.taskEquivalentBranchContinuityWeight,
+            marginWeight: cfg.taskEquivalentBranchMarginWeight
+        };
+        let selected = candidates[0];
+        let branchState = null;
+        let branchSwitched = false;
+        let branchKeptByHysteresis = false;
+        let rankedCandidates = candidates;
+        if (branchingEnabled && candidates.length > 1) {
+            const hysteresisResult = applyTaskEquivalentBranchHysteresis(
+                candidates,
+                this._getHumanoidTaskEquivalentBranchMemory(memoryKey),
+                {
+                    ...rankingOptions,
+                    hysteresisAbsMargin: cfg.taskEquivalentBranchHysteresisAbsMargin,
+                    hysteresisRelMargin: cfg.taskEquivalentBranchHysteresisRelMargin,
+                    minHoldSteps: cfg.taskEquivalentBranchMinHoldSteps
+                }
+            );
+            rankedCandidates = hysteresisResult.rankedCandidates;
+            selected = hysteresisResult.selected;
+            branchState = hysteresisResult.state;
+            branchSwitched = hysteresisResult.switched;
+            branchKeptByHysteresis = hysteresisResult.keptByHysteresis;
+            this._setHumanoidTaskEquivalentBranchMemory(memoryKey, branchState);
+        } else {
+            this._setHumanoidTaskEquivalentBranchMemory(memoryKey, null);
+        }
+
+        return {
+            branchingEnabled: branchingEnabled && branchDefs.length > 1,
+            branchCount: branchDefs.length,
+            candidateCount: candidates.length,
+            projectedCount,
+            branchState,
+            branchSwitched,
+            branchKeptByHysteresis,
+            selected,
+            candidates: rankedCandidates
+        };
+    }
+
+    _matVecProduct(M, v) {
+        if (!Array.isArray(M) || M.length === 0 || !Array.isArray(v)) return [];
+        const out = new Array(M.length).fill(0);
+        for (let i = 0; i < M.length; i++) {
+            let sum = 0;
+            const row = M[i] || [];
+            const n = Math.min(row.length, v.length);
+            for (let j = 0; j < n; j++) sum += (row[j] || 0) * (v[j] || 0);
+            out[i] = sum;
+        }
+        return out;
+    }
+
+    _formatDiagNumber(value, digits = 3) {
+        if (!Number.isFinite(value)) return 'n/a';
+        const abs = Math.abs(value);
+        if (abs === 0) return '0';
+        if (abs >= 1000 || abs < 1e-3) return value.toExponential(2);
+        return value.toFixed(digits);
+    }
+
+    _notifyHumanoidJogUnreachable(message = '无法到达该位置') {
+        if (typeof window === 'undefined' || typeof window.alert !== 'function') return;
+        const now = Date.now();
+        const cooldownMs = 1500;
+        const last = Number.isFinite(this._lastHumanoidJogUnreachableAlertAt)
+            ? this._lastHumanoidJogUnreachableAlertAt
+            : 0;
+        if (now - last < cooldownMs) return;
+        this._lastHumanoidJogUnreachableAlertAt = now;
+        window.alert(message);
+    }
+
+    _shouldFailForQPMismatch({ stopReason, finalCmdNorm, initialCmdNorm }, cfg = {}) {
+        if (!Number.isFinite(finalCmdNorm)) return false;
+        if (stopReason === 'qp_not_converged') return false;
+        if (stopReason === 'converged' || stopReason === 'practical_converged' || stopReason === 'single_step') {
+            return false;
+        }
+        const mismatchTol = Number.isFinite(cfg.qpMismatchTol) ? cfg.qpMismatchTol : 1e-3;
+        const requiredReduction = Number.isFinite(cfg.qpMismatchRequiredReduction)
+            ? Math.min(0.99, Math.max(0, cfg.qpMismatchRequiredReduction))
+            : 0.8;
+        const reductionSatisfied = (
+            Number.isFinite(initialCmdNorm) &&
+            initialCmdNorm > 0 &&
+            finalCmdNorm <= initialCmdNorm * (1 - requiredReduction)
+        );
+        return finalCmdNorm > mismatchTol && !reductionSatisfied;
+    }
+
+    _publishHumanoidJogDiagnostics(payload = {}) {
+        if (typeof document === 'undefined') return;
+        const panel = document.getElementById('humanoid-vfi-diagnostics-panel');
+        const textEl = document.getElementById('humanoid-vfi-diagnostics-text');
+        const tsEl = document.getElementById('humanoid-vfi-diagnostics-timestamp');
+        if (!textEl || !tsEl) return;
+
+        const now = new Date();
+        const ms = String(now.getMilliseconds()).padStart(3, '0');
+        tsEl.textContent = `${now.toLocaleTimeString('zh-CN', { hour12: false })}.${ms}`;
+
+        const solver = payload.solverMode || (this._isHumanoidVFISolverEnabled() ? 'vfi' : 'priority');
+        const modeTag = payload.modeTag || 'idle';
+        const active = Boolean(payload.active ?? (solver === 'vfi'));
+        if (panel) panel.classList.toggle('inactive', !active);
+
+        const lines = [
+            `solver: ${String(solver).toUpperCase()}    mode: ${modeTag}`,
+            `status: ${payload.message || (active ? 'running' : 'inactive')}`
+        ];
+        const stepBackend = payload.stepBackend || (solver === 'vfi' ? this._getHumanoidVFIStepBackend() : null);
+        if (stepBackend) {
+            lines.push(`vfi_step_backend: ${String(stepBackend).toUpperCase()}`);
+        }
+        if (typeof payload.taskEquivalentBranching === 'boolean') {
+            lines.push(`task_eq_branching: ${payload.taskEquivalentBranching ? 'on' : 'off'}`);
+        }
+
+        if (Number.isFinite(payload.iterations)) {
+            lines.push(`iters: ${payload.iterations}    active_joints: ${payload.activeJoints ?? 'n/a'}`);
+        }
+        if (Number.isFinite(payload.commandRows) || Number.isFinite(payload.invariantRows) || Number.isFinite(payload.constraintRows)) {
+            lines.push(
+                `rows(cmd/inv/all): ${payload.commandRows ?? 'n/a'} / ${payload.invariantRows ?? 'n/a'} / ${payload.constraintRows ?? 'n/a'}`
+            );
+        }
+        if (
+            Number.isFinite(payload.invariantConstraintRows) ||
+            Number.isFinite(payload.componentRows) ||
+            Number.isFinite(payload.jointLimitRows)
+        ) {
+            lines.push(
+                `rows(invBand/box/joint): ${payload.invariantConstraintRows ?? 'n/a'} / ${payload.componentRows ?? 'n/a'} / ${payload.jointLimitRows ?? 'n/a'}`
+            );
+        }
+        if (Number.isFinite(payload.equalityRows)) {
+            lines.push(`rows(eq): ${payload.equalityRows}`);
+        }
+        if (Number.isFinite(payload.commandError) || Number.isFinite(payload.invariantError) || Number.isFinite(payload.stepNorm)) {
+            lines.push(
+                `err(cmd/inv): ${this._formatDiagNumber(payload.commandError)} / ${this._formatDiagNumber(payload.invariantError)}    step: ${this._formatDiagNumber(payload.stepNorm)}`
+            );
+        }
+        if (
+            Number.isFinite(payload.cmdTargetNorm) ||
+            Number.isFinite(payload.cmdAchievedNorm) ||
+            Number.isFinite(payload.cmdResidualNorm) ||
+            Number.isFinite(payload.cmdAlignment)
+        ) {
+            lines.push(
+                `cmd_fit(target/achieved/res/cos): ${this._formatDiagNumber(payload.cmdTargetNorm)} / ${this._formatDiagNumber(payload.cmdAchievedNorm)} / ${this._formatDiagNumber(payload.cmdResidualNorm)} / ${this._formatDiagNumber(payload.cmdAlignment)}`
+            );
+        }
+        if (Number.isFinite(payload.cmdTargetFirst) || Number.isFinite(payload.cmdAchievedFirst)) {
+            lines.push(
+                `cmd_first(target/achieved): ${this._formatDiagNumber(payload.cmdTargetFirst)} / ${this._formatDiagNumber(payload.cmdAchievedFirst)}`
+            );
+        }
+        if (Number.isFinite(payload.maxViolationBefore) || Number.isFinite(payload.maxViolationAfter)) {
+            lines.push(
+                `max_violation(before/after): ${this._formatDiagNumber(payload.maxViolationBefore)} / ${this._formatDiagNumber(payload.maxViolationAfter)}`
+            );
+        }
+        if (Number.isFinite(payload.qpIterations) || typeof payload.qpConverged === 'boolean' || Number.isFinite(payload.qpObjective)) {
+            lines.push(
+                `qp(iters/converged/obj): ${payload.qpIterations ?? 'n/a'} / ${typeof payload.qpConverged === 'boolean' ? (payload.qpConverged ? 'yes' : 'no') : 'n/a'} / ${this._formatDiagNumber(payload.qpObjective)}`
+            );
+        }
+        if (typeof payload.qpMessage === 'string' && payload.qpMessage.trim().length > 0) {
+            lines.push(`qp_message: ${payload.qpMessage.trim()}`);
+        }
+        if (
+            Number.isFinite(payload.branchCount) ||
+            Number.isFinite(payload.branchCandidateCount) ||
+            Number.isFinite(payload.branchProjectedCount)
+        ) {
+            lines.push(
+                `branches(total/candidate/projected): ${payload.branchCount ?? 'n/a'} / ${payload.branchCandidateCount ?? 'n/a'} / ${payload.branchProjectedCount ?? 'n/a'}`
+            );
+        }
+        if (typeof payload.branchSelectedLabel === 'string' || Number.isFinite(payload.branchSelectedMargin)) {
+            lines.push(
+                `branch_selected: ${payload.branchSelectedLabel ?? 'n/a'}    margin=${this._formatDiagNumber(payload.branchSelectedMargin)}`
+            );
+        }
+        if (
+            typeof payload.branchSwitched === 'boolean' ||
+            typeof payload.branchKeptByHysteresis === 'boolean' ||
+            Number.isFinite(payload.branchHoldStepsRemaining)
+        ) {
+            lines.push(
+                `branch_policy: switched=${payload.branchSwitched ? 'yes' : 'no'}  held=${payload.branchKeptByHysteresis ? 'yes' : 'no'}  hold_left=${payload.branchHoldStepsRemaining ?? 'n/a'}`
+            );
+        }
+        if (Array.isArray(payload.branchCandidateSummaryLines) && payload.branchCandidateSummaryLines.length > 0) {
+            lines.push('branch_candidates:');
+            for (const line of payload.branchCandidateSummaryLines) {
+                lines.push(`  ${line}`);
+            }
+        }
+        if (typeof payload.includeWaist === 'boolean' || typeof payload.keepBodyZVertical === 'boolean' || typeof payload.jointLimitAvoidance === 'boolean') {
+            lines.push(
+                `flags: waist=${payload.includeWaist ? 'on' : 'off'}  body_z=${payload.keepBodyZVertical ? 'on' : 'off'}  limit=${payload.jointLimitAvoidance ? 'on' : 'off'}`
+            );
+        }
+        this.lastHumanoidJogDiagnostics = {
+            ...payload,
+            renderedLines: [...lines]
+        };
+        textEl.textContent = lines.join('\n');
+    }
+
+    _setIKFailureStatus(status = {}) {
+        this.lastIKSolveStatus = {
+            converged: false,
+            finalResidual: Number.POSITIVE_INFINITY,
+            ...status
+        };
+        return false;
+    }
+
+    _solveVFICommandStep({
+        Jcmd,
+        eCmd,
+        Jinvariant,
+        eInvariant,
+        qActive,
+        activeLimits = null,
+        maxStep = 0.003,
+        damping = 1e-3,
+        forceInvariantEquality = null,
+        invariantKappaOverride = null,
+        invariantBandBaseOverride = null,
+        invariantBandGainOverride = null,
+        invariantSoftWeightOverride = null
+    }) {
+        if (!Array.isArray(Jcmd) || Jcmd.length === 0 || !Array.isArray(Jcmd[0])) return null;
+        const n = Jcmd[0].length;
+        if (n <= 0) return null;
+
+        const cfg = this.vfiConfig || {};
+        const stepBackend = this._getHumanoidVFIStepBackend();
+        const kappaCmd = Number.isFinite(cfg.kappaCommand) ? cfg.kappaCommand : 0.6;
+        const kappaInv = Number.isFinite(invariantKappaOverride)
+            ? Math.max(0, invariantKappaOverride)
+            : (Number.isFinite(cfg.kappaInvariant) ? cfg.kappaInvariant : 0.9);
+        const bandBase = Number.isFinite(invariantBandBaseOverride)
+            ? Math.max(0, invariantBandBaseOverride)
+            : (Number.isFinite(cfg.invariantBandBase) ? cfg.invariantBandBase : 1e-4);
+        const bandGain = Number.isFinite(invariantBandGainOverride)
+            ? Math.max(0, invariantBandGainOverride)
+            : (Number.isFinite(cfg.invariantBandGain) ? cfg.invariantBandGain : 0.15);
+        const useInvariantEqualityInQP = stepBackend === 'qp'
+            ? (
+                typeof forceInvariantEquality === 'boolean'
+                    ? forceInvariantEquality
+                    : (typeof cfg.qpUseInvariantEquality === 'boolean' ? cfg.qpUseInvariantEquality : true)
+            )
+            : false;
+        const eqTol = Number.isFinite(cfg.qpEqualityTolerance) ? cfg.qpEqualityTolerance : 1e-7;
+        const eta = Number.isFinite(cfg.jointLimitEta) ? cfg.jointLimitEta : 1.2;
+        const passes = Number.isFinite(cfg.projectionPasses) ? cfg.projectionPasses : 8;
+        const cmdTarget = Array.isArray(eCmd) ? eCmd.map((v) => kappaCmd * (v || 0)) : [];
+        const invTarget = Array.isArray(eInvariant) ? eInvariant.map((v) => kappaInv * (v || 0)) : [];
+        const invariantSoftWeight = Number.isFinite(invariantSoftWeightOverride)
+            ? Math.max(0, invariantSoftWeightOverride)
+            : 0;
+
+        const Jpinv = this._dampedPseudoInverse(Jcmd, damping);
+        let dqSeed = new Array(n).fill(0);
+        if (Jpinv && cmdTarget.length > 0) {
+            dqSeed = this._matVecProduct(Jpinv, cmdTarget);
+        }
+
+        const Wineq = [];
+        const bineq = [];
+        const Weq = [];
+        const beq = [];
+        const invariantRows = Array.isArray(Jinvariant) ? Jinvariant.length : 0;
+        if (Array.isArray(Jinvariant) && Jinvariant.length > 0 && Array.isArray(eInvariant) && eInvariant.length > 0) {
+            if (useInvariantEqualityInQP) {
+                for (let i = 0; i < Jinvariant.length; i++) {
+                    const row = Array.isArray(Jinvariant[i]) ? Jinvariant[i] : null;
+                    if (!Array.isArray(row) || row.length === 0) continue;
+                    Weq.push([...row]);
+                    beq.push(invTarget[i] || 0);
+                }
+            } else {
+                // VFI-style inequality tube around invariants (aligned with velocity-damper formulation).
+                appendVFIErrorTubeConstraints(Wineq, bineq, Jinvariant, eInvariant, {
+                    eta: kappaInv,
+                    marginBase: bandBase,
+                    marginGain: bandGain,
+                    zeta: 0
+                });
+            }
+        }
+
+        const rowsAfterInvariant = Wineq.length;
+        appendComponentBounds(Wineq, bineq, n, -maxStep, maxStep);
+        const componentRows = Wineq.length - rowsAfterInvariant;
+        const rowsAfterBox = Wineq.length;
+        if (Array.isArray(activeLimits) && Array.isArray(qActive) && qActive.length === n) {
+            appendJointLimitStepConstraints(Wineq, bineq, qActive, activeLimits, { eta, maxStep });
+        }
+        const jointLimitRows = Wineq.length - rowsAfterBox;
+
+        const Abase = Wineq.map((row) => [...row]);
+        const bbase = [...bineq];
+        let Aactive = Abase;
+        let bactive = bbase;
+
+        const maxViolation = (Aset, bset, x) => {
+            let maxV = 0;
+            for (let i = 0; i < Aset.length; i++) {
+                const row = Aset[i];
+                if (!Array.isArray(row)) continue;
+                let lhs = 0;
+                const m = Math.min(row.length, x.length);
+                for (let j = 0; j < m; j++) lhs += (row[j] || 0) * (x[j] || 0);
+                const vio = lhs - (bset[i] || 0);
+                if (vio > maxV) maxV = vio;
+            }
+            return maxV;
+        };
+
+        let dq = dqSeed;
+        let qpIterations = null;
+        let qpConverged = null;
+        let qpObjective = null;
+        let qpMessage = null;
+        let equalityRowsApplied = 0;
+
+        const addLeastSquaresTerm = (H, f, J, y, weight = 1) => {
+            if (!Array.isArray(J) || J.length === 0) return;
+            const w = Number.isFinite(weight) ? Math.max(0, weight) : 1;
+            if (w <= 0) return;
+            for (let k = 0; k < J.length; k++) {
+                const row = Array.isArray(J[k]) ? J[k] : [];
+                const yk = y?.[k] || 0;
+                for (let i = 0; i < n; i++) {
+                    const Ji = row[i] || 0;
+                    if (!Ji) continue;
+                    f[i] -= w * Ji * yk;
+                    for (let j = 0; j < n; j++) {
+                        H[i][j] += w * Ji * (row[j] || 0);
+                    }
+                }
+            }
+        };
+
+        if (stepBackend === 'qp') {
+            const lambda = Number.isFinite(cfg.qpRegularization) ? cfg.qpRegularization : 1e-6;
+
+            const H = new Array(n).fill(0).map(() => new Array(n).fill(0));
+            const f = new Array(n).fill(0);
+            addLeastSquaresTerm(H, f, Jcmd, cmdTarget, 1.0);
+            for (let i = 0; i < n; i++) H[i][i] += lambda;
+            if (
+                !useInvariantEqualityInQP &&
+                invariantSoftWeight > 0 &&
+                Array.isArray(Jinvariant) &&
+                Jinvariant.length > 0 &&
+                invTarget.length > 0
+            ) {
+                addLeastSquaresTerm(H, f, Jinvariant, invTarget, invariantSoftWeight);
+            }
+
+            const solveOnce = (Aset, bset, Hset, fset) => {
+                Aactive = Aset;
+                bactive = bset;
+                return solveQPNumericActiveSet(Hset, fset, Aset, bset, dqSeed, {});
+            };
+
+            let qpResult = null;
+            let relaxedEqTolUsed = null;
+            if (useInvariantEqualityInQP && Weq.length > 0) {
+                const eqTolCandidates = Array.from(new Set([
+                    eqTol,
+                    Math.max(eqTol, 1e-6),
+                    Math.max(eqTol, 1e-5),
+                    Math.max(eqTol, 1e-4)
+                ]));
+                for (let idx = 0; idx < eqTolCandidates.length; idx++) {
+                    const tol = eqTolCandidates[idx];
+                    const Atrial = Abase.map((row) => [...row]);
+                    const btrial = [...bbase];
+                    appendEqualityConstraints(Atrial, btrial, Weq, beq, { tolerance: tol });
+                    qpResult = solveOnce(Atrial, btrial, H, f);
+                    equalityRowsApplied = Weq.length;
+                    relaxedEqTolUsed = tol;
+                    if (qpResult?.converged) break;
+                    const msg = String(qpResult?.solverMessage || '').toLowerCase();
+                    const infeasible = msg.includes('inconsistent') || msg.includes('no solution');
+                    if (!infeasible) break;
+                }
+
+                const enableSoftInvariantFallback = cfg.qpSoftInvariantFallback !== false;
+                if (!(qpResult?.converged) && enableSoftInvariantFallback) {
+                    const invSoftWeight = Number.isFinite(cfg.qpInvariantSoftWeight)
+                        ? Math.max(0, cfg.qpInvariantSoftWeight)
+                        : 4.0;
+                    const Hsoft = H.map((row) => [...row]);
+                    const fsoft = [...f];
+                    addLeastSquaresTerm(Hsoft, fsoft, Weq, beq, invSoftWeight);
+                    const softResult = solveOnce(Abase, bbase, Hsoft, fsoft);
+                    if (softResult?.converged) {
+                        qpResult = softResult;
+                        equalityRowsApplied = 0;
+                        const extra = `fallback=soft_invariant(w=${invSoftWeight.toExponential(1)})`;
+                        qpMessage = qpMessage ? `${qpMessage}; ${extra}` : extra;
+                    }
+                }
+
+                if (Number.isFinite(relaxedEqTolUsed) && relaxedEqTolUsed > eqTol + 1e-16) {
+                    const extra = `eq_tol_relaxed=${relaxedEqTolUsed.toExponential(1)}`;
+                    qpMessage = qpMessage ? `${qpMessage}; ${extra}` : extra;
+                }
+            } else {
+                qpResult = solveOnce(Abase, bbase, H, f);
+            }
+
+            if (!qpResult) {
+                qpResult = solveOnce(Abase, bbase, H, f);
+            }
+
+            dq = Array.isArray(qpResult?.x) ? qpResult.x : dqSeed;
+            qpIterations = qpResult?.iterations ?? null;
+            qpConverged = Boolean(qpResult?.converged);
+            qpObjective = Number.isFinite(qpResult?.objective) ? qpResult.objective : null;
+            const baseMessage = (typeof qpResult?.solverMessage === 'string' && qpResult.solverMessage.trim().length > 0)
+                ? qpResult.solverMessage.trim()
+                : null;
+            if (baseMessage) {
+                qpMessage = qpMessage ? `${baseMessage}; ${qpMessage}` : baseMessage;
+            }
+        } else {
+            dq = Abase.length > 0
+                ? projectOntoHalfspaces(dqSeed, Abase, bbase, { passes })
+                : dqSeed;
+            Aactive = Abase;
+            bactive = bbase;
+            equalityRowsApplied = 0;
+        }
+
+        const maxViolationBefore = Aactive.length > 0 ? maxViolation(Aactive, bactive, dqSeed) : 0;
+        for (let i = 0; i < dq.length; i++) {
+            dq[i] = Math.max(-maxStep, Math.min(maxStep, dq[i] || 0));
+        }
+        const cmdAchieved = this._matVecProduct(Jcmd, dq);
+        const cmdTargetEval = Array.isArray(cmdTarget) ? cmdTarget : [];
+        let cmdTargetNorm2 = 0;
+        let cmdAchievedNorm2 = 0;
+        let cmdResidualNorm2 = 0;
+        let cmdDot = 0;
+        const cmdN = Math.min(cmdTargetEval.length, cmdAchieved.length);
+        for (let i = 0; i < cmdN; i++) {
+            const t = cmdTargetEval[i] || 0;
+            const a = cmdAchieved[i] || 0;
+            const r = a - t;
+            cmdTargetNorm2 += t * t;
+            cmdAchievedNorm2 += a * a;
+            cmdResidualNorm2 += r * r;
+            cmdDot += t * a;
+        }
+        const cmdTargetNorm = Math.sqrt(cmdTargetNorm2);
+        const cmdAchievedNorm = Math.sqrt(cmdAchievedNorm2);
+        const cmdResidualNorm = Math.sqrt(cmdResidualNorm2);
+        const cmdAlignment = (cmdTargetNorm > 0 && cmdAchievedNorm > 0)
+            ? (cmdDot / (cmdTargetNorm * cmdAchievedNorm))
+            : Number.NaN;
+        let stepNorm2 = 0;
+        for (let i = 0; i < dq.length; i++) stepNorm2 += (dq[i] || 0) * (dq[i] || 0);
+        const maxViolationAfter = Aactive.length > 0 ? maxViolation(Aactive, bactive, dq) : 0;
+
+        return {
+            dq,
+            stats: {
+                stepBackend,
+                commandRows: Jcmd.length,
+                invariantRows,
+                invariantConstraintRows: rowsAfterInvariant,
+                equalityRows: equalityRowsApplied,
+                componentRows,
+                jointLimitRows,
+                constraintRows: Aactive.length,
+                maxViolationBefore,
+                maxViolationAfter,
+                stepNorm: Math.sqrt(stepNorm2),
+                cmdTargetNorm,
+                cmdAchievedNorm,
+                cmdResidualNorm,
+                cmdAlignment,
+                cmdTargetFirst: cmdTargetEval.length > 0 ? cmdTargetEval[0] : Number.NaN,
+                cmdAchievedFirst: cmdAchieved.length > 0 ? cmdAchieved[0] : Number.NaN,
+                qpIterations,
+                qpConverged,
+                qpObjective,
+                qpMessage
+            }
+        };
     }
 
     /**
@@ -3464,11 +4456,14 @@ export class RobotVisualizer {
                     out[i] = s;
                 }
             };
-            const { x: qSol, converged } = this.minimizeLBFGS(f, grad, [...currentJointAngles], {
-                maxIter: 80,
-                tol: 1e-6,
+            const poseTol = 1e-4;
+            const result = this.minimizeLBFGS(f, grad, [...currentJointAngles], {
+                maxIter: 120,
+                gradTol: 1e-8,
+                costTol: 0.5 * poseTol * poseTol,
                 m: 10
             });
+            const { x: qSol, converged } = result;
             
             const robot1JointCount = window.jointAngles1.length;
             const robot2JointCount = window.jointAngles2.length;
@@ -3503,9 +4498,27 @@ export class RobotVisualizer {
             if (window.updateRobotPose) {
                 window.updateRobotPose();
             }
-            return true;
+            const finalAbsResidual = this._computeArrayResidualNorm(window.dualArmSystem.getAbsolutePose(q), dqAbsoluteTargetArray);
+            const finalRelResidual = this._computeArrayResidualNorm(window.dualArmSystem.getRelativePose(q), dqRelativeCurrentArray);
+            this.lastIKSolveStatus = {
+                solver: 'lbfgs',
+                mode: 'dual_absolute',
+                ...result,
+                finalResidual: Math.max(finalAbsResidual, finalRelResidual),
+                finalAbsoluteResidual: finalAbsResidual,
+                finalInvariantResidual: finalRelResidual
+            };
+            return converged || (finalAbsResidual <= poseTol && finalRelResidual <= poseTol);
         } catch (error) {
             console.error('更新双臂关节角度失败:', error);
+            this.lastIKSolveStatus = {
+                solver: 'lbfgs',
+                mode: 'dual_absolute',
+                converged: false,
+                reason: 'exception',
+                message: error.message || 'dual absolute IK exception',
+                finalResidual: Number.POSITIVE_INFINITY
+            };
             return false;
         }
     }
@@ -3768,11 +4781,14 @@ export class RobotVisualizer {
                     out[i] = s;
                 }
             };
-            const { x: qSol, converged } = this.minimizeLBFGS(f, grad, [...currentJointAngles], {
-                maxIter: 80,
-                tol: 1e-6,
+            const poseTol = 1e-4;
+            const result = this.minimizeLBFGS(f, grad, [...currentJointAngles], {
+                maxIter: 120,
+                gradTol: 1e-8,
+                costTol: 0.5 * poseTol * poseTol,
                 m: 10
             });
+            const { x: qSol, converged } = result;
             
             const robot1JointCount = window.jointAngles1.length;
             const robot2JointCount = window.jointAngles2.length;
@@ -3822,9 +4838,27 @@ export class RobotVisualizer {
             if (window.updateRobotPose) {
                 window.updateRobotPose();
             }
-            return true;
+            const finalAbsResidual = this._computeArrayResidualNorm(window.dualArmSystem.getAbsolutePose(q), dqAbsoluteCurrentArray);
+            const finalRelResidual = this._computeArrayResidualNorm(window.dualArmSystem.getRelativePose(q), dqRelativeTargetArray);
+            this.lastIKSolveStatus = {
+                solver: 'lbfgs',
+                mode: 'dual_relative',
+                ...result,
+                finalResidual: Math.max(finalAbsResidual, finalRelResidual),
+                finalAbsoluteResidual: finalAbsResidual,
+                finalInvariantResidual: finalRelResidual
+            };
+            return converged || (finalAbsResidual <= poseTol && finalRelResidual <= poseTol);
         } catch (error) {
             console.error('更新双臂关节角度失败:', error);
+            this.lastIKSolveStatus = {
+                solver: 'lbfgs',
+                mode: 'dual_relative',
+                converged: false,
+                reason: 'exception',
+                message: error.message || 'dual relative IK exception',
+                finalResidual: Number.POSITIVE_INFINITY
+            };
             return false;
         }
     }
@@ -4227,7 +5261,8 @@ export class RobotVisualizer {
         const tol = 1e-16;
         const damping = 0.8;
         
-        let q = [...currentQ];
+        const qInitial = [...currentQ];
+        let q = [...qInitial];
         
         for (let iter = 0; iter < maxIter; iter++) {
             // 获取当前位姿
@@ -4464,7 +5499,8 @@ export class RobotVisualizer {
         const damping = 0.01;   // 阻尼伪逆的阻尼系数
         const maxStep = 0.003;   // 单步最大关节变化（降低以减少冲击）
         
-        let q = [...currentQ];
+        const qInitial = [...currentQ];
+        let q = [...qInitial];
         
         for (let iter = 0; iter < maxIter; iter++) {
             // === 计算任务1误差：左臂末端位姿跟踪 ===
@@ -4637,6 +5673,284 @@ export class RobotVisualizer {
     // 公式：dq = J1^+ * e1 + P1 * J2^+ * e2 + P12 * grad_limit
     // 其中 P1 = I - J1^+ * J1 是任务1（相对位姿）的零空间投影
     //      P12 = I - J12^+ * J12 是任务1和2的增广雅可比的零空间投影
+
+    _updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstVFI(
+        dqAbsoluteTargetArray,
+        currentQ,
+        enableJointLimitAvoidance = true,
+        includeWaist = false,
+        keepBodyZVertical = false,
+        fixedRelativeTargetArray = null
+    ) {
+        if (!this.humanoidModel || !window.humanoidQ || !currentQ || currentQ.length === 0) {
+            return this._setIKFailureStatus({ solver: 'vfi', mode: 'humanoid_absolute', reason: 'invalid_state', message: '人形状态未初始化。' });
+        }
+        const DQ = window.DQModule?.DQWrapper;
+        const Kinematics = window.DQModule?.Kinematics;
+        if (!DQ) {
+            return this._setIKFailureStatus({ solver: 'vfi', mode: 'humanoid_absolute', reason: 'dq_unavailable', message: 'DQ 模块未加载。' });
+        }
+
+        const absCurrentArray = this._getHumanoidAbsolutePose(currentQ);
+        const relCurrentArray = this._getHumanoidRelativePose(currentQ);
+        if (!absCurrentArray || !relCurrentArray) {
+            return this._setIKFailureStatus({ solver: 'vfi', mode: 'humanoid_absolute', reason: 'fk_unavailable', message: '当前人形位姿计算失败。' });
+        }
+        const relConstraintArray = (
+            Array.isArray(fixedRelativeTargetArray) &&
+            fixedRelativeTargetArray.length === 8 &&
+            fixedRelativeTargetArray.every(v => Number.isFinite(Number(v)))
+        )
+            ? fixedRelativeTargetArray.map(v => Number(v))
+            : relCurrentArray.slice();
+
+        const jointLimits = this._getHumanoidJointLimits();
+        const waistCount = this.humanoidWaistLength;
+        const leftArmCount = this.humanoidLeftArmLength;
+        const rightArmCount = this.humanoidRightArmLength;
+        const armStart = includeWaist ? 0 : waistCount;
+        const activeCount = includeWaist ? (waistCount + leftArmCount + rightArmCount) : (leftArmCount + rightArmCount);
+        if (activeCount <= 0) {
+            return this._setIKFailureStatus({ solver: 'vfi', mode: 'humanoid_absolute', reason: 'no_active_joints', message: '当前模式下没有可用活动关节。' });
+        }
+
+        const hardLimits = jointLimits ? jointLimits.slice(armStart, armStart + activeCount) : null;
+        const softLimits = enableJointLimitAvoidance ? hardLimits : null;
+        const cfg = this.vfiConfig || {};
+        const stepBackend = this._getHumanoidVFIStepBackend();
+        const maxIterProjection = Number.isFinite(cfg.maxIter) ? cfg.maxIter : 240;
+        const maxIterQP = Number.isFinite(cfg.qpOuterMaxIter) ? cfg.qpOuterMaxIter : 8;
+        const maxIter = stepBackend === 'qp' ? maxIterQP : maxIterProjection;
+        const damping = Number.isFinite(cfg.damping) ? cfg.damping : 1e-3;
+        const maxStep = Number.isFinite(cfg.maxStep) ? cfg.maxStep : 0.003;
+        const hardCmdTol = Number.isFinite(cfg.hardCommandTolPose) ? cfg.hardCommandTolPose : 1e-6;
+        const hardInvariantTol = Number.isFinite(cfg.hardInvariantTol) ? cfg.hardInvariantTol : 5e-5;
+        const practicalCmdTol = Number.isFinite(cfg.practicalCommandTolPose) ? cfg.practicalCommandTolPose : 1e-4;
+        const practicalInvariantTol = Number.isFinite(cfg.practicalInvariantTol) ? cfg.practicalInvariantTol : 2.5e-4;
+        const practicalStepTol = Number.isFinite(cfg.practicalStepNormTol) ? cfg.practicalStepNormTol : 2e-5;
+        const practicalViolationTol = Number.isFinite(cfg.practicalViolationTol) ? cfg.practicalViolationTol : 1e-8;
+        const bodyKappa = Number.isFinite(cfg.bodyVerticalKappa) ? cfg.bodyVerticalKappa : 0.8;
+
+        const enableBodyVerticalTask = keepBodyZVertical && includeWaist && waistCount > 0
+            && Kinematics && typeof Kinematics.lineJacobian === 'function'
+            && typeof this.humanoidModel.fkmEffector === 'function'
+            && typeof this.humanoidModel.poseJacobianEffector === 'function';
+
+        const qInitial = [...currentQ];
+        let q = [...qInitial];
+        let executedIterations = 0;
+        let stopReason = 'max_iter';
+        let initialCmdNorm = Number.NaN;
+        let lastCmdNorm = Number.NaN;
+        let lastInvariantNorm = Number.NaN;
+        let lastStats = null;
+        let lastBranchSelection = null;
+        for (let iter = 0; iter < maxIter; iter++) {
+            const relNow = this._getHumanoidRelativePose(q);
+            const absNow = this._getHumanoidAbsolutePose(q);
+            if (!relNow || !absNow) {
+                stopReason = 'fk_fail';
+                break;
+            }
+
+            const eInvariantCurrent = this._signedPoseError(relConstraintArray, relNow);
+            const eCmd = this._signedPoseError(dqAbsoluteTargetArray, absNow);
+            const cmdNorm = Math.sqrt(eCmd.reduce((s, v) => s + v * v, 0));
+            lastCmdNorm = cmdNorm;
+            if (!Number.isFinite(initialCmdNorm)) initialCmdNorm = cmdNorm;
+
+            if (enableBodyVerticalTask) {
+                const bodyStateCurrent = this._getHumanoidBodyVerticalState(q, armStart, activeCount);
+                if (!bodyStateCurrent) {
+                    stopReason = 'body_task_fail';
+                    break;
+                }
+                eInvariantCurrent.push(bodyKappa * (bodyStateCurrent.error[0] || 0));
+            }
+            lastInvariantNorm = Math.sqrt(eInvariantCurrent.reduce((s, v) => s + v * v, 0));
+            if (cmdNorm < hardCmdTol && lastInvariantNorm < hardInvariantTol) {
+                stopReason = 'converged';
+                break;
+            }
+
+            const branchSelection = this._selectHumanoidTaskEquivalentBranch({
+                qCurrent: q,
+                memoryKey: `absolute-target|w:${includeWaist ? 1 : 0}|bz:${keepBodyZVertical ? 1 : 0}`,
+                includeWaist,
+                keepBodyZVertical: enableBodyVerticalTask,
+                hardLimits,
+                enableJointLimitAvoidance,
+                buildStepProblem: (qCandidate) => {
+                    const relBranch = this._getHumanoidRelativePose(qCandidate);
+                    const absBranch = this._getHumanoidAbsolutePose(qCandidate);
+                    if (!relBranch || !absBranch) return null;
+
+                    const JrelFullBranch = this._getHumanoidRelativePoseJacobian(qCandidate);
+                    const JabsFullBranch = this._getHumanoidAbsolutePoseJacobian(qCandidate);
+                    if (!JrelFullBranch || !JabsFullBranch) return null;
+
+                    const eInvariantBranch = this._signedPoseError(relConstraintArray, relBranch);
+                    const eCmdBranch = this._signedPoseError(dqAbsoluteTargetArray, absBranch);
+                    const Jinvariant = JrelFullBranch.map((row) => row.slice(armStart, armStart + activeCount));
+                    const Jcmd = JabsFullBranch.map((row) => row.slice(armStart, armStart + activeCount));
+
+                    if (enableBodyVerticalTask) {
+                        const bodyStateBranch = this._getHumanoidBodyVerticalState(qCandidate, armStart, activeCount);
+                        if (!bodyStateBranch) return null;
+                        eInvariantBranch.push(bodyKappa * (bodyStateBranch.error[0] || 0));
+                        Jinvariant.push(bodyStateBranch.Jrows[0]);
+                    }
+
+                    const qActiveBranch = qCandidate.slice(armStart, armStart + activeCount);
+                    const stepResult = this._solveVFICommandStep({
+                        Jcmd,
+                        eCmd: eCmdBranch,
+                        Jinvariant,
+                        eInvariant: eInvariantBranch,
+                        qActive: qActiveBranch,
+                        activeLimits: softLimits,
+                        maxStep,
+                        damping
+                    });
+                    if (!stepResult || !Array.isArray(stepResult.dq)) return null;
+
+                    return {
+                        stepResult,
+                        commandNorm: Math.sqrt(eCmdBranch.reduce((sum, value) => sum + value * value, 0)),
+                        invariantNorm: Math.sqrt(eInvariantBranch.reduce((sum, value) => sum + value * value, 0))
+                    };
+                }
+            });
+            if (!branchSelection?.selected) {
+                stopReason = 'solver_fail';
+                break;
+            }
+            lastBranchSelection = branchSelection;
+            const { selected } = branchSelection;
+            const stats = selected.stats;
+            if (stats) lastStats = stats;
+            lastCmdNorm = selected.commandNorm;
+            lastInvariantNorm = selected.invariantNorm;
+            if (stepBackend === 'qp' && stats?.qpConverged === false) {
+                stopReason = 'qp_not_converged';
+                break;
+            }
+            const practicalConverged = (
+                Number.isFinite(lastCmdNorm) &&
+                lastCmdNorm <= practicalCmdTol &&
+                Number.isFinite(lastInvariantNorm) &&
+                lastInvariantNorm <= practicalInvariantTol &&
+                Number.isFinite(stats?.stepNorm) &&
+                stats.stepNorm <= practicalStepTol &&
+                Number.isFinite(stats?.maxViolationAfter) &&
+                stats.maxViolationAfter <= practicalViolationTol
+            );
+
+            q = [...selected.qAfter];
+            executedIterations = iter + 1;
+            if (practicalConverged) {
+                stopReason = 'practical_converged';
+                break;
+            }
+        }
+        if (stopReason === 'max_iter' && stepBackend === 'qp' && maxIter <= 1) {
+            stopReason = 'single_step';
+        }
+        let finalCmdNorm = Number.NaN;
+        if (stepBackend === 'qp') {
+            const absEnd = this._getHumanoidAbsolutePose(q);
+            if (absEnd) {
+                const eCmdEnd = this._signedPoseError(dqAbsoluteTargetArray, absEnd);
+                finalCmdNorm = Math.sqrt(eCmdEnd.reduce((s, v) => s + v * v, 0));
+            }
+        }
+        if (stepBackend === 'qp' && this._shouldFailForQPMismatch({
+            stopReason,
+            finalCmdNorm,
+            initialCmdNorm
+        }, cfg)) {
+            stopReason = 'command_mismatch';
+        }
+        if (stopReason === 'qp_not_converged' || stopReason === 'command_mismatch') {
+            q = [...qInitial];
+            this._notifyHumanoidJogUnreachable('无法到达该位置');
+        }
+        const messageMap = {
+            converged: '命令误差已收敛。',
+            practical_converged: '达到实用收敛阈值。',
+            single_step: 'QP 单步更新完成。',
+            qp_not_converged: '无法到达该位置（QP未收敛）。',
+            command_mismatch: '无法到达该位置（目标未达成）。',
+            max_iter: '达到最大迭代次数。',
+            fk_fail: '姿态计算失败，提前终止。',
+            jacobian_fail: '雅可比计算失败，提前终止。',
+            body_task_fail: '腰部竖直约束构建失败。',
+            solver_fail: 'VFI 步进求解失败。'
+        };
+        this._publishHumanoidJogDiagnostics({
+            solverMode: 'vfi',
+            modeTag: 'absolute-target',
+            active: true,
+            message: messageMap[stopReason] || 'VFI 已执行。',
+            iterations: executedIterations,
+            activeJoints: activeCount,
+            stepBackend: lastStats?.stepBackend || this._getHumanoidVFIStepBackend(),
+            commandRows: lastStats?.commandRows,
+            invariantRows: lastStats?.invariantRows,
+            constraintRows: lastStats?.constraintRows,
+            invariantConstraintRows: lastStats?.invariantConstraintRows,
+            equalityRows: lastStats?.equalityRows,
+            componentRows: lastStats?.componentRows,
+            jointLimitRows: lastStats?.jointLimitRows,
+            commandError: Number.isFinite(finalCmdNorm) ? finalCmdNorm : lastCmdNorm,
+            invariantError: lastInvariantNorm,
+            stepNorm: lastStats?.stepNorm,
+            cmdTargetNorm: lastStats?.cmdTargetNorm,
+            cmdAchievedNorm: lastStats?.cmdAchievedNorm,
+            cmdResidualNorm: lastStats?.cmdResidualNorm,
+            cmdAlignment: lastStats?.cmdAlignment,
+            cmdTargetFirst: lastStats?.cmdTargetFirst,
+            cmdAchievedFirst: lastStats?.cmdAchievedFirst,
+            maxViolationBefore: lastStats?.maxViolationBefore,
+            maxViolationAfter: lastStats?.maxViolationAfter,
+            qpIterations: lastStats?.qpIterations,
+            qpConverged: lastStats?.qpConverged,
+            qpObjective: lastStats?.qpObjective,
+            qpMessage: lastStats?.qpMessage,
+            taskEquivalentBranching: lastBranchSelection?.branchingEnabled ?? this._isHumanoidTaskEquivalentBranchingEnabled(),
+            branchCount: lastBranchSelection?.branchCount,
+            branchCandidateCount: lastBranchSelection?.candidateCount,
+            branchProjectedCount: lastBranchSelection?.projectedCount,
+            branchSelectedLabel: lastBranchSelection?.selected?.branchLabel,
+            branchSelectedMargin: lastBranchSelection?.selected?.minJointMarginRatio,
+            branchSwitched: lastBranchSelection?.branchSwitched,
+            branchKeptByHysteresis: lastBranchSelection?.branchKeptByHysteresis,
+            branchHoldStepsRemaining: lastBranchSelection?.branchState?.holdStepsRemaining,
+            branchCandidateSummaryLines: this._summarizeHumanoidBranchSelection(lastBranchSelection),
+            includeWaist,
+            keepBodyZVertical,
+            jointLimitAvoidance: enableJointLimitAvoidance
+        });
+        this.lastIKSolveStatus = {
+            solver: 'vfi',
+            mode: 'humanoid_absolute',
+            converged: stopReason === 'converged' || stopReason === 'practical_converged' || stopReason === 'single_step',
+            reason: stopReason,
+            message: messageMap[stopReason] || 'VFI 已执行。',
+            finalResidual: Number.isFinite(finalCmdNorm) ? finalCmdNorm : lastCmdNorm,
+            invariantResidual: lastInvariantNorm,
+            qpConverged: lastStats?.qpConverged,
+            qpMessage: lastStats?.qpMessage
+        };
+
+        for (let i = 0; i < window.humanoidQ.length && i < q.length; i++) {
+            window.humanoidQ[i] = q[i];
+        }
+        this.setHumanoidJoints(window.humanoidQ);
+        if (window.updateGlobalVariables) window.updateGlobalVariables();
+        if (window.updateRobotPose) window.updateRobotPose();
+        return true;
+    }
     
     /**
      * 零空间优先级控制：根据目标绝对位姿更新关节（相对位姿优先）
@@ -4664,10 +5978,33 @@ export class RobotVisualizer {
         keepBodyZVertical = false,
         fixedRelativeTargetArray = null
     ) {
-        if (!this.humanoidModel || !window.humanoidQ || !currentQ || currentQ.length === 0) return false;
+        if (this._isHumanoidVFISolverEnabled()) {
+            return this._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstVFI(
+                dqAbsoluteTargetArray,
+                currentQ,
+                enableJointLimitAvoidance,
+                includeWaist,
+                keepBodyZVertical,
+                fixedRelativeTargetArray
+            );
+        }
+        this._publishHumanoidJogDiagnostics({
+            solverMode: 'priority',
+            modeTag: 'absolute-target',
+            active: false,
+            message: '当前为 Priority 后端，VFI 约束诊断暂停。',
+            includeWaist,
+            keepBodyZVertical,
+            jointLimitAvoidance: enableJointLimitAvoidance
+        });
+        if (!this.humanoidModel || !window.humanoidQ || !currentQ || currentQ.length === 0) {
+            return this._setIKFailureStatus({ solver: 'priority', mode: 'humanoid_absolute', reason: 'invalid_state', message: '人形状态未初始化。' });
+        }
         const DQ = window.DQModule?.DQWrapper;
         const Kinematics = window.DQModule?.Kinematics;
-        if (!DQ) return false;
+        if (!DQ) {
+            return this._setIKFailureStatus({ solver: 'priority', mode: 'humanoid_absolute', reason: 'dq_unavailable', message: 'DQ 模块未加载。' });
+        }
 
         // Debug log（节流）：用于观察“相对位姿是否发生偏移”
         // 使用方式：在控制台执行 `window.debugRelativeFirstLog = true` 开启；设为 false 关闭。
@@ -4692,7 +6029,9 @@ export class RobotVisualizer {
         // 获取当前状态
         const absCurrentArray = this._getHumanoidAbsolutePose(currentQ);
         const relCurrentArray = this._getHumanoidRelativePose(currentQ);
-        if (!absCurrentArray || !relCurrentArray) return false;
+        if (!absCurrentArray || !relCurrentArray) {
+            return this._setIKFailureStatus({ solver: 'priority', mode: 'humanoid_absolute', reason: 'fk_unavailable', message: '当前人形位姿计算失败。' });
+        }
         const relConstraintArray = (
             Array.isArray(fixedRelativeTargetArray) &&
             fixedRelativeTargetArray.length === 8 &&
@@ -4738,8 +6077,21 @@ export class RobotVisualizer {
             console.warn('全身绝对位姿控制：未启用 body_link z 轴竖直约束（缺少 Kinematics.lineJacobian 或腰部接口）');
             this._missingBodyZConstraintWarned = true;
         }
-        const bodyZLineDirection = [0, 0, 0, 1, 0, 0, 0, 0];
         const tolBodyZ = 1e-14;
+        const cfg = this.vfiConfig || {};
+        const hardCmdTol = Number.isFinite(cfg.hardCommandTolPose) ? cfg.hardCommandTolPose : 1e-6;
+        const hardInvariantTol = Number.isFinite(cfg.hardInvariantTol) ? cfg.hardInvariantTol : 5e-5;
+        const practicalCmdTol = Number.isFinite(cfg.practicalCommandTolPose) ? cfg.practicalCommandTolPose : 1e-4;
+        const practicalInvariantTol = Number.isFinite(cfg.practicalInvariantTol) ? cfg.practicalInvariantTol : 2.5e-4;
+        const mismatchTol = Number.isFinite(cfg.qpMismatchTol) ? cfg.qpMismatchTol : 1e-3;
+        const mismatchRequiredReduction = Number.isFinite(cfg.qpMismatchRequiredReduction) ? cfg.qpMismatchRequiredReduction : 0.8;
+        const vectorNorm = (values) => Math.sqrt((Array.isArray(values) ? values : []).reduce((sum, value) => sum + (value || 0) * (value || 0), 0));
+        const computeBodyVerticalResidual = (qEval) => {
+            if (!enableBodyVerticalTask) return 0;
+            const bodyState = this._getHumanoidBodyVerticalState(qEval, armStart, activeCount);
+            return bodyState ? (bodyState.errorNorm ?? Math.abs(bodyState.error?.[0] || 0)) : Number.POSITIVE_INFINITY;
+        };
+        const initialCmdNorm = vectorNorm(this._signedPoseError(absTargetArray, absCurrentArray));
         
         // 迭代参数
         const maxIter = 200;
@@ -4748,7 +6100,8 @@ export class RobotVisualizer {
         const maxStep = 0.003;   // 单步最大关节变化（与其他控制器保持一致，减少振荡）
         const maxNullspaceStep = maxStep * 0.3;  // 任务3单独限幅，避免抢占主任务步长
         
-        let q = [...currentQ];
+        const qInitial = [...currentQ];
+        let q = [...qInitial];
 
         // 用于日志统计
         let lastERel = Number.NaN;
@@ -4759,12 +6112,16 @@ export class RobotVisualizer {
         let maxEBodyZ = 0;
         let iterEnd = 0;
         let converged = false;
+        let stopReason = 'max_iter';
         
         for (let iter = 0; iter < maxIter; iter++) {
             iterEnd = iter;
             // === 计算任务1误差：相对位姿保持（最高优先级）===
             const relNow = this._getHumanoidRelativePose(q);
-            if (!relNow) break;
+            if (!relNow) {
+                stopReason = 'fk_fail';
+                break;
+            }
             
             // 处理DQ双覆盖
             let dotRel = 0;
@@ -4780,34 +6137,27 @@ export class RobotVisualizer {
             }
 
             // === 任务1附加约束：body_link 的 z 轴保持垂直地面（世界 Z）===
-            // 通过 line_jacobian 获取 body_link z 轴方向对关节的雅可比，约束其 x/y 分量为 0
+            // 通过 line_jacobian 构造 Plucker line 方向误差 f=(l-l_z)^T(l-l_z)
             let JBodyZ = null;
             let eBodyZNorm2 = 0;
             if (enableBodyVerticalTask) {
-                const waistPose = this.humanoidModel.fkmEffector(q, 0); // body_link
-                const JWaistFull = this.humanoidModel.poseJacobianEffector(q, 0);
-                if (!waistPose || !JWaistFull) break;
-
-                const JLineFull = Kinematics.lineJacobian(JWaistFull, waistPose, bodyZLineDirection);
-                if (!Array.isArray(JLineFull) || JLineFull.length < 3) break;
-
-                const waistPoseDQ = DQ.createFromArray(waistPose);
-                const rotMat = DQ.getRotationMatrix(waistPoseDQ);
-                const ex = -(rotMat?.[0]?.[2] ?? 0);
-                const ey = -(rotMat?.[1]?.[2] ?? 0);
-                e1.push(ex, ey);
-                eBodyZNorm2 = ex * ex + ey * ey;
+                const bodyState = this._getHumanoidBodyVerticalState(q, armStart, activeCount);
+                if (!bodyState) {
+                    stopReason = 'body_task_fail';
+                    break;
+                }
+                e1.push(bodyState.error[0] || 0);
+                eBodyZNorm2 = (bodyState.errorNorm || 0) ** 2;
                 e1Norm2 += eBodyZNorm2;
-
-                JBodyZ = [
-                    JLineFull[1].slice(armStart, armStart + activeCount),
-                    JLineFull[2].slice(armStart, armStart + activeCount)
-                ];
+                JBodyZ = [bodyState.Jrows[0]];
             }
             
             // === 计算任务2误差：绝对位姿跟踪 ===
             const absNow = this._getHumanoidAbsolutePose(q);
-            if (!absNow) break;
+            if (!absNow) {
+                stopReason = 'fk_fail';
+                break;
+            }
             
             // 处理DQ双覆盖
             let dotAbs = 0;
@@ -4826,6 +6176,7 @@ export class RobotVisualizer {
             if (e1Norm2 < tol && e2Norm2 < tol && (!enableBodyVerticalTask || eBodyZNorm2 < tolBodyZ)) {
                 console.log('零空间控制(相对优先): 迭代收敛, iter=', iter, 'e_rel=', Math.sqrt(e1Norm2).toFixed(6), 'e_abs=', Math.sqrt(e2Norm2).toFixed(6));
                 converged = true;
+                stopReason = 'converged';
                 break;
             }
 
@@ -4843,18 +6194,24 @@ export class RobotVisualizer {
             // === 计算雅可比矩阵 ===
             // J_rel: 相对位姿对活动关节的雅可比 (8 x activeCount)
             const JrelFull = this._getHumanoidRelativePoseJacobian(q);
-            if (!JrelFull) break;
+            if (!JrelFull) {
+                stopReason = 'jacobian_fail';
+                break;
+            }
             const J1 = [];  // 任务1的雅可比（相对位姿）
             for (let i = 0; i < 8; i++) {
                 J1.push(JrelFull[i].slice(armStart, armStart + activeCount));
             }
             if (JBodyZ) {
-                J1.push(JBodyZ[0], JBodyZ[1]);
+                J1.push(JBodyZ[0]);
             }
             
             // J_abs: 绝对位姿对活动关节的雅可比 (8 x activeCount)
             const JabsFull = this._getHumanoidAbsolutePoseJacobian(q);
-            if (!JabsFull) break;
+            if (!JabsFull) {
+                stopReason = 'jacobian_fail';
+                break;
+            }
             const J2 = [];  // 任务2的雅可比（绝对位姿）
             for (let i = 0; i < 8; i++) {
                 J2.push(JabsFull[i].slice(armStart, armStart + activeCount));
@@ -4870,7 +6227,10 @@ export class RobotVisualizer {
             // === 计算任务1（相对位姿）的加权伪逆和零空间投影 ===
             // J1_pinv = W^-1 * J1^T * (J1 * W^-1 * J1^T + λI)^-1
             const J1Pinv = this._weightedDampedPseudoInverse(J1, W, damping);
-            if (!J1Pinv) break;
+            if (!J1Pinv) {
+                stopReason = 'jacobian_fail';
+                break;
+            }
             
             // P1 = I - J1_pinv * J1 (相对位姿任务的零空间投影矩阵)
             const P1 = this._computeNullspaceProjection(J1Pinv, J1, activeCount);
@@ -4879,7 +6239,10 @@ export class RobotVisualizer {
             // J2_bar = J2 * P1
             const J2Bar = this._matMul(J2, P1);
             const J2BarPinv = this._weightedDampedPseudoInverse(J2Bar, W, damping);
-            if (!J2BarPinv) break;
+            if (!J2BarPinv) {
+                stopReason = 'jacobian_fail';
+                break;
+            }
             
             // === 计算增广雅可比的零空间投影 P12 ===
             // P12 = P1 - J2Bar_pinv * J2Bar
@@ -5026,15 +6389,57 @@ export class RobotVisualizer {
                 console.warn('[RelFirst] debug log failed:', e);
             }
         }
+        const relEndArray = this._getHumanoidRelativePose(q);
+        const absEndArray = this._getHumanoidAbsolutePose(q);
+        const finalCmdNorm = absEndArray ? vectorNorm(this._signedPoseError(absTargetArray, absEndArray)) : Number.POSITIVE_INFINITY;
+        let finalInvariantNorm = relEndArray ? vectorNorm(this._signedPoseError(relConstraintArray, relEndArray)) : Number.POSITIVE_INFINITY;
+        if (enableBodyVerticalTask) {
+            const bodyResidual = computeBodyVerticalResidual(q);
+            finalInvariantNorm = Math.sqrt(finalInvariantNorm * finalInvariantNorm + bodyResidual * bodyResidual);
+        }
+        const outcome = evaluateHumanoidJogCommandOutcome({
+            stopReason,
+            initialCommandNorm: initialCmdNorm,
+            finalCommandNorm: finalCmdNorm,
+            finalInvariantNorm,
+            hardCommandTol: hardCmdTol,
+            hardInvariantTol: hardInvariantTol,
+            practicalCommandTol: practicalCmdTol,
+            practicalInvariantTol: practicalInvariantTol,
+            mismatchTol,
+            mismatchRequiredReduction
+        });
+        const messageMap = {
+            converged: '命令误差已收敛。',
+            practical_converged: '达到实用收敛阈值。',
+            command_mismatch: '无法到达该位置（目标未达成）。',
+            max_iter: '达到最大迭代次数。',
+            fk_fail: '姿态计算失败，提前终止。',
+            jacobian_fail: '雅可比计算失败，提前终止。',
+            body_task_fail: '腰部竖直约束构建失败。'
+        };
+        const qApplied = outcome.applyResult ? q : qInitial;
+        if (outcome.reason === 'command_mismatch') {
+            this._notifyHumanoidJogUnreachable('无法到达该位置');
+        }
+        this.lastIKSolveStatus = {
+            solver: 'priority',
+            mode: 'humanoid_absolute',
+            converged: outcome.converged,
+            reason: outcome.reason,
+            message: messageMap[outcome.reason] || 'Priority 已执行。',
+            finalResidual: finalCmdNorm,
+            invariantResidual: finalInvariantNorm
+        };
         
         // 应用结果
-        for (let i = 0; i < window.humanoidQ.length && i < q.length; i++) {
-            window.humanoidQ[i] = q[i];
+        for (let i = 0; i < window.humanoidQ.length && i < qApplied.length; i++) {
+            window.humanoidQ[i] = qApplied[i];
         }
         this.setHumanoidJoints(window.humanoidQ);
         if (window.updateGlobalVariables) window.updateGlobalVariables();
         if (window.updateRobotPose) window.updateRobotPose();
-        return true;
+        return outcome.converged;
     }
     
     /**
@@ -5047,10 +6452,273 @@ export class RobotVisualizer {
      * @param {boolean} includeWaist - 是否包含腰部关节，默认为 false（只控制双臂）
      * @returns {boolean}
      */
-    updateHumanoidJointsFromRelativePoseTargetAbsoluteFirst(dqRelativeTargetArray, currentQ, enableJointLimitAvoidance = true, includeWaist = false) {
-        if (!this.humanoidModel || !window.humanoidQ || !currentQ || currentQ.length === 0) return false;
+    _updateHumanoidJointsFromRelativePoseTargetAbsoluteFirstVFI(
+        dqRelativeTargetArray,
+        currentQ,
+        enableJointLimitAvoidance = true,
+        includeWaist = false
+    ) {
+        if (!this.humanoidModel || !window.humanoidQ || !currentQ || currentQ.length === 0) {
+            return this._setIKFailureStatus({ solver: 'vfi', mode: 'humanoid_relative', reason: 'invalid_state', message: '人形状态未初始化。' });
+        }
         const DQ = window.DQModule?.DQWrapper;
-        if (!DQ) return false;
+        if (!DQ) {
+            return this._setIKFailureStatus({ solver: 'vfi', mode: 'humanoid_relative', reason: 'dq_unavailable', message: 'DQ 模块未加载。' });
+        }
+
+        const absCurrentArray = this._getHumanoidAbsolutePose(currentQ);
+        const relCurrentArray = this._getHumanoidRelativePose(currentQ);
+        if (!absCurrentArray || !relCurrentArray) {
+            return this._setIKFailureStatus({ solver: 'vfi', mode: 'humanoid_relative', reason: 'fk_unavailable', message: '当前人形位姿计算失败。' });
+        }
+
+        const jointLimits = this._getHumanoidJointLimits();
+        const waistCount = this.humanoidWaistLength;
+        const leftArmCount = this.humanoidLeftArmLength;
+        const rightArmCount = this.humanoidRightArmLength;
+        const armStart = includeWaist ? 0 : waistCount;
+        const activeCount = includeWaist ? (waistCount + leftArmCount + rightArmCount) : (leftArmCount + rightArmCount);
+        if (activeCount <= 0) {
+            return this._setIKFailureStatus({ solver: 'vfi', mode: 'humanoid_relative', reason: 'no_active_joints', message: '当前模式下没有可用活动关节。' });
+        }
+
+        const hardLimits = jointLimits ? jointLimits.slice(armStart, armStart + activeCount) : null;
+        const softLimits = enableJointLimitAvoidance ? hardLimits : null;
+        const cfg = this.vfiConfig || {};
+        const stepBackend = this._getHumanoidVFIStepBackend();
+        const maxIterProjection = Number.isFinite(cfg.maxIter) ? cfg.maxIter : 240;
+        const maxIterQP = Number.isFinite(cfg.qpOuterMaxIter) ? cfg.qpOuterMaxIter : 8;
+        const maxIter = stepBackend === 'qp' ? maxIterQP : maxIterProjection;
+        const damping = Number.isFinite(cfg.damping) ? cfg.damping : 1e-3;
+        const maxStep = Number.isFinite(cfg.maxStep) ? cfg.maxStep : 0.003;
+        const hardCmdTol = Number.isFinite(cfg.hardCommandTolPose) ? cfg.hardCommandTolPose : 1e-6;
+        const hardInvariantTol = Number.isFinite(cfg.hardInvariantTol) ? cfg.hardInvariantTol : 5e-5;
+        const practicalCmdTol = Number.isFinite(cfg.practicalCommandTolPose) ? cfg.practicalCommandTolPose : 1e-4;
+        const practicalInvariantTol = Number.isFinite(cfg.practicalInvariantTol) ? cfg.practicalInvariantTol : 2.5e-4;
+        const practicalStepTol = Number.isFinite(cfg.practicalStepNormTol) ? cfg.practicalStepNormTol : 2e-5;
+        const practicalViolationTol = Number.isFinite(cfg.practicalViolationTol) ? cfg.practicalViolationTol : 1e-8;
+
+        const qInitial = [...currentQ];
+        let q = [...qInitial];
+        let executedIterations = 0;
+        let stopReason = 'max_iter';
+        let initialCmdNorm = Number.NaN;
+        let lastCmdNorm = Number.NaN;
+        let lastInvariantNorm = Number.NaN;
+        let lastStats = null;
+        let lastBranchSelection = null;
+        for (let iter = 0; iter < maxIter; iter++) {
+            const absNow = this._getHumanoidAbsolutePose(q);
+            const relNow = this._getHumanoidRelativePose(q);
+            if (!absNow || !relNow) {
+                stopReason = 'fk_fail';
+                break;
+            }
+
+            const eInvariant = this._signedPoseError(absCurrentArray, absNow);
+            const eCmd = this._signedPoseError(dqRelativeTargetArray, relNow);
+            const cmdNorm = Math.sqrt(eCmd.reduce((s, v) => s + v * v, 0));
+            lastCmdNorm = cmdNorm;
+            if (!Number.isFinite(initialCmdNorm)) initialCmdNorm = cmdNorm;
+
+            lastInvariantNorm = Math.sqrt(eInvariant.reduce((s, v) => s + v * v, 0));
+            if (cmdNorm < hardCmdTol && lastInvariantNorm < hardInvariantTol) {
+                stopReason = 'converged';
+                break;
+            }
+
+            const branchSelection = this._selectHumanoidTaskEquivalentBranch({
+                qCurrent: q,
+                memoryKey: `relative-target|w:${includeWaist ? 1 : 0}`,
+                includeWaist,
+                hardLimits,
+                enableJointLimitAvoidance,
+                buildStepProblem: (qCandidate) => {
+                    const absBranch = this._getHumanoidAbsolutePose(qCandidate);
+                    const relBranch = this._getHumanoidRelativePose(qCandidate);
+                    if (!absBranch || !relBranch) return null;
+
+                    const JabsFullBranch = this._getHumanoidAbsolutePoseJacobian(qCandidate);
+                    const JrelFullBranch = this._getHumanoidRelativePoseJacobian(qCandidate);
+                    if (!JabsFullBranch || !JrelFullBranch) return null;
+
+                    const eInvariantBranch = this._signedPoseError(absCurrentArray, absBranch);
+                    const eCmdBranch = this._signedPoseError(dqRelativeTargetArray, relBranch);
+                    const Jinvariant = JabsFullBranch.map((row) => row.slice(armStart, armStart + activeCount));
+                    const Jcmd = JrelFullBranch.map((row) => row.slice(armStart, armStart + activeCount));
+                    const qActiveBranch = qCandidate.slice(armStart, armStart + activeCount);
+                    const stepResult = this._solveVFICommandStep({
+                        Jcmd,
+                        eCmd: eCmdBranch,
+                        Jinvariant,
+                        eInvariant: eInvariantBranch,
+                        qActive: qActiveBranch,
+                        activeLimits: softLimits,
+                        maxStep,
+                        damping
+                    });
+                    if (!stepResult || !Array.isArray(stepResult.dq)) return null;
+
+                    return {
+                        stepResult,
+                        commandNorm: Math.sqrt(eCmdBranch.reduce((sum, value) => sum + value * value, 0)),
+                        invariantNorm: Math.sqrt(eInvariantBranch.reduce((sum, value) => sum + value * value, 0))
+                    };
+                }
+            });
+            if (!branchSelection?.selected) {
+                stopReason = 'solver_fail';
+                break;
+            }
+            lastBranchSelection = branchSelection;
+            const { selected } = branchSelection;
+            const stats = selected.stats;
+            if (stats) lastStats = stats;
+            lastCmdNorm = selected.commandNorm;
+            lastInvariantNorm = selected.invariantNorm;
+            if (stepBackend === 'qp' && stats?.qpConverged === false) {
+                stopReason = 'qp_not_converged';
+                break;
+            }
+            const practicalConverged = (
+                Number.isFinite(lastCmdNorm) &&
+                lastCmdNorm <= practicalCmdTol &&
+                Number.isFinite(lastInvariantNorm) &&
+                lastInvariantNorm <= practicalInvariantTol &&
+                Number.isFinite(stats?.stepNorm) &&
+                stats.stepNorm <= practicalStepTol &&
+                Number.isFinite(stats?.maxViolationAfter) &&
+                stats.maxViolationAfter <= practicalViolationTol
+            );
+
+            q = [...selected.qAfter];
+            executedIterations = iter + 1;
+            if (practicalConverged) {
+                stopReason = 'practical_converged';
+                break;
+            }
+        }
+        if (stopReason === 'max_iter' && stepBackend === 'qp' && maxIter <= 1) {
+            stopReason = 'single_step';
+        }
+        let finalCmdNorm = Number.NaN;
+        if (stepBackend === 'qp') {
+            const relEnd = this._getHumanoidRelativePose(q);
+            if (relEnd) {
+                const eCmdEnd = this._signedPoseError(dqRelativeTargetArray, relEnd);
+                finalCmdNorm = Math.sqrt(eCmdEnd.reduce((s, v) => s + v * v, 0));
+            }
+        }
+        if (stepBackend === 'qp' && this._shouldFailForQPMismatch({
+            stopReason,
+            finalCmdNorm,
+            initialCmdNorm
+        }, cfg)) {
+            stopReason = 'command_mismatch';
+        }
+        if (stopReason === 'qp_not_converged' || stopReason === 'command_mismatch') {
+            q = [...qInitial];
+            this._notifyHumanoidJogUnreachable('无法到达该位置');
+        }
+        const messageMap = {
+            converged: '命令误差已收敛。',
+            practical_converged: '达到实用收敛阈值。',
+            single_step: 'QP 单步更新完成。',
+            qp_not_converged: '无法到达该位置（QP未收敛）。',
+            command_mismatch: '无法到达该位置（目标未达成）。',
+            max_iter: '达到最大迭代次数。',
+            fk_fail: '姿态计算失败，提前终止。',
+            jacobian_fail: '雅可比计算失败，提前终止。',
+            solver_fail: 'VFI 步进求解失败。'
+        };
+        this._publishHumanoidJogDiagnostics({
+            solverMode: 'vfi',
+            modeTag: 'relative-target',
+            active: true,
+            message: messageMap[stopReason] || 'VFI 已执行。',
+            iterations: executedIterations,
+            activeJoints: activeCount,
+            stepBackend: lastStats?.stepBackend || this._getHumanoidVFIStepBackend(),
+            commandRows: lastStats?.commandRows,
+            invariantRows: lastStats?.invariantRows,
+            constraintRows: lastStats?.constraintRows,
+            invariantConstraintRows: lastStats?.invariantConstraintRows,
+            equalityRows: lastStats?.equalityRows,
+            componentRows: lastStats?.componentRows,
+            jointLimitRows: lastStats?.jointLimitRows,
+            commandError: Number.isFinite(finalCmdNorm) ? finalCmdNorm : lastCmdNorm,
+            invariantError: lastInvariantNorm,
+            stepNorm: lastStats?.stepNorm,
+            cmdTargetNorm: lastStats?.cmdTargetNorm,
+            cmdAchievedNorm: lastStats?.cmdAchievedNorm,
+            cmdResidualNorm: lastStats?.cmdResidualNorm,
+            cmdAlignment: lastStats?.cmdAlignment,
+            cmdTargetFirst: lastStats?.cmdTargetFirst,
+            cmdAchievedFirst: lastStats?.cmdAchievedFirst,
+            maxViolationBefore: lastStats?.maxViolationBefore,
+            maxViolationAfter: lastStats?.maxViolationAfter,
+            qpIterations: lastStats?.qpIterations,
+            qpConverged: lastStats?.qpConverged,
+            qpObjective: lastStats?.qpObjective,
+            qpMessage: lastStats?.qpMessage,
+            taskEquivalentBranching: lastBranchSelection?.branchingEnabled ?? this._isHumanoidTaskEquivalentBranchingEnabled(),
+            branchCount: lastBranchSelection?.branchCount,
+            branchCandidateCount: lastBranchSelection?.candidateCount,
+            branchProjectedCount: lastBranchSelection?.projectedCount,
+            branchSelectedLabel: lastBranchSelection?.selected?.branchLabel,
+            branchSelectedMargin: lastBranchSelection?.selected?.minJointMarginRatio,
+            branchSwitched: lastBranchSelection?.branchSwitched,
+            branchKeptByHysteresis: lastBranchSelection?.branchKeptByHysteresis,
+            branchHoldStepsRemaining: lastBranchSelection?.branchState?.holdStepsRemaining,
+            branchCandidateSummaryLines: this._summarizeHumanoidBranchSelection(lastBranchSelection),
+            includeWaist,
+            jointLimitAvoidance: enableJointLimitAvoidance
+        });
+        this.lastIKSolveStatus = {
+            solver: 'vfi',
+            mode: 'humanoid_relative',
+            converged: stopReason === 'converged' || stopReason === 'practical_converged' || stopReason === 'single_step',
+            reason: stopReason,
+            message: messageMap[stopReason] || 'VFI 已执行。',
+            finalResidual: Number.isFinite(finalCmdNorm) ? finalCmdNorm : lastCmdNorm,
+            invariantResidual: lastInvariantNorm,
+            qpConverged: lastStats?.qpConverged,
+            qpMessage: lastStats?.qpMessage
+        };
+
+        for (let i = 0; i < window.humanoidQ.length && i < q.length; i++) {
+            window.humanoidQ[i] = q[i];
+        }
+        this.setHumanoidJoints(window.humanoidQ);
+        if (window.updateGlobalVariables) window.updateGlobalVariables();
+        if (window.updateRobotPose) window.updateRobotPose();
+        return true;
+    }
+
+    updateHumanoidJointsFromRelativePoseTargetAbsoluteFirst(dqRelativeTargetArray, currentQ, enableJointLimitAvoidance = true, includeWaist = false) {
+        if (this._isHumanoidVFISolverEnabled()) {
+            return this._updateHumanoidJointsFromRelativePoseTargetAbsoluteFirstVFI(
+                dqRelativeTargetArray,
+                currentQ,
+                enableJointLimitAvoidance,
+                includeWaist
+            );
+        }
+        this._publishHumanoidJogDiagnostics({
+            solverMode: 'priority',
+            modeTag: 'relative-target',
+            active: false,
+            message: '当前为 Priority 后端，VFI 约束诊断暂停。',
+            includeWaist,
+            jointLimitAvoidance: enableJointLimitAvoidance
+        });
+        if (!this.humanoidModel || !window.humanoidQ || !currentQ || currentQ.length === 0) {
+            return this._setIKFailureStatus({ solver: 'priority', mode: 'humanoid_relative', reason: 'invalid_state', message: '人形状态未初始化。' });
+        }
+        const DQ = window.DQModule?.DQWrapper;
+        if (!DQ) {
+            return this._setIKFailureStatus({ solver: 'priority', mode: 'humanoid_relative', reason: 'dq_unavailable', message: 'DQ 模块未加载。' });
+        }
 
         // Debug log（节流）
         const debugLogEnabled = window.debugAbsoluteFirstLog ?? false;
@@ -5073,7 +6741,9 @@ export class RobotVisualizer {
         // 获取当前状态
         const absCurrentArray = this._getHumanoidAbsolutePose(currentQ);
         const relCurrentArray = this._getHumanoidRelativePose(currentQ);
-        if (!absCurrentArray || !relCurrentArray) return false;
+        if (!absCurrentArray || !relCurrentArray) {
+            return this._setIKFailureStatus({ solver: 'priority', mode: 'humanoid_relative', reason: 'fk_unavailable', message: '当前人形位姿计算失败。' });
+        }
 
         // 缓存绝对位姿起点（用于末尾计算偏移量）
         const absStartArray = absCurrentArray.slice();
@@ -5103,6 +6773,15 @@ export class RobotVisualizer {
         const kappa3 = 0.00;    // 任务3增益（关节限位避免）
         const waistGain = 0.5;  // 腰部权重（更小=腰部动得更少）
         const armGain = 1.0;    // 手臂权重
+        const cfg = this.vfiConfig || {};
+        const hardCmdTol = Number.isFinite(cfg.hardCommandTolPose) ? cfg.hardCommandTolPose : 1e-6;
+        const hardInvariantTol = Number.isFinite(cfg.hardInvariantTol) ? cfg.hardInvariantTol : 5e-5;
+        const practicalCmdTol = Number.isFinite(cfg.practicalCommandTolPose) ? cfg.practicalCommandTolPose : 1e-4;
+        const practicalInvariantTol = Number.isFinite(cfg.practicalInvariantTol) ? cfg.practicalInvariantTol : 2.5e-4;
+        const mismatchTol = Number.isFinite(cfg.qpMismatchTol) ? cfg.qpMismatchTol : 1e-3;
+        const mismatchRequiredReduction = Number.isFinite(cfg.qpMismatchRequiredReduction) ? cfg.qpMismatchRequiredReduction : 0.8;
+        const vectorNorm = (values) => Math.sqrt((Array.isArray(values) ? values : []).reduce((sum, value) => sum + (value || 0) * (value || 0), 0));
+        const initialCmdNorm = vectorNorm(this._signedPoseError(relTargetArray, relCurrentArray));
         
         // 迭代参数
         const maxIter = 200;
@@ -5110,7 +6789,8 @@ export class RobotVisualizer {
         const damping = 0.00001;
         const maxStep = 0.0003;
         
-        let q = [...currentQ];
+        const qInitial = [...currentQ];
+        let q = [...qInitial];
 
         // 用于日志统计
         let lastEAbs = Number.NaN;
@@ -5119,12 +6799,16 @@ export class RobotVisualizer {
         let maxERel = 0;
         let iterEnd = 0;
         let converged = false;
+        let stopReason = 'max_iter';
         
         for (let iter = 0; iter < maxIter; iter++) {
             iterEnd = iter;
             // === 计算任务1误差：绝对位姿保持（最高优先级）===
             const absNow = this._getHumanoidAbsolutePose(q);
-            if (!absNow) break;
+            if (!absNow) {
+                stopReason = 'fk_fail';
+                break;
+            }
             
             // 处理DQ双覆盖
             let dotAbs = 0;
@@ -5141,7 +6825,10 @@ export class RobotVisualizer {
             
             // === 计算任务2误差：相对位姿跟踪 ===
             const relNow = this._getHumanoidRelativePose(q);
-            if (!relNow) break;
+            if (!relNow) {
+                stopReason = 'fk_fail';
+                break;
+            }
             
             // 处理DQ双覆盖
             let dotRel = 0;
@@ -5160,6 +6847,7 @@ export class RobotVisualizer {
             if (e1Norm2 < tol && e2Norm2 < tol) {
                 console.log('零空间控制(绝对优先): 迭代收敛, iter=', iter, 'e_abs=', Math.sqrt(e1Norm2).toFixed(6), 'e_rel=', Math.sqrt(e2Norm2).toFixed(6));
                 converged = true;
+                stopReason = 'converged';
                 break;
             }
 
@@ -5175,7 +6863,10 @@ export class RobotVisualizer {
             // === 计算雅可比矩阵 ===
             // J_abs: 绝对位姿对关节的雅可比 (8 x activeCount)
             const JabsFull = this._getHumanoidAbsolutePoseJacobian(q);
-            if (!JabsFull) break;
+            if (!JabsFull) {
+                stopReason = 'jacobian_fail';
+                break;
+            }
             const J1 = [];  // 任务1的雅可比（绝对位姿）
             for (let i = 0; i < 8; i++) {
                 J1.push(JabsFull[i].slice(armStart, armStart + activeCount));
@@ -5183,7 +6874,10 @@ export class RobotVisualizer {
             
             // J_rel: 相对位姿对关节的雅可比 (8 x activeCount)
             const JrelFull = this._getHumanoidRelativePoseJacobian(q);
-            if (!JrelFull) break;
+            if (!JrelFull) {
+                stopReason = 'jacobian_fail';
+                break;
+            }
             const J2 = [];  // 任务2的雅可比（相对位姿）
             for (let i = 0; i < 8; i++) {
                 J2.push(JrelFull[i].slice(armStart, armStart + activeCount));
@@ -5198,7 +6892,10 @@ export class RobotVisualizer {
             
             // === 计算任务1（绝对位姿）的加权伪逆和零空间投影 ===
             const J1Pinv = this._weightedDampedPseudoInverse(J1, W, damping);
-            if (!J1Pinv) break;
+            if (!J1Pinv) {
+                stopReason = 'jacobian_fail';
+                break;
+            }
             
             // P1 = I - J1_pinv * J1 (绝对位姿任务的零空间投影矩阵)
             const P1 = this._computeNullspaceProjection(J1Pinv, J1, activeCount);
@@ -5207,7 +6904,10 @@ export class RobotVisualizer {
             // J2_bar = J2 * P1
             const J2Bar = this._matMul(J2, P1);
             const J2BarPinv = this._weightedDampedPseudoInverse(J2Bar, W, damping);
-            if (!J2BarPinv) break;
+            if (!J2BarPinv) {
+                stopReason = 'jacobian_fail';
+                break;
+            }
             
             // === 计算增广雅可比的零空间投影 P12 ===
             const P12 = this._computeNullspaceProjection2(P1, J2BarPinv, J2Bar, activeCount);
@@ -5326,15 +7026,52 @@ export class RobotVisualizer {
                 console.warn('[AbsFirst] debug log failed:', e);
             }
         }
+        const absEndArray = this._getHumanoidAbsolutePose(q);
+        const relEndArray = this._getHumanoidRelativePose(q);
+        const finalCmdNorm = relEndArray ? vectorNorm(this._signedPoseError(relTargetArray, relEndArray)) : Number.POSITIVE_INFINITY;
+        const finalInvariantNorm = absEndArray ? vectorNorm(this._signedPoseError(absCurrentArray, absEndArray)) : Number.POSITIVE_INFINITY;
+        const outcome = evaluateHumanoidJogCommandOutcome({
+            stopReason,
+            initialCommandNorm: initialCmdNorm,
+            finalCommandNorm: finalCmdNorm,
+            finalInvariantNorm,
+            hardCommandTol: hardCmdTol,
+            hardInvariantTol: hardInvariantTol,
+            practicalCommandTol: practicalCmdTol,
+            practicalInvariantTol: practicalInvariantTol,
+            mismatchTol,
+            mismatchRequiredReduction
+        });
+        const messageMap = {
+            converged: '命令误差已收敛。',
+            practical_converged: '达到实用收敛阈值。',
+            command_mismatch: '无法到达该位置（目标未达成）。',
+            max_iter: '达到最大迭代次数。',
+            fk_fail: '姿态计算失败，提前终止。',
+            jacobian_fail: '雅可比计算失败，提前终止。'
+        };
+        const qApplied = outcome.applyResult ? q : qInitial;
+        if (outcome.reason === 'command_mismatch') {
+            this._notifyHumanoidJogUnreachable('无法到达该位置');
+        }
+        this.lastIKSolveStatus = {
+            solver: 'priority',
+            mode: 'humanoid_relative',
+            converged: outcome.converged,
+            reason: outcome.reason,
+            message: messageMap[outcome.reason] || 'Priority 已执行。',
+            finalResidual: finalCmdNorm,
+            invariantResidual: finalInvariantNorm
+        };
         
         // 应用结果
-        for (let i = 0; i < window.humanoidQ.length && i < q.length; i++) {
-            window.humanoidQ[i] = q[i];
+        for (let i = 0; i < window.humanoidQ.length && i < qApplied.length; i++) {
+            window.humanoidQ[i] = qApplied[i];
         }
         this.setHumanoidJoints(window.humanoidQ);
         if (window.updateGlobalVariables) window.updateGlobalVariables();
         if (window.updateRobotPose) window.updateRobotPose();
-        return true;
+        return outcome.converged;
     }
     
     /**
@@ -5988,7 +7725,393 @@ export class RobotVisualizer {
      * @param {boolean} includeWaist - 是否包含腰部关节
      * @returns {boolean}
      */
+    _updateHumanoidJointsFromRelativeDistanceDeltaVFI(
+        deltaDistance,
+        currentQ,
+        enableJointLimitAvoidance = true,
+        includeWaist = false
+    ) {
+        if (!this.humanoidModel || !window.humanoidQ || !currentQ || currentQ.length === 0) return false;
+        const DQ = window.DQModule?.DQWrapper;
+        const Kinematics = window.DQModule?.Kinematics;
+        if (!DQ || !Kinematics?.distanceJacobian) return false;
+
+        const waistCount = this.humanoidWaistLength;
+        const leftArmCount = this.humanoidLeftArmLength;
+        const rightArmCount = this.humanoidRightArmLength;
+        const armStart = includeWaist ? 0 : waistCount;
+        const activeCount = includeWaist ? (waistCount + leftArmCount + rightArmCount) : (leftArmCount + rightArmCount);
+        if (activeCount <= 0) return false;
+
+        const absCurrentArray = this._getHumanoidAbsolutePose(currentQ);
+        const relStartArray = this._getHumanoidRelativePose(currentQ);
+        const pose1StartArray = this._getHumanoidPose1(currentQ);
+        const pose2StartArray = this._getHumanoidPose2(currentQ);
+        if (!absCurrentArray || !relStartArray || !pose1StartArray || !pose2StartArray) return false;
+        const relRotTarget = relStartArray.slice(0, 4);
+        const hand1RotTarget = pose1StartArray.slice(0, 4);
+        const hand2RotTarget = pose2StartArray.slice(0, 4);
+        const tStart = DQ.getTranslation(DQ.createFromArray(relStartArray));
+        const dStart = Math.sqrt((tStart[1] || 0) ** 2 + (tStart[2] || 0) ** 2 + (tStart[3] || 0) ** 2);
+        const dTarget = Math.max(0.01, dStart + deltaDistance);
+        const d2Target = dTarget * dTarget;
+
+        const jointLimits = this._getHumanoidJointLimits();
+        const hardLimits = jointLimits ? jointLimits.slice(armStart, armStart + activeCount) : null;
+        const softLimits = enableJointLimitAvoidance ? hardLimits : null;
+        const cfg = this.vfiConfig || {};
+        const stepBackend = this._getHumanoidVFIStepBackend();
+        const maxIterProjection = Number.isFinite(cfg.maxIter) ? cfg.maxIter : 240;
+        const maxIterQP = Number.isFinite(cfg.qpOuterMaxIter) ? cfg.qpOuterMaxIter : 8;
+        const maxIter = stepBackend === 'qp' ? maxIterQP : maxIterProjection;
+        const damping = Number.isFinite(cfg.damping) ? cfg.damping : 1e-3;
+        const maxStep = Number.isFinite(cfg.maxStep) ? cfg.maxStep : 0.003;
+        const hardCmdTol = Number.isFinite(cfg.hardCommandTolDistanceSq) ? cfg.hardCommandTolDistanceSq : 1e-8;
+        const hardInvariantTol = Number.isFinite(cfg.hardInvariantTol) ? cfg.hardInvariantTol : 5e-5;
+        const practicalCmdTol = Number.isFinite(cfg.practicalCommandTolDistanceSq) ? cfg.practicalCommandTolDistanceSq : 1e-5;
+        const practicalInvariantTol = Number.isFinite(cfg.practicalInvariantTol) ? cfg.practicalInvariantTol : 2.5e-4;
+        const practicalStepTol = Number.isFinite(cfg.practicalStepNormTol) ? cfg.practicalStepNormTol : 2e-5;
+        const practicalViolationTol = Number.isFinite(cfg.practicalViolationTol) ? cfg.practicalViolationTol : 1e-8;
+        const distanceUseInvariantEquality = stepBackend === 'qp'
+            ? (typeof cfg.distanceQPUseInvariantEquality === 'boolean' ? cfg.distanceQPUseInvariantEquality : false)
+            : false;
+        const distanceKeepRelativeRotation = (typeof cfg.distanceKeepRelativeRotation === 'boolean')
+            ? cfg.distanceKeepRelativeRotation
+            : true;
+        const distanceKeepHandOrientation = (typeof cfg.distanceKeepHandOrientation === 'boolean')
+            ? cfg.distanceKeepHandOrientation
+            : true;
+        const distanceInvariantKappa = Number.isFinite(cfg.distanceInvariantKappa)
+            ? Math.max(0, cfg.distanceInvariantKappa)
+            : 0.7;
+        const distanceInvariantBandBase = Number.isFinite(cfg.distanceInvariantBandBase)
+            ? Math.max(0, cfg.distanceInvariantBandBase)
+            : 2e-3;
+        const distanceInvariantBandGain = Number.isFinite(cfg.distanceInvariantBandGain)
+            ? Math.max(0, cfg.distanceInvariantBandGain)
+            : 0.3;
+        const distanceInvariantSoftWeight = Number.isFinite(cfg.distanceInvariantSoftWeight)
+            ? Math.max(0, cfg.distanceInvariantSoftWeight)
+            : 6.0;
+
+        const qInitial = [...currentQ];
+        let q = [...qInitial];
+        let executedIterations = 0;
+        let stopReason = 'max_iter';
+        let initialCmdNorm = Number.NaN;
+        let lastCmdNorm = Number.NaN;
+        let lastInvariantNorm = Number.NaN;
+        let lastStats = null;
+        let lastBranchSelection = null;
+        const extractActiveColumns = (row) => {
+            const out = new Array(activeCount).fill(0);
+            if (!Array.isArray(row)) return out;
+            for (let i = 0; i < activeCount; i++) {
+                out[i] = row[armStart + i] || 0;
+            }
+            return out;
+        };
+        for (let iter = 0; iter < maxIter; iter++) {
+            const absNow = this._getHumanoidAbsolutePose(q);
+            const relNow = this._getHumanoidRelativePose(q);
+            if (!absNow || !relNow) {
+                stopReason = 'fk_fail';
+                break;
+            }
+
+            const eAbs = this._signedPoseError(absCurrentArray, absNow);
+            const relRotNow = relNow.slice(0, 4);
+            let dotRot = 0;
+            for (let i = 0; i < 4; i++) dotRot += (relRotTarget[i] || 0) * (relRotNow[i] || 0);
+            const signRot = dotRot < 0 ? -1 : 1;
+            const eRot = relRotTarget.map((v, i) => (v || 0) - signRot * (relRotNow[i] || 0));
+            let eHand1Rot = [];
+            let eHand2Rot = [];
+            if (distanceKeepHandOrientation) {
+                const pose1Now = this._getHumanoidPose1(q);
+                const pose2Now = this._getHumanoidPose2(q);
+                if (!pose1Now || !pose2Now) {
+                    stopReason = 'fk_fail';
+                    break;
+                }
+                const hand1RotNow = pose1Now.slice(0, 4);
+                const hand2RotNow = pose2Now.slice(0, 4);
+                let dotHand1 = 0;
+                let dotHand2 = 0;
+                for (let i = 0; i < 4; i++) {
+                    dotHand1 += (hand1RotTarget[i] || 0) * (hand1RotNow[i] || 0);
+                    dotHand2 += (hand2RotTarget[i] || 0) * (hand2RotNow[i] || 0);
+                }
+                const signHand1 = dotHand1 < 0 ? -1 : 1;
+                const signHand2 = dotHand2 < 0 ? -1 : 1;
+                eHand1Rot = hand1RotTarget.map((v, i) => (v || 0) - signHand1 * (hand1RotNow[i] || 0));
+                eHand2Rot = hand2RotTarget.map((v, i) => (v || 0) - signHand2 * (hand2RotNow[i] || 0));
+            }
+            const eInvariant = [...eAbs];
+            if (distanceKeepRelativeRotation) eInvariant.push(...eRot);
+            if (distanceKeepHandOrientation) eInvariant.push(...eHand1Rot, ...eHand2Rot);
+            lastInvariantNorm = Math.sqrt(eInvariant.reduce((s, v) => s + v * v, 0));
+
+            const tNow = DQ.getTranslation(DQ.createFromArray(relNow));
+            const d2Now = (tNow[1] || 0) ** 2 + (tNow[2] || 0) ** 2 + (tNow[3] || 0) ** 2;
+            const eCmd = [d2Target - d2Now];
+            lastCmdNorm = Math.abs(eCmd[0]);
+            if (!Number.isFinite(initialCmdNorm)) initialCmdNorm = lastCmdNorm;
+            if (lastCmdNorm < hardCmdTol && lastInvariantNorm < hardInvariantTol) {
+                stopReason = 'converged';
+                break;
+            }
+
+            const branchSelection = this._selectHumanoidTaskEquivalentBranch({
+                qCurrent: q,
+                memoryKey: `distance-target|w:${includeWaist ? 1 : 0}`,
+                includeWaist,
+                hardLimits,
+                enableJointLimitAvoidance,
+                buildStepProblem: (qCandidate) => {
+                    const absBranch = this._getHumanoidAbsolutePose(qCandidate);
+                    const relBranch = this._getHumanoidRelativePose(qCandidate);
+                    if (!absBranch || !relBranch) return null;
+
+                    const JabsFullBranch = this._getHumanoidAbsolutePoseJacobian(qCandidate);
+                    const JrelFullBranch = this._getHumanoidRelativePoseJacobian(qCandidate);
+                    if (!JabsFullBranch || !JrelFullBranch) return null;
+
+                    const eAbsBranch = this._signedPoseError(absCurrentArray, absBranch);
+                    const relRotBranch = relBranch.slice(0, 4);
+                    let dotRelRot = 0;
+                    for (let i = 0; i < 4; i++) dotRelRot += (relRotTarget[i] || 0) * (relRotBranch[i] || 0);
+                    const signRelRot = dotRelRot < 0 ? -1 : 1;
+                    const eRotBranch = relRotTarget.map((value, index) => (value || 0) - signRelRot * (relRotBranch[index] || 0));
+
+                    let eHand1RotBranch = [];
+                    let eHand2RotBranch = [];
+                    let Jhand1Rot = [];
+                    let Jhand2Rot = [];
+                    if (distanceKeepHandOrientation) {
+                        const pose1Branch = this._getHumanoidPose1(qCandidate);
+                        const pose2Branch = this._getHumanoidPose2(qCandidate);
+                        if (!pose1Branch || !pose2Branch) return null;
+
+                        const hand1RotBranch = pose1Branch.slice(0, 4);
+                        const hand2RotBranch = pose2Branch.slice(0, 4);
+                        let dotHand1 = 0;
+                        let dotHand2 = 0;
+                        for (let i = 0; i < 4; i++) {
+                            dotHand1 += (hand1RotTarget[i] || 0) * (hand1RotBranch[i] || 0);
+                            dotHand2 += (hand2RotTarget[i] || 0) * (hand2RotBranch[i] || 0);
+                        }
+                        const signHand1 = dotHand1 < 0 ? -1 : 1;
+                        const signHand2 = dotHand2 < 0 ? -1 : 1;
+                        eHand1RotBranch = hand1RotTarget.map((value, index) => (value || 0) - signHand1 * (hand1RotBranch[index] || 0));
+                        eHand2RotBranch = hand2RotTarget.map((value, index) => (value || 0) - signHand2 * (hand2RotBranch[index] || 0));
+
+                        const Jpose1Full = this._getHumanoidSingleArmPoseJacobian(qCandidate, 1) || this._getHumanoidPose1Jacobian(qCandidate);
+                        const Jpose2Full = this._getHumanoidSingleArmPoseJacobian(qCandidate, 2) || this._getHumanoidPose2Jacobian(qCandidate);
+                        if (!Jpose1Full || !Jpose2Full) return null;
+                        Jhand1Rot = Jpose1Full.slice(0, 4).map((row) => extractActiveColumns(row));
+                        Jhand2Rot = Jpose2Full.slice(0, 4).map((row) => extractActiveColumns(row));
+                    }
+
+                    const tBranch = DQ.getTranslation(DQ.createFromArray(relBranch));
+                    const d2Branch = (tBranch[1] || 0) ** 2 + (tBranch[2] || 0) ** 2 + (tBranch[3] || 0) ** 2;
+                    const eCmdBranch = [d2Target - d2Branch];
+
+                    const Jd2FullBranch = Kinematics.distanceJacobian(JrelFullBranch, relBranch);
+                    const Jd2RowBranch = Array.isArray(Jd2FullBranch) && Array.isArray(Jd2FullBranch[0]) ? Jd2FullBranch[0] : null;
+                    if (!Jd2RowBranch) return null;
+
+                    const Jinvariant = [
+                        ...JabsFullBranch.map((row) => extractActiveColumns(row))
+                    ];
+                    if (distanceKeepRelativeRotation) {
+                        Jinvariant.push(...JrelFullBranch.slice(0, 4).map((row) => extractActiveColumns(row)));
+                    }
+                    if (distanceKeepHandOrientation) {
+                        Jinvariant.push(...Jhand1Rot, ...Jhand2Rot);
+                    }
+                    const eInvariantBranch = [...eAbsBranch];
+                    if (distanceKeepRelativeRotation) eInvariantBranch.push(...eRotBranch);
+                    if (distanceKeepHandOrientation) eInvariantBranch.push(...eHand1RotBranch, ...eHand2RotBranch);
+
+                    const qActiveBranch = qCandidate.slice(armStart, armStart + activeCount);
+                    const stepResult = this._solveVFICommandStep({
+                        Jcmd: [extractActiveColumns(Jd2RowBranch)],
+                        eCmd: eCmdBranch,
+                        Jinvariant,
+                        eInvariant: eInvariantBranch,
+                        qActive: qActiveBranch,
+                        activeLimits: softLimits,
+                        maxStep,
+                        damping,
+                        forceInvariantEquality: distanceUseInvariantEquality,
+                        invariantKappaOverride: distanceInvariantKappa,
+                        invariantBandBaseOverride: distanceInvariantBandBase,
+                        invariantBandGainOverride: distanceInvariantBandGain,
+                        invariantSoftWeightOverride: distanceInvariantSoftWeight
+                    });
+                    if (!stepResult || !Array.isArray(stepResult.dq)) return null;
+
+                    return {
+                        stepResult,
+                        commandNorm: Math.abs(eCmdBranch[0] || 0),
+                        invariantNorm: Math.sqrt(eInvariantBranch.reduce((sum, value) => sum + value * value, 0))
+                    };
+                }
+            });
+            if (!branchSelection?.selected) {
+                stopReason = 'solver_fail';
+                break;
+            }
+            lastBranchSelection = branchSelection;
+            const { selected } = branchSelection;
+            const stats = selected.stats;
+            if (stats) lastStats = stats;
+            lastCmdNorm = selected.commandNorm;
+            lastInvariantNorm = selected.invariantNorm;
+            if (stepBackend === 'qp' && stats?.qpConverged === false) {
+                stopReason = 'qp_not_converged';
+                break;
+            }
+            const practicalConverged = (
+                Number.isFinite(lastCmdNorm) &&
+                lastCmdNorm <= practicalCmdTol &&
+                Number.isFinite(lastInvariantNorm) &&
+                lastInvariantNorm <= practicalInvariantTol &&
+                Number.isFinite(stats?.stepNorm) &&
+                stats.stepNorm <= practicalStepTol &&
+                Number.isFinite(stats?.maxViolationAfter) &&
+                stats.maxViolationAfter <= practicalViolationTol
+            );
+
+            q = [...selected.qAfter];
+            executedIterations = iter + 1;
+            if (practicalConverged) {
+                stopReason = 'practical_converged';
+                break;
+            }
+        }
+        if (stopReason === 'max_iter' && stepBackend === 'qp' && maxIter <= 1) {
+            stopReason = 'single_step';
+        }
+        let finalCmdNorm = Number.NaN;
+        if (stepBackend === 'qp') {
+            const relEnd = this._getHumanoidRelativePose(q);
+            if (relEnd) {
+                const tEnd = DQ.getTranslation(DQ.createFromArray(relEnd));
+                const d2End = (tEnd[1] || 0) ** 2 + (tEnd[2] || 0) ** 2 + (tEnd[3] || 0) ** 2;
+                finalCmdNorm = Math.abs(d2Target - d2End);
+            }
+        }
+        if (stepBackend === 'qp' && this._shouldFailForQPMismatch({
+            stopReason,
+            finalCmdNorm,
+            initialCmdNorm
+        }, cfg)) {
+            stopReason = 'command_mismatch';
+        }
+        if (stopReason === 'qp_not_converged' || stopReason === 'command_mismatch') {
+            q = [...qInitial];
+            this._notifyHumanoidJogUnreachable('无法到达该位置');
+        }
+        const messageMap = {
+            converged: '距离误差已收敛。',
+            practical_converged: '距离任务达到实用收敛阈值。',
+            single_step: 'QP 单步更新完成。',
+            qp_not_converged: '无法到达该位置（QP未收敛）。',
+            command_mismatch: '无法到达该位置（目标未达成）。',
+            max_iter: '达到最大迭代次数。',
+            fk_fail: '姿态计算失败，提前终止。',
+            jacobian_fail: '雅可比计算失败，提前终止。',
+            solver_fail: 'VFI 步进求解失败。'
+        };
+        this._publishHumanoidJogDiagnostics({
+            solverMode: 'vfi',
+            modeTag: 'distance-target',
+            active: true,
+            message: messageMap[stopReason] || 'VFI 已执行。',
+            iterations: executedIterations,
+            activeJoints: activeCount,
+            stepBackend: lastStats?.stepBackend || this._getHumanoidVFIStepBackend(),
+            commandRows: lastStats?.commandRows,
+            invariantRows: lastStats?.invariantRows,
+            constraintRows: lastStats?.constraintRows,
+            invariantConstraintRows: lastStats?.invariantConstraintRows,
+            equalityRows: lastStats?.equalityRows,
+            componentRows: lastStats?.componentRows,
+            jointLimitRows: lastStats?.jointLimitRows,
+            commandError: Number.isFinite(finalCmdNorm) ? finalCmdNorm : lastCmdNorm,
+            invariantError: lastInvariantNorm,
+            stepNorm: lastStats?.stepNorm,
+            cmdTargetNorm: lastStats?.cmdTargetNorm,
+            cmdAchievedNorm: lastStats?.cmdAchievedNorm,
+            cmdResidualNorm: lastStats?.cmdResidualNorm,
+            cmdAlignment: lastStats?.cmdAlignment,
+            cmdTargetFirst: lastStats?.cmdTargetFirst,
+            cmdAchievedFirst: lastStats?.cmdAchievedFirst,
+            maxViolationBefore: lastStats?.maxViolationBefore,
+            maxViolationAfter: lastStats?.maxViolationAfter,
+            qpIterations: lastStats?.qpIterations,
+            qpConverged: lastStats?.qpConverged,
+            qpObjective: lastStats?.qpObjective,
+            qpMessage: lastStats?.qpMessage,
+            taskEquivalentBranching: lastBranchSelection?.branchingEnabled ?? this._isHumanoidTaskEquivalentBranchingEnabled(),
+            branchCount: lastBranchSelection?.branchCount,
+            branchCandidateCount: lastBranchSelection?.candidateCount,
+            branchProjectedCount: lastBranchSelection?.projectedCount,
+            branchSelectedLabel: lastBranchSelection?.selected?.branchLabel,
+            branchSelectedMargin: lastBranchSelection?.selected?.minJointMarginRatio,
+            branchSwitched: lastBranchSelection?.branchSwitched,
+            branchKeptByHysteresis: lastBranchSelection?.branchKeptByHysteresis,
+            branchHoldStepsRemaining: lastBranchSelection?.branchState?.holdStepsRemaining,
+            branchCandidateSummaryLines: this._summarizeHumanoidBranchSelection(lastBranchSelection),
+            includeWaist,
+            jointLimitAvoidance: enableJointLimitAvoidance
+        });
+        this.lastIKSolveStatus = {
+            solver: 'vfi',
+            mode: 'humanoid_distance',
+            converged: stopReason === 'converged' || stopReason === 'practical_converged' || stopReason === 'single_step',
+            reason: stopReason,
+            message: messageMap[stopReason] || 'VFI 已执行。',
+            finalResidual: Number.isFinite(finalCmdNorm) ? finalCmdNorm : lastCmdNorm,
+            invariantResidual: lastInvariantNorm,
+            qpConverged: lastStats?.qpConverged,
+            qpMessage: lastStats?.qpMessage
+        };
+
+        for (let i = 0; i < window.humanoidQ.length && i < q.length; i++) {
+            window.humanoidQ[i] = q[i];
+        }
+        if (window.clampJointAngles && this.humanoidURDF && window.customRobotConfig) {
+            const clamped = window.clampJointAngles(q, this.humanoidJointNames || [], this.humanoidURDF, window.customRobotConfig);
+            for (let i = 0; i < window.humanoidQ.length && i < clamped.length; i++) {
+                window.humanoidQ[i] = clamped[i];
+            }
+        }
+        this.setHumanoidJoints(window.humanoidQ);
+        if (window.updateGlobalVariables) window.updateGlobalVariables();
+        if (window.updateRobotPose) window.updateRobotPose();
+        return true;
+    }
+
     updateHumanoidJointsFromRelativeDistanceDelta(deltaDistance, currentQ, enableJointLimitAvoidance = true, includeWaist = false) {
+        if (this._isHumanoidVFISolverEnabled()) {
+            return this._updateHumanoidJointsFromRelativeDistanceDeltaVFI(
+                deltaDistance,
+                currentQ,
+                enableJointLimitAvoidance,
+                includeWaist
+            );
+        }
+        this._publishHumanoidJogDiagnostics({
+            solverMode: 'priority',
+            modeTag: 'distance-target',
+            active: false,
+            message: '当前为 Priority 后端，VFI 约束诊断暂停。',
+            includeWaist,
+            jointLimitAvoidance: enableJointLimitAvoidance
+        });
         if (!this.humanoidModel || !window.humanoidQ || !currentQ || currentQ.length === 0) return false;
         const DQ = window.DQModule?.DQWrapper;
         if (!DQ || !window.DQModule?.Kinematics?.distanceJacobian) return false;
@@ -6015,9 +8138,18 @@ export class RobotVisualizer {
         const dStart = Math.sqrt((tStart[1] || 0) ** 2 + (tStart[2] || 0) ** 2 + (tStart[3] || 0) ** 2);
         const dTarget = Math.max(0.01, dStart + deltaDistance);  // 最小距离0.01m防止奇异
         const d2Target = dTarget * dTarget;
-        
+
         // 获取关节限位
         const jointLimits = this._getHumanoidJointLimits();
+        const cfg = this.vfiConfig || {};
+        const hardCmdTol = Number.isFinite(cfg.hardCommandTolDistanceSq) ? cfg.hardCommandTolDistanceSq : 1e-8;
+        const hardInvariantTol = Number.isFinite(cfg.hardInvariantTol) ? cfg.hardInvariantTol : 5e-5;
+        const practicalCmdTol = Number.isFinite(cfg.practicalCommandTolDistanceSq) ? cfg.practicalCommandTolDistanceSq : 1e-5;
+        const practicalInvariantTol = Number.isFinite(cfg.practicalInvariantTol) ? cfg.practicalInvariantTol : 2.5e-4;
+        const mismatchTol = Number.isFinite(cfg.qpMismatchTol) ? cfg.qpMismatchTol : 1e-3;
+        const mismatchRequiredReduction = Number.isFinite(cfg.qpMismatchRequiredReduction) ? cfg.qpMismatchRequiredReduction : 0.8;
+        const vectorNorm = (values) => Math.sqrt((Array.isArray(values) ? values : []).reduce((sum, value) => sum + (value || 0) * (value || 0), 0));
+        const initialCmdNorm = Math.abs(d2Target - dStart * dStart);
         
         // 增益参数
         const kappa1 = 0.2;     // 任务1增益（绝对位姿+相对姿态保持 - 最高优先级）
@@ -6032,13 +8164,18 @@ export class RobotVisualizer {
         const damping = 0.00001;
         const maxStep = 0.003;
         
-        let q = [...currentQ];
+        const qInitial = [...currentQ];
+        let q = [...qInitial];
+        let stopReason = 'max_iter';
         
         for (let iter = 0; iter < maxIter; iter++) {
             // === 计算任务1误差：绝对位姿 + 相对姿态保持（最高优先级）===
             const absNow = this._getHumanoidAbsolutePose(q);
             const relNow = this._getHumanoidRelativePose(q);
-            if (!absNow || !relNow) break;
+            if (!absNow || !relNow) {
+                stopReason = 'fk_fail';
+                break;
+            }
             
             // 处理DQ双覆盖 - 绝对位姿
             let dotAbs = 0;
@@ -6076,6 +8213,7 @@ export class RobotVisualizer {
             
             // 收敛检查
             if (e1Norm2 < tol && e2Norm2 < tol) {
+                stopReason = 'converged';
                 break;
             }
             
@@ -6087,7 +8225,10 @@ export class RobotVisualizer {
             // J1: 绝对位姿雅可比(8行) + 相对姿态雅可比(4行) = 12 x activeCount
             const JabsFull = this._getHumanoidAbsolutePoseJacobian(q);
             const JrelFull = this._getHumanoidRelativePoseJacobian(q);
-            if (!JabsFull || !JrelFull) break;
+            if (!JabsFull || !JrelFull) {
+                stopReason = 'jacobian_fail';
+                break;
+            }
             
             const J1 = [];
             // 添加绝对位姿雅可比 (8行)
@@ -6102,7 +8243,10 @@ export class RobotVisualizer {
             // J2: 距离雅可比 (1 x activeCount)
             const Jd2Full = window.DQModule.Kinematics.distanceJacobian(JrelFull, relNow);
             const jacobianD2Row = Array.isArray(Jd2Full) && Jd2Full[0] ? [...Jd2Full[0]] : null;
-            if (!jacobianD2Row) break;
+            if (!jacobianD2Row) {
+                stopReason = 'jacobian_fail';
+                break;
+            }
             const J2 = [jacobianD2Row.slice(armStart, armStart + activeCount)];
             
             // === 计算关节权重矩阵 W ===
@@ -6114,7 +8258,10 @@ export class RobotVisualizer {
             
             // === 计算任务1（绝对位姿+相对姿态）的加权伪逆和零空间投影 ===
             const J1Pinv = this._weightedDampedPseudoInverse(J1, W, damping);
-            if (!J1Pinv) break;
+            if (!J1Pinv) {
+                stopReason = 'jacobian_fail';
+                break;
+            }
             
             // P1 = I - J1_pinv * J1
             const P1 = this._computeNullspaceProjection(J1Pinv, J1, activeCount);
@@ -6123,7 +8270,10 @@ export class RobotVisualizer {
             // J2_bar = J2 * P1
             const J2Bar = this._matMul(J2, P1);
             const J2BarPinv = this._weightedDampedPseudoInverse(J2Bar, W, damping);
-            if (!J2BarPinv) break;
+            if (!J2BarPinv) {
+                stopReason = 'jacobian_fail';
+                break;
+            }
             
             // === 计算增广雅可比的零空间投影 P12 ===
             const P12 = this._computeNullspaceProjection2(P1, J2BarPinv, J2Bar, activeCount);
@@ -6181,13 +8331,74 @@ export class RobotVisualizer {
                 }
             }
         }
-        
+
+        const absEndArray = this._getHumanoidAbsolutePose(q);
+        const relEndArray = this._getHumanoidRelativePose(q);
+        const finalCmdNorm = relEndArray
+            ? Math.abs(d2Target - (() => {
+                const tEnd = DQ.getTranslation(DQ.createFromArray(relEndArray));
+                return (tEnd[1] || 0) ** 2 + (tEnd[2] || 0) ** 2 + (tEnd[3] || 0) ** 2;
+            })())
+            : Number.POSITIVE_INFINITY;
+        const finalInvariantNorm = (() => {
+            const invariantTerms = [];
+            if (absEndArray) {
+                invariantTerms.push(...this._signedPoseError(absCurrentArray, absEndArray));
+            }
+            if (relEndArray) {
+                const relRotEnd = relEndArray.slice(0, 4);
+                let dotRotEnd = 0;
+                for (let i = 0; i < 4; i++) dotRotEnd += (relRotTarget[i] || 0) * (relRotEnd[i] || 0);
+                const signRotEnd = dotRotEnd < 0 ? -1 : 1;
+                for (let i = 0; i < 4; i++) {
+                    invariantTerms.push((relRotTarget[i] || 0) - signRotEnd * (relRotEnd[i] || 0));
+                }
+            }
+            return vectorNorm(invariantTerms);
+        })();
+        const messageMap = {
+            converged: '距离误差已收敛。',
+            practical_converged: '距离任务达到实用收敛阈值。',
+            command_mismatch: '无法到达该位置（目标未达成）。',
+            max_iter: '达到最大迭代次数。',
+            fk_fail: '姿态计算失败，提前终止。',
+            jacobian_fail: '雅可比计算失败，提前终止。'
+        };
+        const resolved = resolveHumanoidJogCommandResult({
+            stopReason,
+            initialCommandNorm: initialCmdNorm,
+            finalCommandNorm: finalCmdNorm,
+            finalInvariantNorm,
+            hardCommandTol: hardCmdTol,
+            hardInvariantTol: hardInvariantTol,
+            practicalCommandTol: practicalCmdTol,
+            practicalInvariantTol: practicalInvariantTol,
+            mismatchTol,
+            mismatchRequiredReduction,
+            q,
+            qInitial,
+            messageMap,
+            defaultMessage: 'Priority 已执行。'
+        });
+        if (resolved.outcome.reason === 'command_mismatch') {
+            this._notifyHumanoidJogUnreachable('无法到达该位置');
+        }
+        this.lastIKSolveStatus = {
+            solver: 'priority',
+            mode: 'humanoid_distance',
+            converged: resolved.outcome.converged,
+            reason: resolved.outcome.reason,
+            message: resolved.message,
+            finalResidual: finalCmdNorm,
+            invariantResidual: finalInvariantNorm
+        };
+
         // 更新
-        for (let i = 0; i < window.humanoidQ.length && i < q.length; i++) {
-            window.humanoidQ[i] = q[i];
+        for (let i = 0; i < window.humanoidQ.length && i < resolved.qApplied.length; i++) {
+            window.humanoidQ[i] = resolved.qApplied[i];
         }
         if (window.clampJointAngles && this.humanoidURDF && window.customRobotConfig) {
-            const clamped = window.clampJointAngles(q, this.humanoidJointNames || [], this.humanoidURDF, window.customRobotConfig);
+            const clamped = window.clampJointAngles(resolved.qApplied, this.humanoidJointNames || [], this.humanoidURDF, window.customRobotConfig);
             for (let i = 0; i < window.humanoidQ.length && i < clamped.length; i++) {
                 window.humanoidQ[i] = clamped[i];
             }
@@ -6660,6 +8871,92 @@ export class RobotVisualizer {
             return null;
         }
     }
+
+    _humanoidFullQFromSingleArm(currentQ, xArm, armIndex, includeWaist = false) {
+        const q = [...currentQ];
+        const activeIndices = this._humanoidSingleArmActiveIndices(armIndex, includeWaist);
+        for (let i = 0; i < activeIndices.length && i < xArm.length; i++) {
+            q[activeIndices[i]] = xArm[i];
+        }
+        return q;
+    }
+
+    updateHumanoidSingleArmPoseTargetLBFGS(dqTargetArray, currentQ, armIndex, includeWaist = false) {
+        if (!this.humanoidModel || !window.humanoidQ || !currentQ || currentQ.length === 0) {
+            return this._setIKFailureStatus({ solver: 'lbfgs', mode: `humanoid_arm_${armIndex}`, reason: 'invalid_state', message: '人形状态未初始化。' });
+        }
+
+        const getPose = armIndex === 1
+            ? (q) => this._getHumanoidPose1(q)
+            : (q) => this._getHumanoidPose2(q);
+        const JfullGetter = (q) => this._getHumanoidSingleArmPoseJacobian(q, armIndex);
+        const activeIndices = this._humanoidSingleArmActiveIndices(armIndex, includeWaist);
+        if (activeIndices.length === 0) {
+            return this._setIKFailureStatus({ solver: 'lbfgs', mode: `humanoid_arm_${armIndex}`, reason: 'no_active_joints', message: '当前单臂没有可用活动关节。' });
+        }
+
+        const x0 = activeIndices.map((idx) => currentQ[idx]);
+        const poseTol = 1e-4;
+        const f = (x) => {
+            const q = this._humanoidFullQFromSingleArm(currentQ, x, armIndex, includeWaist);
+            const pose = getPose(q);
+            if (!pose) return 1e10;
+            let sum = 0;
+            for (let i = 0; i < 8; i++) {
+                const e = (pose[i] || 0) - (dqTargetArray[i] || 0);
+                sum += e * e;
+            }
+            return 0.5 * sum;
+        };
+        const grad = (x, out) => {
+            const q = this._humanoidFullQFromSingleArm(currentQ, x, armIndex, includeWaist);
+            const pose = getPose(q);
+            const Jfull = JfullGetter(q);
+            if (!pose || !Jfull || Jfull.length !== 8) {
+                for (let i = 0; i < out.length; i++) out[i] = 0;
+                return;
+            }
+            for (let i = 0; i < activeIndices.length; i++) {
+                let s = 0;
+                const jointCol = activeIndices[i];
+                for (let j = 0; j < 8; j++) {
+                    s += (Jfull[j][jointCol] || 0) * ((pose[j] || 0) - (dqTargetArray[j] || 0));
+                }
+                out[i] = s;
+            }
+        };
+
+        const result = this.minimizeLBFGS(f, grad, x0, {
+            maxIter: 120,
+            gradTol: 1e-8,
+            costTol: 0.5 * poseTol * poseTol,
+            m: 10
+        });
+
+        const qSol = this._humanoidFullQFromSingleArm(currentQ, result.x, armIndex, includeWaist);
+        for (let i = 0; i < window.humanoidQ.length && i < qSol.length; i++) {
+            window.humanoidQ[i] = qSol[i];
+        }
+        if (window.clampJointAngles && window.customRobotConfig && this.humanoidURDF) {
+            const names = this.humanoidJointNames || [];
+            const clamped = window.clampJointAngles(qSol, names, this.humanoidURDF, window.customRobotConfig);
+            for (let i = 0; i < window.humanoidQ.length && i < clamped.length; i++) {
+                window.humanoidQ[i] = clamped[i];
+            }
+        }
+        this.setHumanoidJoints(window.humanoidQ);
+        if (window.updateGlobalVariables) window.updateGlobalVariables();
+        if (window.updateRobotPose) window.updateRobotPose();
+
+        const finalResidual = this._computeArrayResidualNorm(getPose(window.humanoidQ), dqTargetArray);
+        this.lastIKSolveStatus = {
+            solver: 'lbfgs',
+            mode: `humanoid_arm_${armIndex}`,
+            ...result,
+            finalResidual
+        };
+        return result.converged || finalResidual <= poseTol;
+    }
     
     /**
      * 人形机器人单臂位姿控制（仅移动指定手臂，其他关节固定）
@@ -6695,7 +8992,6 @@ export class RobotVisualizer {
             console.warn('单臂+腰部控制：未启用 body_link z 轴竖直约束（缺少 Kinematics.lineJacobian 或腰部接口）');
             this._missingSingleArmBodyZConstraintWarned = true;
         }
-        const bodyZLineDirection = [0, 0, 0, 1, 0, 0, 0, 0];
         
         let q = [...currentQ];
         
@@ -6730,27 +9026,17 @@ export class RobotVisualizer {
             let bodyErrNorm = 0;
             let errStack = err.slice();
             if (enableBodyVerticalTask) {
-                const waistPose = this.humanoidModel.fkmEffector(q, 0);
-                const JWaistFull = this.humanoidModel.poseJacobianEffector(q, 0);
-                if (!waistPose || !JWaistFull) return false;
-                const JLineFull = Kinematics.lineJacobian(JWaistFull, waistPose, bodyZLineDirection);
-                if (!Array.isArray(JLineFull) || JLineFull.length < 3) return false;
+                const bodyState = this._getHumanoidBodyVerticalState(q, 0, currentQ.length);
+                if (!bodyState) return false;
+                bodyErrNorm = bodyState.errorNorm || 0;
+                errStack.push(kappaBodyZ * (bodyState.error[0] || 0));
 
-                const waistPoseDQ = DQ.createFromArray(waistPose);
-                const rotMat = DQ.getRotationMatrix(waistPoseDQ);
-                const ex = -(rotMat?.[0]?.[2] ?? 0);
-                const ey = -(rotMat?.[1]?.[2] ?? 0);
-                bodyErrNorm = Math.hypot(ex, ey);
-                errStack.push(kappaBodyZ * ex, kappaBodyZ * ey);
-
-                const jBodyX = [];
-                const jBodyY = [];
+                const jBody = [];
                 for (let j = 0; j < activeCount; j++) {
                     const qIdx = activeIndices[j];
-                    jBodyX.push((JLineFull[1]?.[qIdx] || 0) * kappaBodyZ);
-                    jBodyY.push((JLineFull[2]?.[qIdx] || 0) * kappaBodyZ);
+                    jBody.push((bodyState.Jrows[0]?.[qIdx] || 0) * kappaBodyZ);
                 }
-                Jactive.push(jBodyX, jBodyY);
+                Jactive.push(jBody);
             }
 
             const armErrNorm = Math.sqrt(err.reduce((s, e) => s + e * e, 0));
@@ -7446,6 +9732,7 @@ export class RobotVisualizer {
         if (!window.robot1 || !window.jointAngles1 || window.jointAngles1.length === 0) return false;
         const robot = window.robot1;
         const target = dqTargetArray;
+        const poseTol = 1e-4;
         const f = (q) => {
             const pose = robot.fkm(q);
             let sum = 0;
@@ -7464,7 +9751,13 @@ export class RobotVisualizer {
                 out[i] = s;
             }
         };
-        const { x, converged } = this.minimizeLBFGS(f, grad, [...window.jointAngles1], { maxIter: 80, tol: 1e-12, m: 10 });
+        const result = this.minimizeLBFGS(f, grad, [...window.jointAngles1], {
+            maxIter: 120,
+            gradTol: 1e-8,
+            costTol: 0.5 * poseTol * poseTol,
+            m: 10
+        });
+        const { x, converged } = result;
         for (let i = 0; i < window.jointAngles1.length && i < x.length; i++) window.jointAngles1[i] = x[i];
         if (window.customRobotConfig?.robot1 && window.clampJointAngles) {
             const names = window.customRobotConfig.robot1.joint_chain?.joints || [];
@@ -7473,7 +9766,12 @@ export class RobotVisualizer {
         }
         if (window.updateGlobalVariables) window.updateGlobalVariables();
         if (window.updateRobotPose) window.updateRobotPose();
-        return converged;
+        this.lastIKSolveStatus = {
+            solver: 'lbfgs',
+            ...result,
+            finalResidual: this._computePoseResidualNorm(robot, window.jointAngles1, target)
+        };
+        return converged || this.lastIKSolveStatus.finalResidual <= poseTol;
     }
     
     /**
@@ -7547,6 +9845,7 @@ export class RobotVisualizer {
         if (!window.robot2 || !window.jointAngles2 || window.jointAngles2.length === 0) return false;
         const robot = window.robot2;
         const target = dqTargetArray;
+        const poseTol = 1e-4;
         const f = (q) => {
             const pose = robot.fkm(q);
             let sum = 0;
@@ -7565,7 +9864,13 @@ export class RobotVisualizer {
                 out[i] = s;
             }
         };
-        const { x, converged } = this.minimizeLBFGS(f, grad, [...window.jointAngles2], { maxIter: 80, tol: 1e-12, m: 10 });
+        const result = this.minimizeLBFGS(f, grad, [...window.jointAngles2], {
+            maxIter: 120,
+            gradTol: 1e-8,
+            costTol: 0.5 * poseTol * poseTol,
+            m: 10
+        });
+        const { x, converged } = result;
         for (let i = 0; i < window.jointAngles2.length && i < x.length; i++) window.jointAngles2[i] = x[i];
         if (window.customRobotConfig?.robot2 && window.clampJointAngles) {
             const names = window.customRobotConfig.robot2.joint_chain?.joints || [];
@@ -7574,7 +9879,12 @@ export class RobotVisualizer {
         }
         if (window.updateGlobalVariables) window.updateGlobalVariables();
         if (window.updateRobotPose) window.updateRobotPose();
-        return converged;
+        this.lastIKSolveStatus = {
+            solver: 'lbfgs',
+            ...result,
+            finalResidual: this._computePoseResidualNorm(robot, window.jointAngles2, target)
+        };
+        return converged || this.lastIKSolveStatus.finalResidual <= poseTol;
     }
 
     /**
@@ -7647,6 +9957,7 @@ export class RobotVisualizer {
         }
         const robot = window.currentRobot;
         const target = dqTargetArray;
+        const poseTol = 1e-4;
         const f = (q) => {
             const pose = robot.fkm(q);
             let sum = 0;
@@ -7672,11 +9983,13 @@ export class RobotVisualizer {
                 out[i] = s;
             }
         };
-        const { x, converged } = this.minimizeLBFGS(f, grad, [...window.jointAngles], {
-            maxIter: 80,
-            tol: 1e-6,
+        const result = this.minimizeLBFGS(f, grad, [...window.jointAngles], {
+            maxIter: 120,
+            gradTol: 1e-8,
+            costTol: 0.5 * poseTol * poseTol,
             m: 10
         });
+        const { x, converged } = result;
         for (let i = 0; i < window.jointAngles.length && i < x.length; i++) {
             window.jointAngles[i] = x[i];
         }
@@ -7695,7 +10008,12 @@ export class RobotVisualizer {
         }
         if (window.updateGlobalVariables) window.updateGlobalVariables();
         if (window.updateRobotPose) window.updateRobotPose();
-        return converged;
+        this.lastIKSolveStatus = {
+            solver: 'lbfgs',
+            ...result,
+            finalResidual: this._computePoseResidualNorm(robot, window.jointAngles, target)
+        };
+        return converged || this.lastIKSolveStatus.finalResidual <= poseTol;
     }
     
     /**
@@ -7859,103 +10177,25 @@ export class RobotVisualizer {
      * @returns {{ x: number[], converged: boolean, cost: number }}
      */
     minimizeLBFGS(f, grad, x0, options = {}) {
-        const maxIter = options.maxIter ?? 100;
-        const tol = options.tol ?? 1e-6;
-        const m = options.m ?? 10;
-        const maxLineSearch = options.maxLineSearch ?? 20;
-        const c1 = 1e-4;
+        return minimizeLBFGS(f, grad, x0, options);
+    }
 
-        const n = x0.length;
-        const x = [...x0];
-        const g = new Array(n);
-        grad(x, g);
-        let cost = f(x);
-        const gNorm0 = Math.sqrt(g.reduce((s, v) => s + v * v, 0));
-        if (gNorm0 < tol) {
-            return { x, converged: true, cost };
+    _computePoseResidualNorm(robot, jointAngles, target) {
+        const pose = robot?.fkm?.(jointAngles);
+        if (!pose || pose.length !== target.length) return Number.POSITIVE_INFINITY;
+        return this._computeArrayResidualNorm(pose, target);
+    }
+
+    _computeArrayResidualNorm(actual, target) {
+        if (!Array.isArray(actual) || !Array.isArray(target) || actual.length !== target.length) {
+            return Number.POSITIVE_INFINITY;
         }
-
-        const sList = [];
-        const yList = [];
-        const rhoList = [];
-        const alphaList = new Array(m);
-        const q = new Array(n);
-        const d = new Array(n);
-
-        for (let iter = 0; iter < maxIter; iter++) {
-            const gNorm = Math.sqrt(g.reduce((s, v) => s + v * v, 0));
-            if (gNorm < tol) {
-                return { x, converged: true, cost };
-            }
-
-            // d = -H*g via two-loop L-BFGS
-            for (let i = 0; i < n; i++) q[i] = -g[i];
-            const k = sList.length;
-            for (let i = k - 1; i >= 0; i--) {
-                let sy = 0;
-                for (let j = 0; j < n; j++) sy += sList[i][j] * q[j];
-                alphaList[i] = rhoList[i] * sy;
-                for (let j = 0; j < n; j++) q[j] -= alphaList[i] * yList[i][j];
-            }
-            let H0 = 1;
-            if (k > 0) {
-                let yy = 0;
-                for (let j = 0; j < n; j++) yy += yList[k - 1][j] * yList[k - 1][j];
-                H0 = 0;
-                for (let j = 0; j < n; j++) H0 += sList[k - 1][j] * yList[k - 1][j];
-                H0 = H0 / (yy + 1e-14);
-            }
-            for (let j = 0; j < n; j++) d[j] = H0 * q[j];
-            for (let i = 0; i < k; i++) {
-                let beta = 0;
-                for (let j = 0; j < n; j++) beta += yList[i][j] * d[j];
-                beta = rhoList[i] * beta;
-                for (let j = 0; j < n; j++) d[j] += (alphaList[i] - beta) * sList[i][j];
-            }
-            for (let j = 0; j < n; j++) d[j] = -d[j];
-
-            let dg = 0;
-            for (let i = 0; i < n; i++) dg += g[i] * d[i];
-            if (dg >= 0) {
-                for (let i = 0; i < n; i++) d[i] = -g[i];
-                dg = 0;
-                for (let i = 0; i < n; i++) dg += g[i] * d[i];
-            }
-
-            let alpha = 1;
-            let xNew = new Array(n);
-            let costNew;
-            for (let ls = 0; ls < maxLineSearch; ls++) {
-                for (let i = 0; i < n; i++) xNew[i] = x[i] + alpha * d[i];
-                costNew = f(xNew);
-                if (costNew <= cost + c1 * alpha * dg) break;
-                alpha *= 0.5;
-            }
-            const gOld = [...g];
-            cost = costNew;
-            for (let i = 0; i < n; i++) x[i] = xNew[i];
-            grad(x, g);
-
-            const s = new Array(n);
-            const y = new Array(n);
-            for (let i = 0; i < n; i++) {
-                s[i] = alpha * d[i];
-                y[i] = g[i] - gOld[i];
-            }
-            let ys = 0;
-            for (let i = 0; i < n; i++) ys += y[i] * s[i];
-            if (ys > 1e-14) {
-                sList.push(s);
-                yList.push(y);
-                rhoList.push(1 / ys);
-                if (sList.length > m) {
-                    sList.shift();
-                    yList.shift();
-                    rhoList.shift();
-                }
-            }
+        let sum = 0;
+        for (let i = 0; i < target.length; i++) {
+            const delta = (actual[i] || 0) - (target[i] || 0);
+            sum += delta * delta;
         }
-        return { x, converged: false, cost };
+        return Math.sqrt(sum);
     }
 
     /**

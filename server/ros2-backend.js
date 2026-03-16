@@ -137,6 +137,10 @@ export function createROS2Server(port = 8081) {
                     await handlePublishRobotArmServoMsg(ws, data);
                     break;
 
+                case 'publishRobotServoMsg':
+                    await handlePublishRobotServoMsg(ws, data);
+                    break;
+
                 case 'getStatus':
                     ws.send(JSON.stringify({
                         type: 'status',
@@ -453,6 +457,30 @@ export function createROS2Server(port = 8081) {
             }));
         } else {
             throw new Error('发布机械臂控制消息失败');
+        }
+    }
+
+    async function handlePublishRobotServoMsg(ws, data) {
+        if (!ros2Communicator?.isInitialized) {
+            throw new Error('ROS 2 未初始化');
+        }
+
+        const { topicName, messageData } = data;
+
+        if (!topicName || !messageData) {
+            throw new Error('话题名称和消息数据不能为空');
+        }
+
+        const result = await ros2Communicator.publishRobotServoMsg(topicName, messageData);
+
+        if (result) {
+            ws.send(JSON.stringify({
+                type: 'published',
+                topic: topicName,
+                message: `腰部控制消息已发送到: ${topicName}`
+            }));
+        } else {
+            throw new Error('发布腰部控制消息失败');
         }
     }
 

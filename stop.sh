@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/bash
 
 # 停止脚本
 echo "正在停止服务..."
@@ -36,7 +36,7 @@ if [ -f /tmp/ros2_backend.pid ]; then
 else
     echo "ROS2 后端 PID 文件不存在，尝试通过名称查找进程..."
     # 尝试通过进程名查找并终止
-    PIDS=$(pgrep -f "python3 ros2-backend.py")
+    PIDS=$(pgrep -f "ros2-backend.py")
     if [ ! -z "$PIDS" ]; then
         echo "找到 ROS2 后端进程: $PIDS，正在终止..."
         kill $PIDS 2>/dev/null
