@@ -15,6 +15,7 @@ if(EMSCRIPTEN)
     # 添加 DQ Robotics 源目录
     set(DQROBOTICS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/dqrobotics-cpp)
     set(TOPPRA_CPP_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/toppra/cpp)
+    set(NLOPT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/nlopt)
     
     # 查找 Eigen3
     # 注意: 在 Emscripten 环境中，你需要确保 Eigen 可用
@@ -54,6 +55,27 @@ if(EMSCRIPTEN)
         message(STATUS "Configured TOPPRA C++ core from: ${TOPPRA_CPP_DIR}/src")
     else()
         message(WARNING "TOPPRA source not found at ${TOPPRA_CPP_DIR}/src, building without TOPPRA")
+    endif()
+
+    set(HAS_NLOPT OFF)
+    if(EXISTS "${NLOPT_DIR}/CMakeLists.txt")
+        # 仅构建核心静态 NLopt 库，不启用语言绑定 / tests / shared libs。
+        set(NLOPT_CXX ON CACHE BOOL "Enable NLopt C++ routines" FORCE)
+        set(NLOPT_FORTRAN OFF CACHE BOOL "Enable NLopt Fortran support" FORCE)
+        set(NLOPT_PYTHON OFF CACHE BOOL "Build NLopt Python bindings" FORCE)
+        set(NLOPT_OCTAVE OFF CACHE BOOL "Build NLopt Octave bindings" FORCE)
+        set(NLOPT_MATLAB OFF CACHE BOOL "Build NLopt MATLAB bindings" FORCE)
+        set(NLOPT_GUILE OFF CACHE BOOL "Build NLopt Guile bindings" FORCE)
+        set(NLOPT_JAVA OFF CACHE BOOL "Build NLopt Java bindings" FORCE)
+        set(NLOPT_SWIG OFF CACHE BOOL "Use SWIG for NLopt bindings" FORCE)
+        set(NLOPT_TESTS OFF CACHE BOOL "Build NLopt tests" FORCE)
+        set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build third-party libraries as shared libraries" FORCE)
+
+        add_subdirectory(${NLOPT_DIR} ${CMAKE_BINARY_DIR}/nlopt_src)
+        set(HAS_NLOPT ON)
+        message(STATUS "Configured NLopt core from: ${NLOPT_DIR}")
+    else()
+        message(WARNING "NLopt source not found at ${NLOPT_DIR}, building without NLopt")
     endif()
     
     # 添加 DQ Robotics 库的源文件
@@ -95,6 +117,13 @@ if(EMSCRIPTEN)
     else()
         target_compile_definitions(dqrobotics PRIVATE TOPPRA_AVAILABLE=0)
     endif()
+
+    if(HAS_NLOPT)
+        target_link_libraries(dqrobotics PRIVATE nlopt)
+        target_compile_definitions(dqrobotics PRIVATE NLOPT_AVAILABLE=1)
+    else()
+        target_compile_definitions(dqrobotics PRIVATE NLOPT_AVAILABLE=0)
+    endif()
     
     # Emscripten 链接标志
     set(EMSCRIPTEN_LINK_FLAGS
@@ -128,6 +157,7 @@ if(EMSCRIPTEN)
     message(STATUS "DQ Robotics directory: ${DQROBOTICS_DIR}")
     message(STATUS "Eigen3 include: ${EIGEN3_INCLUDE_DIR}")
     message(STATUS "TOPPRA enabled: ${HAS_TOPPRA}")
+    message(STATUS "NLopt enabled: ${HAS_NLOPT}")
     
 else()
     message(FATAL_ERROR "This project must be built with Emscripten")
