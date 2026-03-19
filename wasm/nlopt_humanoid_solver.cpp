@@ -2,10 +2,16 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <unordered_set>
 #include <vector>
+
+#include <Eigen/Dense>
+#include <dqrobotics/DQ.h>
+#include <dqrobotics/robot_modeling/DQ_HumanoidURDF.h>
 
 #if NLOPT_AVAILABLE
 #include <nlopt.hpp>
@@ -13,7 +19,16 @@
 
 namespace {
 
+using DQ_robotics::DQ;
+using DQ_robotics::DQ_HumanoidURDF;
+using DQ_robotics::conj;
+using DQ_robotics::hamiplus8;
+using Eigen::MatrixXd;
+using Eigen::SelfAdjointEigenSolver;
+using Eigen::VectorXd;
+
 constexpr double kBoundTolerance = 1e-12;
+constexpr double kConstraintGradientStep = 1e-6;
 
 bool isFiniteValue(double value) {
     return std::isfinite(value);
@@ -28,6 +43,22 @@ bool isFiniteVector(const std::vector<double>& values) {
     return true;
 }
 
+VectorXd toEigenVector(const std::vector<double>& values) {
+    VectorXd out(static_cast<Eigen::Index>(values.size()));
+    for (Eigen::Index i = 0; i < out.size(); ++i) {
+        out(i) = values[static_cast<std::size_t>(i)];
+    }
+    return out;
+}
+
+std::vector<double> toStdVector(const VectorXd& values) {
+    std::vector<double> out(static_cast<std::size_t>(values.size()), 0.0);
+    for (Eigen::Index i = 0; i < values.size(); ++i) {
+        out[static_cast<std::size_t>(i)] = values(i);
+    }
+    return out;
+}
+
 HumanoidAbsoluteNloptResult makeFailure(
     const HumanoidAbsoluteNloptRequest& request,
     const std::string& reason
@@ -39,6 +70,7 @@ HumanoidAbsoluteNloptResult makeFailure(
 }
 
 bool validateRequest(
+    const DQ_HumanoidURDF& robot,
     const HumanoidAbsoluteNloptRequest& request,
     std::string& reason
 ) {
@@ -47,12 +79,16 @@ bool validateRequest(
         reason = "q0 must not be empty";
         return false;
     }
-    if (request.absolute_target.empty()) {
-        reason = "absolute_target is required for the humanoid absolute-target solver";
+    if (static_cast<std::size_t>(robot.get_dim_configuration_space()) != dof) {
+        reason = "q0 size must match the humanoid robot configuration dimension";
         return false;
     }
-    if (request.relative_reference.empty()) {
-        reason = "relative_reference is required for the humanoid absolute-target solver";
+    if (request.absolute_target.size() != 8) {
+        reason = "absolute_target must be an 8-element dual quaternion";
+        return false;
+    }
+    if (request.relative_reference.size() != 8) {
+        reason = "relative_reference must be an 8-element dual quaternion";
         return false;
     }
     if (request.active_indices.empty()) {
@@ -78,6 +114,7 @@ bool validateRequest(
         !isFiniteValue(request.weight_absolute) ||
         !isFiniteValue(request.weight_relative) ||
         !isFiniteValue(request.weight_delta) ||
+        !isFiniteValue(request.joint_limit_activation_threshold) ||
         !isFiniteValue(request.xtol_rel) ||
         !isFiniteValue(request.ftol_rel)) {
         reason = "all scalar solver parameters must be finite";
@@ -91,6 +128,10 @@ bool validateRequest(
         request.weight_relative < 0.0 ||
         request.weight_delta < 0.0) {
         reason = "solver weights must be non-negative";
+        return false;
+    }
+    if (request.joint_limit_activation_threshold < 0.0) {
+        reason = "joint_limit_activation_threshold must be non-negative";
         return false;
     }
     if (request.max_eval <= 0) {
@@ -135,11 +176,12 @@ std::vector<double> buildActiveBounds(
     std::vector<double> bounds;
     bounds.reserve(request.active_indices.size());
     for (int index : request.active_indices) {
-        const double q0 = request.q0[static_cast<std::size_t>(index)];
-        const double step = request.step_bounds[static_cast<std::size_t>(index)];
+        const std::size_t joint_index = static_cast<std::size_t>(index);
+        const double q0 = request.q0[joint_index];
+        const double step = request.step_bounds[joint_index];
         const double joint_limit = lower
-            ? request.lower_bounds[static_cast<std::size_t>(index)]
-            : request.upper_bounds[static_cast<std::size_t>(index)];
+            ? request.lower_bounds[joint_index]
+            : request.upper_bounds[joint_index];
         const double step_limit = lower ? (q0 - step) : (q0 + step);
         bounds.push_back(lower
             ? std::max(joint_limit, step_limit)
@@ -180,50 +222,322 @@ bool validateEffectiveBounds(
     return true;
 }
 
-#if NLOPT_AVAILABLE
-struct ObjectiveContext {
-    std::vector<double> q0_active;
-    double weight_delta = 0.0;
+MatrixXd sliceActiveColumns(
+    const MatrixXd& jacobian,
+    const std::vector<int>& active_indices
+) {
+    MatrixXd sliced(jacobian.rows(), static_cast<Eigen::Index>(active_indices.size()));
+    for (std::size_t i = 0; i < active_indices.size(); ++i) {
+        sliced.col(static_cast<Eigen::Index>(i)) = jacobian.col(active_indices[i]);
+    }
+    return sliced;
+}
+
+VectorXd buildFullConfiguration(
+    const HumanoidAbsoluteNloptRequest& request,
+    const std::vector<double>& x
+) {
+    VectorXd q = toEigenVector(request.q0);
+    for (std::size_t i = 0; i < request.active_indices.size(); ++i) {
+        q(request.active_indices[i]) = x[i];
+    }
+    return q;
+}
+
+double signedAlignment(const VectorXd& target, const VectorXd& current) {
+    return target.dot(current) < 0.0 ? -1.0 : 1.0;
+}
+
+VectorXd signedPoseError(
+    const VectorXd& target,
+    const VectorXd& current,
+    double* sign_out = nullptr
+) {
+    const double sign = signedAlignment(target, current);
+    if (sign_out != nullptr) {
+        *sign_out = sign;
+    }
+    return target - sign * current;
+}
+
+MatrixXd computeTwistJacobian(
+    const MatrixXd& pose_jacobian,
+    const DQ& pose
+) {
+    const MatrixXd transformed = 2.0 * hamiplus8(conj(pose)) * pose_jacobian;
+    MatrixXd twist_jacobian(6, pose_jacobian.cols());
+    twist_jacobian.row(0) = transformed.row(1);
+    twist_jacobian.row(1) = transformed.row(2);
+    twist_jacobian.row(2) = transformed.row(3);
+    twist_jacobian.row(3) = transformed.row(5);
+    twist_jacobian.row(4) = transformed.row(6);
+    twist_jacobian.row(5) = transformed.row(7);
+    return twist_jacobian;
+}
+
+double nonNegativeDeterminant(const MatrixXd& matrix) {
+    if (matrix.rows() == 0 || matrix.cols() == 0) {
+        return 0.0;
+    }
+    const MatrixXd symmetric = 0.5 * (matrix + matrix.transpose());
+    SelfAdjointEigenSolver<MatrixXd> solver(symmetric);
+    if (solver.info() != Eigen::Success) {
+        return 0.0;
+    }
+
+    double determinant = 1.0;
+    const auto eigenvalues = solver.eigenvalues();
+    for (Eigen::Index i = 0; i < eigenvalues.size(); ++i) {
+        const double value = std::max(0.0, eigenvalues(i));
+        determinant *= value;
+        if (!std::isfinite(determinant)) {
+            return 0.0;
+        }
+    }
+    return determinant;
+}
+
+MatrixXd buildVFIAttenuationMatrix(
+    const std::vector<double>& q_active,
+    const std::vector<double>& joint_lower_bounds,
+    const std::vector<double>& joint_upper_bounds,
+    double activation_threshold
+) {
+    const Eigen::Index active_count = static_cast<Eigen::Index>(q_active.size());
+    MatrixXd attenuation = MatrixXd::Identity(active_count, active_count);
+    if (!(activation_threshold > 0.0)) {
+        return attenuation;
+    }
+
+    for (Eigen::Index i = 0; i < active_count; ++i) {
+        const double qi = q_active[static_cast<std::size_t>(i)];
+        const double d_up = std::max(0.0, joint_upper_bounds[static_cast<std::size_t>(i)] - qi);
+        const double d_lo = std::max(0.0, qi - joint_lower_bounds[static_cast<std::size_t>(i)]);
+        const double d_min = std::min(d_up, d_lo);
+        if (!std::isfinite(d_min) || d_min >= activation_threshold) {
+            continue;
+        }
+        const double omega = d_min / activation_threshold;
+        if (!(omega >= 0.0 && omega < 1.0)) {
+            continue;
+        }
+        attenuation(i, i) -= (1.0 - omega);
+    }
+
+    return attenuation;
+}
+
+struct Evaluation {
+    VectorXd q_full;
+    VectorXd absolute_error;
+    VectorXd relative_error;
+    MatrixXd absolute_pose_jacobian_active;
+    MatrixXd relative_pose_jacobian_active;
+    double absolute_sign = 1.0;
+    double relative_sign = 1.0;
+    double absolute_residual = std::numeric_limits<double>::infinity();
+    double relative_residual = std::numeric_limits<double>::infinity();
+    double cost = std::numeric_limits<double>::infinity();
+    double wvfi = 0.0;
 };
 
+struct ProblemContext {
+    const DQ_HumanoidURDF& robot;
+    const HumanoidAbsoluteNloptRequest& request;
+    VectorXd q0_full;
+    VectorXd absolute_target;
+    VectorXd relative_reference;
+    std::vector<double> x0_active;
+    std::vector<double> effective_lower_bounds;
+    std::vector<double> effective_upper_bounds;
+    std::vector<double> joint_lower_bounds_active;
+    std::vector<double> joint_upper_bounds_active;
+};
+
+Evaluation evaluateConfiguration(
+    const ProblemContext& context,
+    const std::vector<double>& x
+) {
+    Evaluation evaluation;
+    evaluation.q_full = buildFullConfiguration(context.request, x);
+
+    const DQ absolute_pose = context.robot.absolutePoseDualArm(evaluation.q_full);
+    const DQ relative_pose = context.robot.relativePoseDualArm(evaluation.q_full);
+    const VectorXd absolute_current = absolute_pose.q;
+    const VectorXd relative_current = relative_pose.q;
+
+    evaluation.absolute_error = signedPoseError(
+        context.absolute_target,
+        absolute_current,
+        &evaluation.absolute_sign
+    );
+    evaluation.relative_error = signedPoseError(
+        context.relative_reference,
+        relative_current,
+        &evaluation.relative_sign
+    );
+
+    evaluation.absolute_residual = evaluation.absolute_error.norm();
+    evaluation.relative_residual = evaluation.relative_error.norm();
+
+    const VectorXd delta = evaluation.q_full - context.q0_full;
+    evaluation.cost =
+        context.request.weight_absolute * evaluation.absolute_error.squaredNorm() +
+        context.request.weight_relative * evaluation.relative_error.squaredNorm() +
+        context.request.weight_delta * delta.squaredNorm();
+
+    const MatrixXd absolute_pose_jacobian_full =
+        context.robot.absolutePoseJacobianDualArm(evaluation.q_full);
+    const MatrixXd relative_pose_jacobian_full =
+        context.robot.relativePoseJacobianDualArm(evaluation.q_full);
+    evaluation.absolute_pose_jacobian_active = sliceActiveColumns(
+        absolute_pose_jacobian_full,
+        context.request.active_indices
+    );
+    evaluation.relative_pose_jacobian_active = sliceActiveColumns(
+        relative_pose_jacobian_full,
+        context.request.active_indices
+    );
+
+    const MatrixXd absolute_twist_jacobian = computeTwistJacobian(
+        evaluation.absolute_pose_jacobian_active,
+        absolute_pose
+    );
+    const MatrixXd relative_twist_jacobian = computeTwistJacobian(
+        evaluation.relative_pose_jacobian_active,
+        relative_pose
+    );
+    MatrixXd full_twist_jacobian(
+        absolute_twist_jacobian.rows() + relative_twist_jacobian.rows(),
+        absolute_twist_jacobian.cols()
+    );
+    full_twist_jacobian << absolute_twist_jacobian, relative_twist_jacobian;
+
+    const MatrixXd attenuation = buildVFIAttenuationMatrix(
+        x,
+        context.joint_lower_bounds_active,
+        context.joint_upper_bounds_active,
+        context.request.joint_limit_activation_threshold
+    );
+    const MatrixXd gram = full_twist_jacobian * attenuation * full_twist_jacobian.transpose();
+    evaluation.wvfi = std::sqrt(std::max(0.0, nonNegativeDeterminant(gram)));
+
+    return evaluation;
+}
+
+void overwriteResultMetrics(
+    const ProblemContext& context,
+    const std::vector<double>& x,
+    HumanoidAbsoluteNloptResult& result
+) {
+    const Evaluation evaluation = evaluateConfiguration(context, x);
+    result.final_cost = evaluation.cost;
+    result.final_absolute_residual = evaluation.absolute_residual;
+    result.final_relative_residual = evaluation.relative_residual;
+    result.final_wvfi = evaluation.wvfi;
+    result.q_next = toStdVector(evaluation.q_full);
+}
+
+double finiteDifferenceConstraintValue(
+    const ProblemContext& context,
+    const std::vector<double>& x
+) {
+    return context.request.wvfi_min - evaluateConfiguration(context, x).wvfi;
+}
+
+#if NLOPT_AVAILABLE
 double objectiveCallback(
     const std::vector<double>& x,
     std::vector<double>& grad,
     void* data
 ) {
-    const auto* context = static_cast<const ObjectiveContext*>(data);
-    double cost = 0.0;
+    const auto* context = static_cast<const ProblemContext*>(data);
+    const Evaluation evaluation = evaluateConfiguration(*context, x);
+
     if (!grad.empty()) {
         std::fill(grad.begin(), grad.end(), 0.0);
-    }
-
-    for (std::size_t i = 0; i < x.size(); ++i) {
-        const double delta = x[i] - context->q0_active[i];
-        cost += context->weight_delta * delta * delta;
-        if (!grad.empty()) {
-            grad[i] = 2.0 * context->weight_delta * delta;
+        const VectorXd q_active = toEigenVector(x);
+        const VectorXd q0_active = toEigenVector(context->x0_active);
+        const VectorXd gradient =
+            -2.0 * context->request.weight_absolute *
+                evaluation.absolute_sign *
+                evaluation.absolute_pose_jacobian_active.transpose() *
+                evaluation.absolute_error
+            -2.0 * context->request.weight_relative *
+                evaluation.relative_sign *
+                evaluation.relative_pose_jacobian_active.transpose() *
+                evaluation.relative_error
+            +2.0 * context->request.weight_delta * (q_active - q0_active);
+        for (std::size_t i = 0; i < grad.size(); ++i) {
+            grad[i] = gradient(static_cast<Eigen::Index>(i));
         }
     }
 
-    return cost;
+    return evaluation.cost;
+}
+
+double wvfiConstraintCallback(
+    const std::vector<double>& x,
+    std::vector<double>& grad,
+    void* data
+) {
+    const auto* context = static_cast<const ProblemContext*>(data);
+    const double value = finiteDifferenceConstraintValue(*context, x);
+
+    if (!grad.empty()) {
+        for (std::size_t i = 0; i < grad.size(); ++i) {
+            const double xi = x[i];
+            const double lower = context->effective_lower_bounds[i];
+            const double upper = context->effective_upper_bounds[i];
+            const double base_step = kConstraintGradientStep * std::max(1.0, std::abs(xi));
+            const double backward_room = std::max(0.0, xi - lower);
+            const double forward_room = std::max(0.0, upper - xi);
+            const double backward_step = std::min(base_step, backward_room);
+            const double forward_step = std::min(base_step, forward_room);
+
+            if (forward_step > kBoundTolerance && backward_step > kBoundTolerance) {
+                std::vector<double> x_plus = x;
+                std::vector<double> x_minus = x;
+                x_plus[i] += forward_step;
+                x_minus[i] -= backward_step;
+                const double value_plus = finiteDifferenceConstraintValue(*context, x_plus);
+                const double value_minus = finiteDifferenceConstraintValue(*context, x_minus);
+                grad[i] = (value_plus - value_minus) / (forward_step + backward_step);
+            } else if (forward_step > kBoundTolerance) {
+                std::vector<double> x_plus = x;
+                x_plus[i] += forward_step;
+                const double value_plus = finiteDifferenceConstraintValue(*context, x_plus);
+                grad[i] = (value_plus - value) / forward_step;
+            } else if (backward_step > kBoundTolerance) {
+                std::vector<double> x_minus = x;
+                x_minus[i] -= backward_step;
+                const double value_minus = finiteDifferenceConstraintValue(*context, x_minus);
+                grad[i] = (value - value_minus) / backward_step;
+            } else {
+                grad[i] = 0.0;
+            }
+        }
+    }
+
+    return value;
 }
 
 std::string resultToReason(nlopt::result result_code) {
     switch (result_code) {
         case nlopt::SUCCESS:
-            return "NLopt shell solve succeeded";
+            return "success";
         case nlopt::STOPVAL_REACHED:
-            return "NLopt shell solve reached stopval";
+            return "stopval_reached";
         case nlopt::FTOL_REACHED:
-            return "NLopt shell solve reached ftol_rel";
+            return "ftol_reached";
         case nlopt::XTOL_REACHED:
-            return "NLopt shell solve reached xtol_rel";
+            return "xtol_reached";
         case nlopt::MAXEVAL_REACHED:
-            return "NLopt shell solve reached max_eval";
+            return "maxeval_reached";
         case nlopt::MAXTIME_REACHED:
-            return "NLopt shell solve reached max_time";
+            return "maxtime_reached";
         default:
-            return "NLopt shell solve terminated without a success code";
+            return "terminated";
     }
 }
 
@@ -238,10 +552,11 @@ bool isConvergedResult(nlopt::result result_code) {
 }  // namespace
 
 HumanoidAbsoluteNloptResult solveHumanoidAbsoluteTargetNlopt(
+    const DQ_HumanoidURDF& robot,
     const HumanoidAbsoluteNloptRequest& request
 ) {
     std::string reason;
-    if (!validateRequest(request, reason)) {
+    if (!validateRequest(robot, request, reason)) {
         return makeFailure(request, reason);
     }
 
@@ -254,44 +569,68 @@ HumanoidAbsoluteNloptResult solveHumanoidAbsoluteTargetNlopt(
         return makeFailure(request, reason);
     }
 
+    ProblemContext context{
+        robot,
+        request,
+        toEigenVector(request.q0),
+        toEigenVector(request.absolute_target),
+        toEigenVector(request.relative_reference),
+        buildInitialActiveConfiguration(request),
+        lower_bounds,
+        upper_bounds,
+        {},
+        {},
+    };
+    context.joint_lower_bounds_active.reserve(request.active_indices.size());
+    context.joint_upper_bounds_active.reserve(request.active_indices.size());
+    for (int index : request.active_indices) {
+        context.joint_lower_bounds_active.push_back(
+            request.lower_bounds[static_cast<std::size_t>(index)]
+        );
+        context.joint_upper_bounds_active.push_back(
+            request.upper_bounds[static_cast<std::size_t>(index)]
+        );
+    }
+
     HumanoidAbsoluteNloptResult result;
     result.q_next = request.q0;
 
+    std::vector<double> x = context.x0_active;
     try {
         const auto active_dimension = static_cast<unsigned>(request.active_indices.size());
         nlopt::opt optimizer(nlopt::LD_SLSQP, active_dimension);
-        optimizer.set_lower_bounds(lower_bounds);
-        optimizer.set_upper_bounds(upper_bounds);
+        optimizer.set_lower_bounds(context.effective_lower_bounds);
+        optimizer.set_upper_bounds(context.effective_upper_bounds);
         optimizer.set_maxeval(request.max_eval);
         optimizer.set_xtol_rel(request.xtol_rel);
         optimizer.set_ftol_rel(request.ftol_rel);
-
-        ObjectiveContext objective_context{
-            buildInitialActiveConfiguration(request),
-            request.weight_delta,
-        };
-        optimizer.set_min_objective(objectiveCallback, &objective_context);
-
-        std::vector<double> x = objective_context.q0_active;
-        double final_cost = result.final_cost;
-        const nlopt::result nlopt_result = optimizer.optimize(x, final_cost);
-
-        for (std::size_t i = 0; i < request.active_indices.size(); ++i) {
-            const int joint_index = request.active_indices[i];
-            result.q_next[static_cast<std::size_t>(joint_index)] = x[i];
+        optimizer.set_min_objective(objectiveCallback, &context);
+        if (request.wvfi_min > 0.0) {
+            optimizer.add_inequality_constraint(
+                wvfiConstraintCallback,
+                &context,
+                1e-8
+            );
         }
 
+        double final_cost = std::numeric_limits<double>::quiet_NaN();
+        const nlopt::result nlopt_result = optimizer.optimize(x, final_cost);
+
         result.iterations = optimizer.get_numevals();
-        result.final_cost = final_cost;
         result.converged = isConvergedResult(nlopt_result);
-        result.reason =
-            resultToReason(nlopt_result) +
-            "; placeholder objective only penalizes active-joint delta";
+        result.reason = resultToReason(nlopt_result);
+        overwriteResultMetrics(context, x, result);
         return result;
     } catch (const std::exception& exception) {
         std::ostringstream stream;
-        stream << "NLopt shell solve failed: " << exception.what();
+        stream << "nlopt_exception: " << exception.what();
         result.reason = stream.str();
+        result.iterations = 0;
+        try {
+            overwriteResultMetrics(context, x, result);
+        } catch (...) {
+            result.q_next = request.q0;
+        }
         return result;
     }
 #endif

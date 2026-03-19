@@ -4,6 +4,10 @@
 #include <string>
 #include <vector>
 
+namespace DQ_robotics {
+class DQ_HumanoidURDF;
+}
+
 struct HumanoidAbsoluteNloptRequest {
     std::vector<double> q0;
     std::vector<double> absolute_target;
@@ -16,6 +20,8 @@ struct HumanoidAbsoluteNloptRequest {
     double weight_absolute = 1.0;
     double weight_relative = 100.0;
     double weight_delta = 1e-3;
+    // Near-active joint limits attenuate w_vfi when the remaining margin drops below this threshold.
+    double joint_limit_activation_threshold = 0.05;
     int max_eval = 80;
     double xtol_rel = 1e-6;
     double ftol_rel = 1e-8;
@@ -33,5 +39,6 @@ struct HumanoidAbsoluteNloptResult {
 };
 
 HumanoidAbsoluteNloptResult solveHumanoidAbsoluteTargetNlopt(
+    const DQ_robotics::DQ_HumanoidURDF& robot,
     const HumanoidAbsoluteNloptRequest& request
 );
