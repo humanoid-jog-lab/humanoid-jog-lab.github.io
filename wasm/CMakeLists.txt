@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.18)
 project(dqrobotics_wasm)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -59,8 +59,9 @@ if(EMSCRIPTEN)
 
     set(HAS_NLOPT OFF)
     if(EXISTS "${NLOPT_DIR}/CMakeLists.txt")
-        # 仅构建核心静态 NLopt 库，不启用语言绑定 / tests / shared libs。
-        set(NLOPT_CXX ON CACHE BOOL "Enable NLopt C++ routines" FORCE)
+        # 仅构建核心静态 NLopt C API 库，不启用语言绑定 / tests / shared libs。
+        # 当前 WASM 集成先避免引入 Luksan 的 LGPL 算法与额外的 C++ 算法源。
+        set(NLOPT_CXX OFF CACHE BOOL "Enable NLopt C++ routines" FORCE)
         set(NLOPT_FORTRAN OFF CACHE BOOL "Enable NLopt Fortran support" FORCE)
         set(NLOPT_PYTHON OFF CACHE BOOL "Build NLopt Python bindings" FORCE)
         set(NLOPT_OCTAVE OFF CACHE BOOL "Build NLopt Octave bindings" FORCE)
@@ -68,6 +69,7 @@ if(EMSCRIPTEN)
         set(NLOPT_GUILE OFF CACHE BOOL "Build NLopt Guile bindings" FORCE)
         set(NLOPT_JAVA OFF CACHE BOOL "Build NLopt Java bindings" FORCE)
         set(NLOPT_SWIG OFF CACHE BOOL "Use SWIG for NLopt bindings" FORCE)
+        set(NLOPT_LUKSAN OFF CACHE BOOL "Enable LGPL Luksan solvers" FORCE)
         set(NLOPT_TESTS OFF CACHE BOOL "Build NLopt tests" FORCE)
         set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build third-party libraries as shared libraries" FORCE)
 
