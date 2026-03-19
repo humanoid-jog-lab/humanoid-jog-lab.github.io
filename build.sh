@@ -46,6 +46,13 @@ else
     echo -e "${GREEN}✓ Eigen 已存在${NC}"
 fi
 
+# 检查 NLopt 源码是否已 vendored
+if [ ! -d "./third_party/nlopt" ]; then
+    echo -e "${RED}错误: NLopt 源码不存在: ./third_party/nlopt${NC}"
+    exit 1
+fi
+echo -e "${GREEN}✓ NLopt 已存在${NC}"
+
 # 创建构建目录
 BUILD_DIR="./build"
 if [ -d "$BUILD_DIR" ]; then

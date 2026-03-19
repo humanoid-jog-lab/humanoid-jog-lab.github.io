@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "check:nlopt": "test -d third_party/nlopt",
     "build:wasm": "./build.sh",
     "ros2-backend": "node server/ros2-backend.js",
     "dev:full": "concurrently \"npm run dev\" \"npm run ros2-backend\""
