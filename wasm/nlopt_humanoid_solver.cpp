@@ -159,17 +159,6 @@ std::vector<double> buildInitialActiveConfiguration(
     return x0;
 }
 
-std::vector<double> buildActiveStepBounds(
-    const HumanoidAbsoluteNloptRequest& request
-) {
-    std::vector<double> step_bounds;
-    step_bounds.reserve(request.active_indices.size());
-    for (int index : request.active_indices) {
-        step_bounds.push_back(request.step_bounds[static_cast<std::size_t>(index)]);
-    }
-    return step_bounds;
-}
-
 bool validateEffectiveBounds(
     const HumanoidAbsoluteNloptRequest& request,
     const std::vector<double>& lower_bounds,
@@ -276,7 +265,6 @@ HumanoidAbsoluteNloptResult solveHumanoidAbsoluteTargetNlopt(
         optimizer.set_maxeval(request.max_eval);
         optimizer.set_xtol_rel(request.xtol_rel);
         optimizer.set_ftol_rel(request.ftol_rel);
-        optimizer.set_initial_step(buildActiveStepBounds(request));
 
         ObjectiveContext objective_context{
             buildInitialActiveConfiguration(request),
