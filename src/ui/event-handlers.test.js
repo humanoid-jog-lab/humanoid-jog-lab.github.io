@@ -20,11 +20,19 @@ function createMockLocalStorage(initialEntries = []) {
 }
 
 function createMockElement(initialValue = '') {
+    const listeners = new Map();
     return {
         value: initialValue,
         checked: false,
         textContent: '',
-        addEventListener() {}
+        addEventListener(eventName, handler) {
+            listeners.set(eventName, handler);
+        },
+        trigger(eventName, nextValue) {
+            const handler = listeners.get(eventName);
+            if (typeof handler !== 'function') return;
+            handler({ target: { value: nextValue } });
+        }
     };
 }
 
@@ -60,6 +68,13 @@ test('setupHumanoidJogSolverControls restores mj_restore_pre_w from storage and 
         assert.equal(globalThis.window.humanoidJogSolverMode, 'mj_restore_pre_w');
         assert.deepEqual(visualizerCalls, ['mj_restore_pre_w']);
         assert.equal(globalThis.localStorage.getItem('humanoid-jog-solver-mode'), 'mj_restore_pre_w');
+
+        humanoidJogSolverSelect.trigger('change', 'priority');
+
+        assert.equal(humanoidJogSolverSelect.value, 'priority');
+        assert.equal(globalThis.window.humanoidJogSolverMode, 'priority');
+        assert.deepEqual(visualizerCalls, ['mj_restore_pre_w', 'priority']);
+        assert.equal(globalThis.localStorage.getItem('humanoid-jog-solver-mode'), 'priority');
     } finally {
         if (originalWindow === undefined) {
             delete globalThis.window;
