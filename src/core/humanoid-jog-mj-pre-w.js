@@ -19,8 +19,17 @@ function normalizeHumanoidJogMJPreWState(state) {
     return typeof state === 'string' ? state.trim() : '';
 }
 
+function hasHumanoidJogMJPreWCandidatePayload(metricResult) {
+    return (
+        Array.isArray(metricResult?.qApplied) ||
+        Array.isArray(metricResult?.qPre) ||
+        Array.isArray(metricResult?.candidate) ||
+        Array.isArray(metricResult?.candidateQ)
+    );
+}
+
 function isHumanoidJogMJPreWOutcomeWithAcceptedCandidate(metricResult) {
-    return metricResult?.acceptedCandidate === true;
+    return metricResult?.acceptedCandidate === true || hasHumanoidJogMJPreWCandidatePayload(metricResult);
 }
 
 export function supportsHumanoidJogMJPreWControlMode(controlMode = '') {
