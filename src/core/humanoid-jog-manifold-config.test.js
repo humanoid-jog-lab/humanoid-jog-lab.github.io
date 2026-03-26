@@ -477,6 +477,43 @@ test('RobotVisualizer plain mj_restore still ignores the selected w metric for j
     assert.equal(capturedCalls[0][7], undefined);
 });
 
+test('RobotVisualizer plain mj_restore absolute jogs force jogMetricOverride none on the local path', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const currentQ = [0.1, -0.2, 0.3];
+    const absCurrent = [1, 0, 0, 0, 0, 0, 0, 0];
+    const absTarget = [1, 0, 0, 0, 0.01, 0, 0, 0];
+    const relCurrent = [0, 1, 0, 0, 0, 0, 0, 0];
+
+    let manifoldArgs = null;
+    visualizer._canUseHumanoidJogMJRestoreWorker = () => false;
+    visualizer._getHumanoidAbsolutePose = () => absCurrent.slice();
+    visualizer._getHumanoidRelativePose = () => relCurrent.slice();
+    visualizer._getHumanoidManifoldJogSecondaryMetric = () => 'w_abs_hier_vfi';
+    visualizer._signedPoseError = () => [1];
+    visualizer._computePoseErrorNorm = () => 0.1;
+    visualizer._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstManifold = (...args) => {
+        manifoldArgs = args;
+        return Promise.resolve(true);
+    };
+
+    const result = await visualizer._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstMJRestore(
+        absTarget.slice(),
+        currentQ.slice(),
+        true,
+        false,
+        false,
+        relCurrent.slice(),
+        null,
+        null
+    );
+
+    assert.equal(result, true);
+    assert.ok(Array.isArray(manifoldArgs));
+    assert.equal(manifoldArgs[6]?.solverMode, 'mj_restore');
+    assert.equal(manifoldArgs[6]?.jogMetricOverride, 'none');
+    assert.equal(manifoldArgs[6]?.metricDirection, undefined);
+});
+
 test('RobotVisualizer plain mj_restore distance jogs do not consult the selected w metric', () => {
     const visualizer = new RobotVisualizer(null);
     const q0 = [0.1, -0.2, 0.3];

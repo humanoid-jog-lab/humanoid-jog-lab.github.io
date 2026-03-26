@@ -9414,6 +9414,9 @@ export class RobotVisualizer {
         translationAxisGuard = null,
         internalOptions = null
     ) {
+        const forwardedJogMetricOverride = typeof internalOptions?.jogMetricOverride === 'string'
+            ? internalOptions.jogMetricOverride
+            : 'none';
         const requestedJogMetric = typeof internalOptions?.jogMetricOverride === 'string'
             ? normalizeHumanoidJogManifoldJogMetric(internalOptions.jogMetricOverride)
             : 'none';
@@ -9480,7 +9483,7 @@ export class RobotVisualizer {
                     solverMode: 'mj_restore',
                     translationAxisGuard,
                     preferWorker: false,
-                    jogMetricOverride: internalOptions?.jogMetricOverride,
+                    jogMetricOverride: forwardedJogMetricOverride,
                     metricDirection: internalOptions?.metricDirection
                 }
             );
@@ -9494,7 +9497,7 @@ export class RobotVisualizer {
                 keepBodyZVertical,
                 fixedRelativeTargetArray: Array.isArray(fixedRelativeTargetArray) ? fixedRelativeTargetArray.slice() : null,
                 translationAxisGuard,
-                jogMetricOverride: internalOptions?.jogMetricOverride,
+                jogMetricOverride: forwardedJogMetricOverride,
                 metricDirection: internalOptions?.metricDirection
             });
         }
@@ -9508,7 +9511,7 @@ export class RobotVisualizer {
             {
                 solverMode: 'mj_restore',
                 translationAxisGuard,
-                jogMetricOverride: internalOptions?.jogMetricOverride,
+                jogMetricOverride: forwardedJogMetricOverride,
                 metricDirection: internalOptions?.metricDirection
             }
         );
