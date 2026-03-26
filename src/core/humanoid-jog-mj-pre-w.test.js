@@ -50,18 +50,20 @@ test('mapHumanoidJogMJPreWOutcome maps active, skipped, rejected, and invalid ou
             }
         },
         {
-            name: 'active(primary_only; ...) with accepted candidate payload',
+            name: 'active(primary_only; ...) with explicit accepted marker',
             input: {
                 state: 'active(primary_only; secondary=arm_guard)',
+                acceptedCandidate: true,
                 qApplied: [0.1, 0.2]
             },
             expected: { state: 'applied', qPreEligible: true }
         },
         {
-            name: 'active(primary_only; ...) without accepted candidate',
+            name: 'active(primary_only; ...) with explicit rejected marker and payload',
             input: {
                 state: 'active(primary_only; secondary=arm_guard)',
-                acceptedCandidate: false
+                acceptedCandidate: false,
+                qApplied: [0.1, 0.2]
             },
             expected: {
                 state: 'skipped(projection_only_no_progress)',
