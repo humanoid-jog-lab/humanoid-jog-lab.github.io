@@ -26,3 +26,13 @@ test('index.html does not add a new humanoid w selector surface', () => {
     assert.doesNotMatch(html, /<option value="w_abs_hier">w_abs_hier<\/option>/);
     assert.doesNotMatch(html, /<option value="w_abs_hier_vfi">w_abs_hier_vfi<\/option>/);
 });
+
+test('index.html keeps the pre-existing humanoid VFI controls intact', () => {
+    const html = readFileSync(resolve(ROOT, 'index.html'), 'utf8');
+
+    assert.match(html, /id="humanoid-vfi-step-backend-select"/);
+    assert.match(html, /<option value="projection">Projection（原实现）<\/option>/);
+    assert.match(html, /<option value="qp">QP（新）<\/option>/);
+    assert.match(html, /id="humanoid-task-equivalent-branching-toggle"/);
+    assert.match(html, /任务等价多分支/);
+});

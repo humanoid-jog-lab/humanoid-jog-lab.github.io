@@ -123,6 +123,26 @@
                                     对人形协同点动模式生效，可随时切换。
                                 </div>
                             </div>
+                            <div style="margin-top: 0.55rem;">
+                                <label style="font-size: 0.85rem; color: #cbd5e1; display: block; margin-bottom: 0.25rem;">VFI 步进后端：</label>
+                                <select id="humanoid-vfi-step-backend-select" style="width: 100%; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;">
+                                    <option value="projection">Projection（原实现）</option>
+                                    <option value="qp">QP（新）</option>
+                                </select>
+                                <div style="font-size: 0.7rem; color: #64748b; margin-top: 0.2rem;">
+                                    仅在 VFI 模式生效，用于切换步进子求解器。
+                                </div>
+                            </div>
+                            <div style="margin-top: 0.6rem;">
+                                <label class="toggle-switch" style="font-size: 0.85rem;">
+                                    <input type="checkbox" id="humanoid-task-equivalent-branching-toggle">
+                                    <span class="toggle-slider"></span>
+                                    <span class="toggle-label">任务等价多分支</span>
+                                </label>
+                                <div style="font-size: 0.7rem; color: #64748b; margin-top: 0.2rem;">
+                                    生成多个关节限位回避候选姿态，投影回同一双臂末端任务后选优。
+                                </div>
+                            </div>
                             <div id="humanoid-vfi-diagnostics-panel" class="vfi-diagnostics-panel">
                                 <div class="vfi-diagnostics-head">
                                     <span>实时约束诊断（含 CCTSM §IV）</span>
