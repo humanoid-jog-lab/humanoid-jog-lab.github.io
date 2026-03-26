@@ -123,6 +123,16 @@
                                     对人形协同点动模式生效，可随时切换。
                                 </div>
                             </div>
+                            <div style="margin-top: 0.55rem;">
+                                <label style="font-size: 0.85rem; color: #cbd5e1; display: block; margin-bottom: 0.25rem;">w 指标：</label>
+                                <select id="humanoid-manifold-jog-metric-select" style="width: 100%; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;">
+                                    <option value="w_abs_hier">w_abs_hier</option>
+                                    <option value="w_abs_hier_vfi">w_abs_hier_vfi</option>
+                                </select>
+                                <div style="font-size: 0.7rem; color: #64748b; margin-top: 0.2rem;">
+                                    仅保留层级 absolute 与层级 absolute+VFI 两种模式。
+                                </div>
+                            </div>
                             <div id="humanoid-vfi-diagnostics-panel" class="vfi-diagnostics-panel">
                                 <div class="vfi-diagnostics-head">
                                     <span>实时约束诊断（含 CCTSM §IV）</span>
