@@ -414,6 +414,41 @@ test('RobotVisualizer mj_restore_pre_w falls back to q0 for stage 2 when pre-w i
     }
 });
 
+test('RobotVisualizer candidate-only decoupled pre-w disables arm-only fallback and stays candidate-only', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const q0 = [0.1, -0.2, 0.3];
+    const absTarget = [1, 0, 0, 0, 0, 0, 0, 0];
+    const relTarget = [0, 1, 0, 0, 0, 0, 0, 0];
+    let called = null;
+    visualizer._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstManifold = (...args) => {
+        called = args;
+        return Promise.resolve({
+            state: 'skipped(no_progress)',
+            acceptedCandidate: false,
+            qApplied: q0.slice()
+        });
+    };
+
+    const result = await visualizer._runHumanoidMJRestorePreWStage({
+        controlMode: 'decoupled',
+        q0: q0.slice(),
+        dqAbsoluteProtectedTargetArray: absTarget.slice(),
+        fixedRelativeProtectedTargetArray: relTarget.slice(),
+        enableJointLimitAvoidance: true,
+        includeWaist: true,
+        keepBodyZVertical: false,
+        jogMetric: 'w_abs_hier_vfi',
+        metricDirection: 'increase'
+    });
+
+    assert.equal(result.acceptedCandidate, false);
+    assert.ok(Array.isArray(called));
+    assert.equal(called[3], true);
+    assert.equal(called[6]?.candidateOnly, true);
+    assert.equal(called[6]?.allowArmOnlyFallback, false);
+    assert.equal(called[6]?.preferWorker, false);
+});
+
 test('RobotVisualizer plain mj_restore still ignores the selected w metric for jog commands', async () => {
     const visualizer = new RobotVisualizer(null);
     const q0 = [0.1, -0.2, 0.3];
@@ -440,6 +475,67 @@ test('RobotVisualizer plain mj_restore still ignores the selected w metric for j
     assert.equal(result, true);
     assert.equal(capturedCalls.length, 1);
     assert.equal(capturedCalls[0][7], undefined);
+});
+
+test('RobotVisualizer plain mj_restore distance jogs do not consult the selected w metric', () => {
+    const visualizer = new RobotVisualizer(null);
+    const q0 = [0.1, -0.2, 0.3];
+    const absCurrent = [1, 0, 0, 0, 0, 0, 0, 0];
+    const relCurrent = [1, 0, 0, 0, 0, 0, 0, 0];
+    const originalWindow = globalThis.window;
+    globalThis.window = {
+        humanoidQ: q0.slice(),
+        DQModule: {
+            DQWrapper: {
+                createFromArray: (value) => value,
+                getTranslation: () => [0, 0, 0, 0]
+            },
+            Kinematics: {
+                distanceJacobian: () => [[0, 0, 0]]
+            }
+        }
+    };
+
+    let selectedMetricReads = 0;
+    visualizer.humanoidModel = {};
+    visualizer.setHumanoidJogSolverMode('mj_restore');
+    visualizer.humanoidWaistLength = 1;
+    visualizer.humanoidLeftArmLength = 1;
+    visualizer.humanoidRightArmLength = 1;
+    visualizer._getHumanoidManifoldJogSecondaryMetric = () => {
+        selectedMetricReads += 1;
+        return 'w_abs_hier_vfi';
+    };
+    visualizer._getHumanoidAbsolutePose = () => absCurrent.slice();
+    visualizer._getHumanoidRelativePose = () => relCurrent.slice();
+    visualizer._getHumanoidPose1 = () => relCurrent.slice();
+    visualizer._getHumanoidPose2 = () => relCurrent.slice();
+    visualizer._getHumanoidJointLimits = () => null;
+    visualizer._sliceHumanoidActiveJoints = () => [0.1, -0.2, 0.3];
+    visualizer._writeHumanoidActiveJoints = (_qInitial, qActive) => qActive.slice();
+    visualizer._buildHumanoidManifoldWaistXCorridor = () => ({ enabled: false, violation: 0 });
+    visualizer._buildManipulabilityVFIConstraints = () => null;
+    visualizer._computeModeCCTSM = () => ({ w: 1, w_vfi: 1 });
+    visualizer._computeProtectedManipulabilityGradient = () => [0, 0, 0];
+    visualizer._extractHumanoidWVFIConstraintDiagnostics = () => ({});
+    visualizer._extractHumanoidWaistXCorridorDiagnostics = () => ({});
+    visualizer._publishHumanoidJogDiagnostics = () => {};
+    visualizer._notifyHumanoidJogUnreachable = () => {};
+    visualizer._applyHumanoidJointSolution = () => true;
+    visualizer._getHumanoidAbsolutePoseJacobian = () => Array.from({ length: 8 }, () => [0, 0, 0]);
+    visualizer._getHumanoidRelativePoseJacobian = () => Array.from({ length: 8 }, () => [0, 0, 0]);
+    visualizer._getHumanoidSingleArmPoseJacobian = () => Array.from({ length: 8 }, () => [0, 0, 0]);
+
+    try {
+        visualizer._updateHumanoidJointsFromRelativeDistanceDeltaMJRestore(0.01, q0.slice(), true, false);
+        assert.equal(selectedMetricReads, 0);
+    } finally {
+        if (originalWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = originalWindow;
+        }
+    }
 });
 
 test('RobotVisualizer routes metric-only hierarchical w_abs_hier_vfi MJ requests through the worker queue like w_abs_hier', async () => {

@@ -5704,6 +5704,7 @@ export class RobotVisualizer {
                 preferWorker: false,
                 suppressFailureNotification: true,
                 candidateOnly: true,
+                allowArmOnlyFallback: false,
                 jogMetricOverride: jogMetric,
                 metricDirection
             }
@@ -9185,7 +9186,7 @@ export class RobotVisualizer {
             converged = manifoldAcceptance.converged;
         }
 
-        if (!converged && allowArmOnlyFallback) {
+        if (!converged && allowArmOnlyFallback && !candidateOnly) {
             const initialBodyNorm = keepBodyZVertical
                 ? norm(initialProblem?.equalities?.blocks?.bodyZ?.residual ?? [])
                 : 0;
@@ -9517,7 +9518,8 @@ export class RobotVisualizer {
         deltaDistance,
         currentQ,
         enableJointLimitAvoidance = true,
-        includeWaist = false
+        includeWaist = false,
+        internalOptions = null
     ) {
         if (!this.humanoidModel || !window.humanoidQ || !Array.isArray(currentQ) || currentQ.length === 0) {
             return this._setIKFailureStatus({
@@ -9627,8 +9629,10 @@ export class RobotVisualizer {
             : Date.now();
         const mjTimingStartMs = nowMs();
 
-        const selectedJogMetric = this._getHumanoidManifoldJogSecondaryMetric();
-        const resolvedJogMetric = resolveHumanoidJogManifoldJogMetric(selectedJogMetric, {
+        const requestedJogMetric = typeof internalOptions?.jogMetricOverride === 'string'
+            ? normalizeHumanoidJogManifoldJogMetric(internalOptions.jogMetricOverride)
+            : 'none';
+        const resolvedJogMetric = resolveHumanoidJogManifoldJogMetric(requestedJogMetric, {
             hierarchicalVfiBlend: this._getHumanoidHierarchicalVfiBlend()
         });
         const jogMetricDiagnostic = resolvedJogMetric.diagnosticMetric || resolvedJogMetric.metric;
