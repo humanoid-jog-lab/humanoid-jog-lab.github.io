@@ -123,35 +123,6 @@
                                     对人形协同点动模式生效，可随时切换。
                                 </div>
                             </div>
-                            <div style="margin-top: 0.6rem; border-top: 1px solid #334155; padding-top: 0.6rem;">
-                                <div style="font-size: 0.8rem; color: #94a3b8; margin-bottom: 0.4rem; font-weight: 600;">腰部 X 走廊约束（论文 §III-B）</div>
-                                <label class="toggle-switch" style="font-size: 0.85rem;">
-                                    <input type="checkbox" id="humanoid-waist-x-corridor-toggle">
-                                    <span class="toggle-slider"></span>
-                                    <span class="toggle-label">启用腰部 X 走廊</span>
-                                </label>
-                                <div style="font-size: 0.7rem; color: #64748b; margin-top: 0.2rem;">
-                                    限制腰部末端点在底盘坐标系 x 方向不超过设定值，VFI 形式实现（eq. 861–866）。
-                                </div>
-                                <div style="margin-top: 0.4rem; display: flex; align-items: center; gap: 0.5rem;">
-                                    <label style="font-size: 0.82rem; color: #cbd5e1; flex-shrink: 0;">x_max (m)：</label>
-                                    <input type="number" id="humanoid-waist-x-max-input"
-                                        value="0.050" step="0.005" min="-0.5" max="0.5"
-                                        style="width: 80px; padding: 0.25rem; font-size: 0.82rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;">
-                                    <span style="font-size: 0.72rem; color: #64748b;">（默认 0.05 = 5 cm）</span>
-                                </div>
-                            </div>
-                            <div style="margin-top: 0.6rem; border-top: 1px solid #334155; padding-top: 0.6rem;">
-                                <div style="font-size: 0.8rem; color: #94a3b8; margin-bottom: 0.3rem;">临时验证夹具</div>
-                                <label class="toggle-switch" style="font-size: 0.85rem;">
-                                    <input type="checkbox" id="humanoid-test-dual-arm-lock-toggle">
-                                    <span class="toggle-slider"></span>
-                                    <span class="toggle-label">启用双臂测试锁</span>
-                                </label>
-                                <div style="font-size: 0.72rem; color: #64748b; margin-top: 0.25rem;">
-                                    仅人形点动求解使用：ljoint2 ∈ [-0.1, 0.2]，rjoint2 ∈ [-0.2, 0.1]。
-                                </div>
-                            </div>
                             <div id="humanoid-vfi-diagnostics-panel" class="vfi-diagnostics-panel">
                                 <div class="vfi-diagnostics-head">
                                     <span>实时约束诊断（含 CCTSM §IV）</span>
@@ -178,28 +149,6 @@
                             <input id="teach-speed-percent" type="range" min="1" max="100" value="100" step="1" style="width: 100%;">
                             <div style="font-size: 0.75rem; color: #94a3b8; margin-top: 0.25rem;">
                                 影响每步增量（不改变按键重复频率）
-                            </div>
-                        </div>
-                        <div style="margin-bottom: 0.75rem;">
-                            <label style="font-size: 0.85rem; color: #cbd5e1; display: block; margin-bottom: 0.25rem;">
-                                w 指标
-                            </label>
-                            <select id="humanoid-manifold-jog-metric-select" style="width: 100%; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;">
-                                <option value="w_abs_hier">w_abs_hier</option>
-                                <option value="w_abs_hier_vfi">w_abs_hier_vfi</option>
-                            </select>
-                            <div style="font-size: 0.72rem; color: #64748b; margin-top: 0.25rem;">
-                                选择 w+ / w- 要调整的指标，仅保留层级 absolute 与层级 absolute+VFI 两种模式。
-                            </div>
-                        </div>
-                        <div id="humanoid-w-metric-controls" class="teach-pendant-controls" style="margin-bottom: 0.75rem; grid-template-columns: repeat(2, minmax(0, 1fr));">
-                            <div class="axis-control-group" style="grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 0.75rem;">
-                                <div class="axis-label" style="min-width: 6rem;">w</div>
-                                <button id="humanoid-w-metric-decrease-btn" class="teach-btn teach-btn-negative">w-</button>
-                                <button id="humanoid-w-metric-increase-btn" class="teach-btn teach-btn-positive">w+</button>
-                            </div>
-                            <div style="grid-column: 1 / -1; font-size: 0.72rem; color: #64748b;">
-                                根据所选 w 指标进行点动优化；长按会持续重复当前选择。
                             </div>
                         </div>
                         <div id="teach-pendant-controls" class="teach-pendant-controls">

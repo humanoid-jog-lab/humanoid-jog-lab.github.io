@@ -35,14 +35,12 @@ test('setupHumanoidJogSolverControls restores mj_restore_pre_w from storage and 
     const originalVisualizer = appState.visualizer;
 
     const humanoidJogSolverSelect = createMockElement('vfi');
-    const humanoidManifoldJogMetricSelect = createMockElement('w_abs_hier');
     const visualizerCalls = [];
 
     globalThis.window = {};
     globalThis.document = {
         getElementById(id) {
             if (id === 'humanoid-jog-solver-select') return humanoidJogSolverSelect;
-            if (id === 'humanoid-manifold-jog-metric-select') return humanoidManifoldJogMetricSelect;
             return null;
         }
     };

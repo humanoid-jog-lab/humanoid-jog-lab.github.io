@@ -14,20 +14,13 @@ import { URDFPackageManager, loadURDFFromPackage } from '../urdf-loader.js';
 import { getActiveJointConfig, displayStep, angleToDisplay } from '../utils/math.js';
 import { setupGlobalDragAndDrop } from './drag-drop.js';
 import { setupScenePresetListeners } from './environment-panel.js';
-import { getTeachRepeatMs } from './teach-repeat.js';
 import { setupPlannedMotionListeners } from '../features/planned-motion.js';
 import { normalizeHumanoidJogSolverMode } from '../core/humanoid-jog-solver-presentation.js';
 
 function setupHumanoidJogSolverControls() {
     // 人形点动求解器切换（new qpJ / 零空间投影 / MuJoCo 风格恢复）
     const humanoidJogSolverSelect = document.getElementById('humanoid-jog-solver-select');
-    const humanoidManifoldJogMetricSelect = document.getElementById('humanoid-manifold-jog-metric-select');
     const HUMANOID_JOG_SOLVER_STORAGE_KEY = 'humanoid-jog-solver-mode';
-    const HUMANOID_W_METRIC_STORAGE_KEY = 'humanoid-w-metric-selection';
-    const normalizeHumanoidWMetricSelection = (metricRaw) => {
-        const metric = String(metricRaw ?? '').trim();
-        return metric === 'w_abs_hier_vfi' ? 'w_abs_hier_vfi' : 'w_abs_hier';
-    };
     const applyHumanoidJogSolverMode = (modeRaw) => {
         const mode = normalizeHumanoidJogSolverMode(modeRaw);
         if (humanoidJogSolverSelect) humanoidJogSolverSelect.value = mode;
@@ -41,13 +34,6 @@ function setupHumanoidJogSolverControls() {
             localStorage.setItem(HUMANOID_JOG_SOLVER_STORAGE_KEY, mode);
         } catch (_) {}
     };
-    const applyHumanoidWMetricSelection = (metricRaw) => {
-        const metric = normalizeHumanoidWMetricSelection(metricRaw);
-        if (humanoidManifoldJogMetricSelect) humanoidManifoldJogMetricSelect.value = metric;
-        try {
-            localStorage.setItem(HUMANOID_W_METRIC_STORAGE_KEY, metric);
-        } catch (_) {}
-    };
     if (humanoidJogSolverSelect) {
         const saved = (() => {
             try { return localStorage.getItem(HUMANOID_JOG_SOLVER_STORAGE_KEY); } catch (_) { return null; }
@@ -56,81 +42,13 @@ function setupHumanoidJogSolverControls() {
         humanoidJogSolverSelect.addEventListener('change', (e) => {
             applyHumanoidJogSolverMode(e.target?.value);
         });
-        if (humanoidManifoldJogMetricSelect) {
-            const savedMetric = (() => {
-                try { return localStorage.getItem(HUMANOID_W_METRIC_STORAGE_KEY); } catch (_) { return null; }
-            })();
-            applyHumanoidWMetricSelection(savedMetric ?? humanoidManifoldJogMetricSelect.value ?? 'w_abs_hier');
-            humanoidManifoldJogMetricSelect.addEventListener('change', (e) => {
-                applyHumanoidWMetricSelection(e.target?.value);
-            });
-        }
-        // Waist x-corridor toggle
-        const waistXCorridorToggle = document.getElementById('humanoid-waist-x-corridor-toggle');
-        const waistXMaxInput = document.getElementById('humanoid-waist-x-max-input');
-        const WAIST_X_CORRIDOR_KEY = 'humanoid-waist-x-corridor-enabled';
-        const WAIST_X_MAX_KEY = 'humanoid-waist-x-max';
-
-        const applyWaistXCorridor = (enabled) => {
-            if (waistXCorridorToggle) waistXCorridorToggle.checked = enabled;
-            if (appState.visualizer?.setHumanoidWaistXCorridorEnabled) {
-                appState.visualizer.setHumanoidWaistXCorridorEnabled(enabled);
-            }
-            try { localStorage.setItem(WAIST_X_CORRIDOR_KEY, enabled ? '1' : '0'); } catch (_) {}
-        };
-        const applyWaistXMax = (valueStr) => {
-            const v = parseFloat(valueStr);
-            if (!Number.isFinite(v)) return;
-            if (waistXMaxInput) waistXMaxInput.value = v.toFixed(3);
-            if (appState.visualizer?.setHumanoidWaistXMax) {
-                appState.visualizer.setHumanoidWaistXMax(v);
-            }
-            try { localStorage.setItem(WAIST_X_MAX_KEY, String(v)); } catch (_) {}
-        };
-        if (waistXCorridorToggle || waistXMaxInput) {
-            let savedX; try { savedX = localStorage.getItem(WAIST_X_CORRIDOR_KEY); } catch (_) {}
-            let savedXMax; try { savedXMax = localStorage.getItem(WAIST_X_MAX_KEY); } catch (_) {}
-            applyWaistXCorridor(savedX === '1');
-            if (savedXMax) applyWaistXMax(savedXMax);
-            if (waistXCorridorToggle) {
-                waistXCorridorToggle.addEventListener('change', (e) => applyWaistXCorridor(Boolean(e.target?.checked)));
-            }
-            if (waistXMaxInput) {
-                waistXMaxInput.addEventListener('change', (e) => applyWaistXMax(e.target?.value));
-            }
-        }
-
-        const testDualArmLockToggle = document.getElementById('humanoid-test-dual-arm-lock-toggle');
-        const TEST_DUAL_ARM_LOCK_KEY = 'humanoid-test-dual-arm-lock-enabled';
-        const applyTestDualArmLock = (enabledRaw) => {
-            const enabled = Boolean(enabledRaw);
-            if (testDualArmLockToggle) testDualArmLockToggle.checked = enabled;
-            try { localStorage.setItem(TEST_DUAL_ARM_LOCK_KEY, enabled ? '1' : '0'); } catch (_) {}
-            if (appState.visualizer?.setHumanoidTestDualArmLockEnabled) {
-                appState.visualizer.setHumanoidTestDualArmLockEnabled(enabled);
-            }
-        };
-        if (testDualArmLockToggle) {
-            let savedTestLock = null;
-            try { savedTestLock = localStorage.getItem(TEST_DUAL_ARM_LOCK_KEY); } catch (_) {}
-            applyTestDualArmLock(savedTestLock === '1');
-            testDualArmLockToggle.addEventListener('change', (e) => {
-                applyTestDualArmLock(Boolean(e.target?.checked));
-            });
-        }
-
         if (typeof window !== 'undefined') {
             window.setHumanoidJogSolverMode = applyHumanoidJogSolverMode;
-            window.setHumanoidWMetricSelection = applyHumanoidWMetricSelection;
-            window.setHumanoidWaistXCorridor = applyWaistXCorridor;
-            window.setHumanoidWaistXMax = applyWaistXMax;
-            window.setHumanoidTestDualArmLock = applyTestDualArmLock;
         }
     }
 
     return {
-        applyHumanoidJogSolverMode,
-        applyHumanoidWMetricSelection
+        applyHumanoidJogSolverMode
     };
 }
 
@@ -622,100 +540,6 @@ function setupEventListeners() {
         });
     });
 
-    const humanoidWMetricSelect = document.getElementById('humanoid-manifold-jog-metric-select');
-    const genericWDecreaseBtn = document.getElementById('humanoid-w-metric-decrease-btn');
-    const genericWIncreaseBtn = document.getElementById('humanoid-w-metric-increase-btn');
-    const teachRepeatMs = getTeachRepeatMs();
-
-    const bindLongPressButton = (button, action) => {
-        if (!button) return;
-        let intervalId = null;
-        let pointerId = null;
-
-        const stop = () => {
-            if (intervalId !== null) {
-                window.clearInterval(intervalId);
-                intervalId = null;
-            }
-            if (pointerId !== null && button.hasPointerCapture?.(pointerId)) {
-                try {
-                    button.releasePointerCapture(pointerId);
-                } catch (error) {
-                    // ignore release errors
-                }
-            }
-            pointerId = null;
-        };
-        const fire = () => {
-            action();
-        };
-        const start = (event) => {
-            if (intervalId !== null) {
-                return;
-            }
-            if (event && event.cancelable) {
-                event.preventDefault();
-            }
-            if (event?.pointerId !== undefined) {
-                pointerId = event.pointerId;
-                if (button.setPointerCapture) {
-                    try {
-                        button.setPointerCapture(pointerId);
-                    } catch (error) {
-                        // already captured or not supported on element/platform
-                    }
-                }
-            }
-            fire();
-            intervalId = window.setInterval(fire, teachRepeatMs);
-        };
-
-        if (typeof window !== 'undefined' && 'PointerEvent' in window) {
-            button.addEventListener('pointerdown', start, { passive: false });
-            button.addEventListener('pointerup', stop);
-            button.addEventListener('pointercancel', stop);
-            button.addEventListener('pointerleave', stop);
-            button.addEventListener('pointerout', stop);
-            return;
-        }
-
-        button.addEventListener('mousedown', start);
-        button.addEventListener('mouseup', stop);
-        button.addEventListener('mouseleave', stop);
-        button.addEventListener('touchstart', start, { passive: false });
-        button.addEventListener('touchend', stop);
-        button.addEventListener('touchcancel', stop);
-    };
-
-    const bindManipulatorMetricButton = (button, direction, metricName, requireHumanoidMode = false) => {
-        bindLongPressButton(button, () => {
-            if (requireHumanoidMode && !appState.visualizer?.humanoidMode) return;
-            const visualizer = appState.visualizer;
-            const fn = visualizer?.[metricName];
-            if (typeof fn !== 'function') return;
-            fn.call(visualizer, direction);
-        });
-    };
-    const resolveHumanoidWMetricHandlerName = () => {
-        const selectedMetric = normalizeHumanoidWMetricSelection(humanoidWMetricSelect?.value);
-        return selectedMetric === 'w_abs_hier_vfi'
-            ? 'optimizeHumanoidHierarchicalAbsoluteVFIManipulability'
-            : 'optimizeHumanoidHierarchicalAbsoluteManipulability';
-    };
-    const bindGenericHumanoidWButton = (button, direction) => {
-        bindLongPressButton(button, () => {
-            if (!appState.visualizer?.humanoidMode) return;
-            const visualizer = appState.visualizer;
-            const handlerName = resolveHumanoidWMetricHandlerName();
-            const fn = visualizer?.[handlerName];
-            if (typeof fn !== 'function') return;
-            fn.call(visualizer, direction);
-        });
-    };
-
-    bindGenericHumanoidWButton(genericWDecreaseBtn, 'decrease');
-    bindGenericHumanoidWButton(genericWIncreaseBtn, 'increase');
-    
     // 全局拖拽加载
     if (callbacks.renderEnvironmentObjectList) {
         callbacks.renderEnvironmentObjectList();
