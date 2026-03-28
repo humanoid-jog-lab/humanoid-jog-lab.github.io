@@ -894,6 +894,17 @@ export async function loadHumanoidSystem(robot, config) {
         throw new Error('WASM 未加载或未包含 HumanoidURDF，请重新构建 wasm');
     }
     const baseDQ = [1, 0, 0, 0, 0, 0, 0, 0];
+    const mjRestoreWorkerModelSpec = {
+        baseDQ: baseDQ.slice(),
+        waistChain: Array.isArray(chains.waistChain) ? chains.waistChain : [],
+        leftArmChain: Array.isArray(chains.leftArmChain) ? chains.leftArmChain : [],
+        rightArmChain: Array.isArray(chains.rightArmChain) ? chains.rightArmChain : [],
+        headChain: Array.isArray(chains.headChain) ? chains.headChain : [],
+        waistEffector: Array.isArray(chains.waistEffector) ? chains.waistEffector : [],
+        leftArmEffector: Array.isArray(chains.leftArmEffector) ? chains.leftArmEffector : [],
+        rightArmEffector: Array.isArray(chains.rightArmEffector) ? chains.rightArmEffector : [],
+        headEffector: Array.isArray(chains.headEffector) ? chains.headEffector : []
+    };
     // 传递 effector frames 以处理尾随固定关节
     appState.humanoidModel = new dqModule.HumanoidURDF(
         baseDQ,
@@ -935,7 +946,8 @@ export async function loadHumanoidSystem(robot, config) {
             leftArmLength: leftLen,
             rightArmLength: rightLen,
             headLength: headLen,
-            effectorLinkNames: [names.waist_end, names.left_arm_end, names.right_arm_end, names.head_end]
+            effectorLinkNames: [names.waist_end, names.left_arm_end, names.right_arm_end, names.head_end],
+            mjRestoreWorkerModelSpec
         });
         callbacks.applyHumanoidBasePose();
         appState.visualizer.setHumanoidJoints(appState.humanoidQ);

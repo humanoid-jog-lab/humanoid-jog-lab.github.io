@@ -206,6 +206,18 @@ function evaluateQuadraticObjective(H, f, x) {
     return 0.5 * dot(x, Hx) + dot(f, x);
 }
 
+function maxHalfspaceViolation(A, b, x) {
+    let maxViolation = 0;
+    const rows = Array.isArray(A) ? A.length : 0;
+    for (let i = 0; i < rows; i++) {
+        const row = Array.isArray(A?.[i]) ? A[i] : [];
+        const rhs = asNumber(b?.[i], Number.POSITIVE_INFINITY);
+        const violation = dot(row, x) - rhs;
+        if (violation > maxViolation) maxViolation = violation;
+    }
+    return maxViolation;
+}
+
 function toDenseSymmetricMatrix(H, n) {
     const out = new Array(n).fill(0).map(() => new Array(n).fill(0));
     for (let i = 0; i < n; i++) {
@@ -273,9 +285,13 @@ export function solveQPNumericActiveSet(
     const d = new Array(n).fill(0);
     for (let i = 0; i < n; i++) d[i] = -asNumber(f?.[i], 0);
     const { Amat, bvec } = buildNumericHalfspaceColumns(A, b, n);
+    const solveQPBackend = typeof options.solveQPBackend === 'function'
+        ? options.solveQPBackend
+        : numeric.solveQP;
+    const solutionTolerance = Math.max(0, asNumber(options.solutionTolerance, 1e-8));
 
     try {
-        const result = numeric.solveQP(D, d, Amat, bvec, 0);
+        const result = solveQPBackend(D, d, Amat, bvec, 0);
         const candidate = Array.isArray(result?.solution) ? result.solution : xSeed;
         const x = new Array(n).fill(0);
         let finite = true;
@@ -286,7 +302,26 @@ export function solveQPNumericActiveSet(
         const rawIterations = Array.isArray(result?.iterations) ? result.iterations.slice(0, 2) : null;
         const iterations = Number.isFinite(rawIterations?.[0]) ? rawIterations[0] : 0;
         const solverMessageRaw = typeof result?.message === 'string' ? result.message.trim() : '';
-        const converged = finite && solverMessageRaw.length === 0;
+        const feasible = finite && maxHalfspaceViolation(A, b, x) <= solutionTolerance;
+        const converged = feasible || (finite && solverMessageRaw.length === 0);
+        if (!feasible) {
+            const fallback = solveQPProjectedGradient(H, f, A, b, xSeed, options);
+            const fallbackFeasible = Array.isArray(fallback?.x)
+                && maxHalfspaceViolation(A, b, fallback.x) <= solutionTolerance;
+            if (fallbackFeasible) {
+                const fallbackMessage = solverMessageRaw
+                    ? `${solverMessageRaw}; projected_gradient_fallback`
+                    : 'projected_gradient_fallback';
+                return {
+                    x: fallback.x,
+                    iterations: fallback.iterations,
+                    converged: Boolean(fallback.converged),
+                    objective: fallback.objective,
+                    solverMessage: fallbackMessage,
+                    rawIterations: [iterations, fallback.iterations]
+                };
+            }
+        }
         return {
             x,
             iterations,
@@ -305,6 +340,20 @@ export function solveQPNumericActiveSet(
             rawIterations: null
         };
     }
+}
+
+export function buildQPNumericSolveOptions(config = {}) {
+    const maxIter = Math.max(1, asNumber(config.qpMaxIter, 80));
+    const stepTol = Math.max(0, asNumber(config.qpStepTol, 1e-7));
+    const gradTol = Math.max(0, asNumber(config.qpGradTol, 1e-7));
+    const solutionTolerance = Math.max(0, asNumber(config.qpSolutionTolerance, gradTol));
+
+    return {
+        maxIter,
+        stepTol,
+        gradTol,
+        solutionTolerance
+    };
 }
 
 export function solveQPProjectedGradient(

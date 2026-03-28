@@ -12,11 +12,13 @@ test('supportsHumanoidJogMJPreWControlMode enables supported control modes only'
     assert.equal(supportsHumanoidJogMJPreWControlMode('absolute'), true);
     assert.equal(supportsHumanoidJogMJPreWControlMode('decoupled'), true);
     assert.equal(supportsHumanoidJogMJPreWControlMode('decoupled-upright'), true);
-
-    assert.equal(supportsHumanoidJogMJPreWControlMode('relative'), false);
-    assert.equal(supportsHumanoidJogMJPreWControlMode('relative-fullbody'), false);
-    assert.equal(supportsHumanoidJogMJPreWControlMode('distance'), false);
-    assert.equal(supportsHumanoidJogMJPreWControlMode('distance-fullbody'), false);
+    assert.equal(supportsHumanoidJogMJPreWControlMode('relative'), true);
+    assert.equal(supportsHumanoidJogMJPreWControlMode('relative-fullbody'), true);
+    assert.equal(supportsHumanoidJogMJPreWControlMode('distance'), true);
+    assert.equal(supportsHumanoidJogMJPreWControlMode('distance-fullbody'), true);
+    assert.equal(supportsHumanoidJogMJPreWControlMode('robot1'), true);
+    assert.equal(supportsHumanoidJogMJPreWControlMode('robot2'), true);
+    assert.equal(supportsHumanoidJogMJPreWControlMode('waist-body-link-xz'), true);
     assert.equal(supportsHumanoidJogMJPreWControlMode('unknown'), false);
 });
 
@@ -89,6 +91,14 @@ test('mapHumanoidJogMJPreWOutcome maps active, skipped, rejected, and invalid ou
             }
         },
         {
+            name: 'skipped(none)',
+            input: { state: 'skipped(none)' },
+            expected: {
+                state: 'skipped(none)',
+                qPreEligible: false
+            }
+        },
+        {
             name: 'rejected(hard_constraints)',
             input: { state: 'rejected(hard_constraints)' },
             expected: { state: 'rejected(hard_constraints)', qPreEligible: false }
@@ -100,6 +110,24 @@ test('mapHumanoidJogMJPreWOutcome maps active, skipped, rejected, and invalid ou
                 error: new Error('boom')
             },
             expected: { state: 'failed(thrown)', qPreEligible: false }
+        },
+        {
+            name: 'boolean true fallback',
+            input: true,
+            expected: { state: 'skipped(none)', qPreEligible: false }
+        },
+        {
+            name: 'boolean false fallback',
+            input: false,
+            expected: { state: 'skipped(no_progress)', qPreEligible: false }
+        },
+        {
+            name: 'converged object without explicit state',
+            input: {
+                converged: true,
+                qApplied: [0.1, 0.2]
+            },
+            expected: { state: 'skipped(none)', qPreEligible: false }
         },
         {
             name: 'invalid',

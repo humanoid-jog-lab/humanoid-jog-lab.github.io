@@ -42,10 +42,6 @@ import {
 import { computeWaistXVFIRows } from './core/waist-x-vfi.js';
 import { enforceWVFILowerBound, selectWVFILowerBound } from './core/wvfi-guard.js';
 import {
-    resolveHumanoidJogVFIDefaultSecondaryMetric,
-    shouldProtectCommandRowsForHumanoidVFISecondary
-} from './core/humanoid-jog-vfi-secondary-metric.js';
-import {
     buildEqualityToleranceCandidates,
     shouldRetryWithoutSecondaryObjective
 } from './core/vfi-step-secondary-guard.js';
@@ -62,6 +58,7 @@ import {
 import { buildHumanoidJogManifoldProblem } from './core/humanoid-jog-manifold-problem.js';
 import { buildHumanoidJogMJProblem } from './core/humanoid-jog-mj-problem.js';
 import { buildHumanoidJogMJDistanceProblem } from './core/humanoid-jog-mj-distance-problem.js';
+import { buildHumanoidJogMJTaskDescriptor } from './core/humanoid-jog-mj-task-adapter.js';
 import {
     attemptHumanoidJogMJRestoreWasm,
     attemptHumanoidJogMJRestoreWasmWorker,
@@ -76,6 +73,7 @@ import { restoreHumanoidJogMJ } from './core/humanoid-jog-mj-restoration.js';
 import {
     getHumanoidJogMJPreWDirection,
     mapHumanoidJogMJPreWOutcome,
+    supportsHumanoidJogMJPreWControlMode,
     resolveHumanoidJogMJPreWMetric
 } from './core/humanoid-jog-mj-pre-w.js';
 import {
@@ -107,7 +105,13 @@ import {
     evaluateHumanoidJogAbsoluteHierarchicalVFIManipulability,
     evaluateHumanoidJogAbsoluteVFIManipulability,
     evaluateHumanoidJogDirectionalManipulability,
-    evaluateHumanoidJogProjectedManipulability
+    evaluateHumanoidJogProjectedManipulability,
+    evaluateHumanoidJogTaskArmManipulability,
+    evaluateHumanoidJogTaskArmVFIManipulability,
+    evaluateHumanoidJogTaskHierarchicalManipulability,
+    evaluateHumanoidJogTaskHierarchicalVFIManipulability,
+    evaluateHumanoidJogTaskManipulability,
+    evaluateHumanoidJogTaskVFIManipulability
 } from './core/humanoid-jog-directional-manipulability.js';
 import {
     computeTwistJacobian,
@@ -312,6 +316,8 @@ export class RobotVisualizer {
             mjRestoreNullspaceStepSize: 0.01,
             mjRestoreMetricProjectionStepSize: 0.01,
             mjRestoreMetricProjectionPasses: 4,
+            mjRestorePreWMetricIterations: 3,
+            mjRestorePreWRestoreIterations: 1,
             mjRestoreWaistMotionRegularization: 6,
             mjRestorePolishMaxIter: 64,
             mjRestorePolishActivationResidual: 1e-4,
@@ -332,14 +338,15 @@ export class RobotVisualizer {
             manifoldRelativeWeight: 1.0,
             manifoldBodyVerticalWeight: 4.0,
             manifoldBodyTolerance: 5e-5,
-            hardCommandTolPose: 1e-16,
+            hardCommandTolPose: 1e-6,
             hardCommandTolDistanceSq: 1e-8,
-            practicalCommandTolPose: 1e-16,
+            practicalCommandTolPose: 1e-4,
             practicalCommandTolDistanceSq: 1e-5,
             hardInvariantTol: 5e-5,
             practicalInvariantTol: 2.5e-4,
             practicalStepNormTol: 2e-5,
-            practicalViolationTol: 1e-8,
+            practicalViolationTol: 1e-7,
+            qpFeasibleAcceptanceTol: 1e-6,
             // Waist x-direction corridor (point-to-plane VFI, Section III-B)
             waistXCorridorEnabled: false,
             waistXMax: 0.05,            // 5 cm forward limit
@@ -747,10 +754,24 @@ export class RobotVisualizer {
         return q.slice(armStart, armStart + activeCount);
     }
 
+    _sliceHumanoidIndexedJoints(q, activeIndices = []) {
+        if (!Array.isArray(q) || !Array.isArray(activeIndices) || activeIndices.length === 0) return [];
+        return activeIndices.map((jointIndex) => q[jointIndex] || 0);
+    }
+
     _writeHumanoidActiveJoints(qBase, qActive, armStart, activeCount) {
         const qOut = Array.isArray(qBase) ? [...qBase] : [];
         for (let i = 0; i < activeCount && i < qActive.length; i++) {
             qOut[armStart + i] = qActive[i];
+        }
+        return qOut;
+    }
+
+    _writeHumanoidIndexedJoints(qBase, qActive, activeIndices = []) {
+        const qOut = Array.isArray(qBase) ? [...qBase] : [];
+        if (!Array.isArray(activeIndices)) return qOut;
+        for (let i = 0; i < activeIndices.length && i < qActive.length; i++) {
+            qOut[activeIndices[i]] = qActive[i];
         }
         return qOut;
     }
@@ -765,6 +786,17 @@ export class RobotVisualizer {
         return q;
     }
 
+    _clampHumanoidIndexedJoints(q, activeIndices = [], hardLimits = []) {
+        if (!Array.isArray(q) || !Array.isArray(activeIndices) || !Array.isArray(hardLimits)) return q;
+        for (let i = 0; i < activeIndices.length && i < hardLimits.length; i++) {
+            const lim = hardLimits[i];
+            if (!lim) continue;
+            const qIndex = activeIndices[i];
+            q[qIndex] = Math.max(lim.lower, Math.min(lim.upper, q[qIndex]));
+        }
+        return q;
+    }
+
     _computeHumanoidActiveJointDistance(qA, qB, armStart, activeCount) {
         if (!Array.isArray(qA) || !Array.isArray(qB) || activeCount <= 0) return Number.POSITIVE_INFINITY;
         let norm2 = 0;
@@ -773,6 +805,31 @@ export class RobotVisualizer {
             norm2 += diff * diff;
         }
         return Math.sqrt(norm2);
+    }
+
+    _computeHumanoidIndexedJointDistance(qA, qB, activeIndices = []) {
+        if (!Array.isArray(qA) || !Array.isArray(qB) || !Array.isArray(activeIndices) || activeIndices.length === 0) {
+            return Number.POSITIVE_INFINITY;
+        }
+        let norm2 = 0;
+        for (let i = 0; i < activeIndices.length; i++) {
+            const qIndex = activeIndices[i];
+            const diff = (qA[qIndex] || 0) - (qB[qIndex] || 0);
+            norm2 += diff * diff;
+        }
+        return Math.sqrt(norm2);
+    }
+
+    _selectHumanoidJacobianColumns(Jfull, armStart, activeCount, activeIndices = null) {
+        if (!Array.isArray(Jfull)) return [];
+        const usingIndexedSelection = Array.isArray(activeIndices) && activeIndices.length > 0;
+        return Jfull.map((srcRow) => {
+            const row = Array.isArray(srcRow) ? srcRow : [];
+            if (usingIndexedSelection) {
+                return activeIndices.map((qIndex) => row[qIndex] || 0);
+            }
+            return row.slice(armStart, armStart + activeCount);
+        });
     }
 
     // ── Waist x-corridor VFI helper ────────────────────────────────────────────
@@ -821,10 +878,44 @@ export class RobotVisualizer {
         };
     }
 
-    _buildHumanoidManifoldWaistXCorridor({ qFull, qInitialFull, armStart, activeCount, includeWaist }) {
+    _buildHumanoidManifoldWaistXCorridor({ qFull, qInitialFull, armStart, activeCount, includeWaist, activeIndices = null }) {
         const cfg = this.vfiConfig || {};
-        const enabled = includeWaist && cfg.waistXCorridorEnabled === true && armStart === 0;
-        const vfi = enabled ? this._getWaistXVFIRows(qFull, armStart, activeCount) : null;
+        const usingIndexedSelection = Array.isArray(activeIndices) && activeIndices.length > 0;
+        const enabled = includeWaist && cfg.waistXCorridorEnabled === true && (armStart === 0 || usingIndexedSelection);
+        const vfi = enabled && !usingIndexedSelection
+            ? this._getWaistXVFIRows(qFull, armStart, activeCount)
+            : null;
+        const waistCount = this.humanoidWaistLength;
+        const indexedVFIRows = enabled && usingIndexedSelection && waistCount > 0
+            ? (() => {
+                const waistRows = computeWaistXVFIRows({
+                    fkmFn: (qArg) => this.humanoidModel.fkmEffector(qArg, 0),
+                    q: qFull,
+                    waistStart: 0,
+                    waistCount,
+                    DQ: window.DQModule?.DQWrapper,
+                    xMax: Number.isFinite(cfg.waistXMax) ? cfg.waistXMax : 0.05,
+                    xMin: Number.isFinite(cfg.waistXMin) ? cfg.waistXMin : -Infinity,
+                    eta: Number.isFinite(cfg.waistXEta) ? cfg.waistXEta : 1.0,
+                    activationThreshold: Number.isFinite(cfg.waistXActivationThreshold) ? cfg.waistXActivationThreshold : 0.12
+                });
+                if (!waistRows || waistRows.rows.length === 0) return waistRows;
+                const embed = (row) => {
+                    const out = new Array(activeIndices.length).fill(0);
+                    for (let i = 0; i < activeIndices.length; i++) {
+                        const qIndex = activeIndices[i];
+                        if (qIndex >= 0 && qIndex < waistCount) out[i] = row[qIndex] || 0;
+                    }
+                    return out;
+                };
+                return {
+                    ...waistRows,
+                    rows: waistRows.rows.map((row) => embed(row)),
+                    vfiConstraints: waistRows.vfiConstraints.map((constraint) => ({ ...constraint, row: embed(constraint.row) }))
+                };
+            })()
+            : null;
+        const effectiveVFI = usingIndexedSelection ? indexedVFIRows : vfi;
         return {
             enabled,
             min: Number.isFinite(cfg.waistXMin) ? cfg.waistXMin : Number.NEGATIVE_INFINITY,
@@ -832,18 +923,23 @@ export class RobotVisualizer {
             tolerance: Number.isFinite(cfg.manifoldWaistXCorridorTolerance)
                 ? Math.max(0, cfg.manifoldWaistXCorridorTolerance)
                 : 5e-4,
-            vfiRows: Array.isArray(vfi?.rows) ? vfi.rows.map((row) => row.slice()) : [],
-            rhs: Array.isArray(vfi?.rhs) ? vfi.rhs.slice() : [],
-            evaluateX: (qNextActive) => this._evaluateHumanoidWaistXPosition(
-                this._writeHumanoidActiveJoints(qInitialFull, qNextActive, armStart, activeCount)
-            )
+            vfiRows: Array.isArray(effectiveVFI?.rows) ? effectiveVFI.rows.map((row) => row.slice()) : [],
+            rhs: Array.isArray(effectiveVFI?.rhs) ? effectiveVFI.rhs.slice() : [],
+            evaluateX: (qNextActive) => this._evaluateHumanoidWaistXPosition(usingIndexedSelection
+                ? this._writeHumanoidIndexedJoints(qInitialFull, qNextActive, activeIndices)
+                : this._writeHumanoidActiveJoints(qInitialFull, qNextActive, armStart, activeCount))
         };
     }
 
-    _buildManipulabilityVFIConstraints(q, armStart, activeCount, activeLimits = null) {
+    _buildManipulabilityVFIConstraints(q, armStart, activeCount, activeLimits = null, activeIndices = null) {
         const cfg = this.vfiConfig || {};
-        const qActive = this._sliceHumanoidActiveJoints(q, armStart, activeCount);
-        const extraConstraints = this._getWaistXVFIRows(q, armStart, activeCount)?.vfiConstraints ?? null;
+        const usingIndexedSelection = Array.isArray(activeIndices) && activeIndices.length > 0;
+        const qActive = usingIndexedSelection
+            ? this._sliceHumanoidIndexedJoints(q, activeIndices)
+            : this._sliceHumanoidActiveJoints(q, armStart, activeCount);
+        const extraConstraints = usingIndexedSelection
+            ? null
+            : (this._getWaistXVFIRows(q, armStart, activeCount)?.vfiConstraints ?? null);
         return buildManipulabilityVFIConstraints({
             qActive,
             activeLimits,
@@ -896,15 +992,17 @@ export class RobotVisualizer {
             if (metric === 'w') {
                 scalar = asFinite(evaluateHumanoidJogProjectedManipulability(cctsm), Number.NaN);
             } else if (metric === 'w_abs') {
-                scalar = asFinite(evaluateHumanoidJogAbsoluteManipulability(cctsm), Number.NaN);
+                scalar = asFinite(evaluateHumanoidJogTaskManipulability(cctsm), Number.NaN);
             } else if (metric === 'w_abs_arm') {
-                scalar = asFinite(evaluateHumanoidJogAbsoluteArmManipulability(cctsm), Number.NaN);
+                scalar = asFinite(evaluateHumanoidJogTaskArmManipulability(cctsm), Number.NaN);
+            } else if (metric === 'w_abs_arm_vfi') {
+                scalar = asFinite(evaluateHumanoidJogTaskArmVFIManipulability(cctsm), Number.NaN);
             } else if (metric === 'w_abs_vfi') {
-                scalar = asFinite(evaluateHumanoidJogAbsoluteVFIManipulability(cctsm), Number.NaN);
+                scalar = asFinite(evaluateHumanoidJogTaskVFIManipulability(cctsm), Number.NaN);
             } else if (metric === 'w_abs_hier') {
-                scalar = asFinite(evaluateHumanoidJogAbsoluteManipulability(cctsm), Number.NaN);
+                scalar = asFinite(evaluateHumanoidJogTaskHierarchicalManipulability(cctsm), Number.NaN);
             } else if (metric === 'w_abs_hier_vfi') {
-                scalar = asFinite(evaluateHumanoidJogAbsoluteHierarchicalVFIManipulability(
+                scalar = asFinite(evaluateHumanoidJogTaskHierarchicalVFIManipulability(
                     cctsm,
                     { hierarchicalVfiBlend: this._getHumanoidHierarchicalVfiBlend() }
                 ), Number.NaN);
@@ -1028,6 +1126,7 @@ export class RobotVisualizer {
 
         let J_xi_y = null;
         let J_xi_z = null;
+        let taskMetricJacobianOverride = null;
 
         if (mode === 'absolute' || mode === 'decoupled' || mode === 'decoupled-upright') {
             const xA = this._getHumanoidAbsolutePose(q);
@@ -1066,9 +1165,26 @@ export class RobotVisualizer {
             const Jd2_active = sliceColsK(Jd2full);
             J_xi_y = Jd2_active; // 1×activeCount (already minimal)
             const J_xi_a = computeTwistJacobian(JA_active, xA); // 6×activeCount
+            taskMetricJacobianOverride = computeTwistJacobian(JR_active, xR); // 6×activeCount
             const J_omega_r = computeAngularJacobian(JR_active.slice(0, 4), xR.slice(0, 4)); // 3×activeCount
-            if (!J_xi_a || !J_omega_r) return null;
+            if (!J_xi_a || !J_omega_r || !taskMetricJacobianOverride) return null;
             J_xi_z = [...J_xi_a, ...J_omega_r]; // 9×activeCount
+        } else if (mode === 'robot1' || mode === 'robot2') {
+            const armIndex = mode === 'robot1' ? 1 : 2;
+            const armPose = armIndex === 1
+                ? this._getHumanoidPose1(q)
+                : this._getHumanoidPose2(q);
+            const JArmFull = this._getHumanoidSingleArmPoseJacobian(q, armIndex)
+                || (armIndex === 1 ? this._getHumanoidPose1Jacobian?.(q) : this._getHumanoidPose2Jacobian?.(q));
+            if (!armPose || !JArmFull) return null;
+            const JArmActive = sliceCols(JArmFull);
+            J_xi_y = computeTwistJacobian(JArmActive, armPose);
+            J_xi_z = [];
+        } else if (mode === 'waist-body-link-xz') {
+            const bodyXZTask = this._getHumanoidWaistBodyLinkXZTask(q);
+            if (!bodyXZTask?.value || !bodyXZTask?.jacobianFull) return null;
+            J_xi_y = sliceColsK(bodyXZTask.jacobianFull);
+            J_xi_z = [];
         } else {
             return null; // unsupported mode
         }
@@ -1079,7 +1195,15 @@ export class RobotVisualizer {
         // that both the commanded (absolute pose) and the preserved (relative pose)
         // tasks contribute directly to the manipulability measure (no null-space
         // projection).  For other modes, keep the original projected formulation.
-        const useCombined = (mode === 'absolute' || mode === 'decoupled' || mode === 'decoupled-upright');
+        const useCombined = (
+            mode === 'absolute' ||
+            mode === 'decoupled' ||
+            mode === 'decoupled-upright' ||
+            mode === 'robot1' ||
+            mode === 'robot2' ||
+            mode === 'waist-body-link-xz'
+        );
+        const taskOnlyResult = computeCombinedCCTSM(J_xi_y, []);
         const absOnlyResult = useCombined
             ? computeCombinedCCTSM(J_xi_y, [])
             : null;
@@ -1124,6 +1248,13 @@ export class RobotVisualizer {
             ? W_vfi.slice(armOnlyStart, armOnlyStart + armOnlyColumns)
                 .map((row) => Array.isArray(row) ? row.slice(armOnlyStart, armOnlyStart + armOnlyColumns) : new Array(armOnlyColumns).fill(0))
             : null;
+        const taskOnlyVfiResult = computeCombinedVFICCTSM(J_xi_y, W_vfi);
+        const taskMetricOnlyResult = taskMetricJacobianOverride
+            ? computeCombinedCCTSM(taskMetricJacobianOverride, [])
+            : taskOnlyResult;
+        const taskMetricOnlyVfiResult = taskMetricJacobianOverride
+            ? computeCombinedVFICCTSM(taskMetricJacobianOverride, W_vfi)
+            : taskOnlyVfiResult;
         const absOnlyVfiResult = useCombined
             ? computeCombinedVFICCTSM(J_xi_y, W_vfi)
             : null;
@@ -1143,6 +1274,13 @@ export class RobotVisualizer {
             console.debug('[CCTSM] w≈0 for mode', mode, '— J_xi_y:', J_xi_y.length, '×', J_xi_y[0]?.length, 'N_z:', result.N_z?.length, '×', result.N_z?.[0]?.length, 'Gram det≈', result.w ** 2);
         }
         const hierarchicalBlend = this._getHumanoidHierarchicalVfiBlend();
+        const blendTaskVFI = (baseline, vfiValue) => {
+            if (!Number.isFinite(baseline) && !Number.isFinite(vfiValue)) return Number.NaN;
+            if (!Number.isFinite(baseline)) return vfiValue;
+            if (!Number.isFinite(vfiValue)) return baseline;
+            const blended = (1 - hierarchicalBlend) * baseline + hierarchicalBlend * vfiValue;
+            return Math.min(baseline, blended);
+        };
         const wAbs = absOnlyResult?.w;
         const wAbsVfi = absOnlyVfiResult?.w_vfi;
         const wAbsHier = Number.isFinite(wAbs)
@@ -1150,16 +1288,55 @@ export class RobotVisualizer {
             : (Number.isFinite(wAbsVfi)
                 ? wAbsVfi
                 : Number.NaN);
-        const blendedAbsHierVfi = Number.isFinite(wAbsHier) && Number.isFinite(wAbsVfi)
-            ? (1 - hierarchicalBlend) * wAbsHier + hierarchicalBlend * wAbsVfi
-            : Number.isFinite(wAbs)
-                ? wAbsHier
-                : (Number.isFinite(wAbsVfi)
-                    ? wAbsVfi
-                    : Number.NaN);
-        const wAbsHierVfi = Number.isFinite(wAbsHier) && Number.isFinite(blendedAbsHierVfi)
-            ? Math.min(wAbsHier, blendedAbsHierVfi)
-            : blendedAbsHierVfi;
+        const wAbsHierVfi = blendTaskVFI(wAbsHier, wAbsVfi);
+        let taskMetricKind = 'absolute_pose';
+        let wTask = wAbs;
+        let wTaskVfi = wAbsVfi;
+        let wTaskArm = absArmOnlyResult?.w ?? Number.NaN;
+        let wTaskArmVfi = absArmOnlyVfiResult?.w_vfi ?? Number.NaN;
+        let wTaskHier = wAbsHier;
+        let wTaskHierVfi = wAbsHierVfi;
+        if (mode === 'relative' || mode === 'relative-fullbody') {
+            taskMetricKind = 'relative_pose';
+            wTask = taskMetricOnlyResult?.w;
+            wTaskVfi = taskMetricOnlyVfiResult?.w_vfi ?? wTask;
+            wTaskArm = wTask;
+            wTaskArmVfi = wTaskVfi;
+            wTaskHier = wTask;
+            wTaskHierVfi = blendTaskVFI(wTaskHier, wTaskVfi);
+        } else if (mode === 'distance' || mode === 'distance-fullbody') {
+            taskMetricKind = 'relative_pose';
+            wTask = taskMetricOnlyResult?.w;
+            wTaskVfi = taskMetricOnlyVfiResult?.w_vfi ?? wTask;
+            wTaskArm = wTask;
+            wTaskArmVfi = wTaskVfi;
+            wTaskHier = wTask;
+            wTaskHierVfi = blendTaskVFI(wTaskHier, wTaskVfi);
+        } else if (mode === 'robot1') {
+            taskMetricKind = 'left_arm_pose';
+            wTask = taskOnlyResult?.w;
+            wTaskVfi = taskOnlyVfiResult?.w_vfi ?? wTask;
+            wTaskArm = wTask;
+            wTaskArmVfi = wTaskVfi;
+            wTaskHier = wTask;
+            wTaskHierVfi = blendTaskVFI(wTaskHier, wTaskVfi);
+        } else if (mode === 'robot2') {
+            taskMetricKind = 'right_arm_pose';
+            wTask = taskOnlyResult?.w;
+            wTaskVfi = taskOnlyVfiResult?.w_vfi ?? wTask;
+            wTaskArm = wTask;
+            wTaskArmVfi = wTaskVfi;
+            wTaskHier = wTask;
+            wTaskHierVfi = blendTaskVFI(wTaskHier, wTaskVfi);
+        } else if (mode === 'waist-body-link-xz') {
+            taskMetricKind = 'body_link_xz';
+            wTask = taskOnlyResult?.w;
+            wTaskVfi = taskOnlyVfiResult?.w_vfi ?? wTask;
+            wTaskArm = wTask;
+            wTaskArmVfi = wTaskVfi;
+            wTaskHier = wTask;
+            wTaskHierVfi = blendTaskVFI(wTaskHier, wTaskVfi);
+        }
         return {
             w: result.w,
             w_vfi: vfiResult?.w_vfi ?? result.w,
@@ -1170,6 +1347,13 @@ export class RobotVisualizer {
             w_abs_arm: absArmOnlyResult?.w ?? Number.NaN,
             w_abs_arm_vfi: absArmOnlyVfiResult?.w_vfi ?? Number.NaN,
             w_abs_vfi: absOnlyVfiResult?.w_vfi ?? Number.NaN,
+            w_task: wTask,
+            w_task_vfi: wTaskVfi,
+            w_task_arm: wTaskArm,
+            w_task_arm_vfi: wTaskArmVfi,
+            w_task_hier: wTaskHier,
+            w_task_hier_vfi: wTaskHierVfi,
+            taskMetricKind,
             N_z: result.N_z,
             J_bar: result.J_bar,
             Gram: result.Gram,
@@ -1433,6 +1617,39 @@ export class RobotVisualizer {
         });
     }
 
+    _getHumanoidWaistBodyLinkXZTask(q) {
+        const DQ = window.DQModule?.DQWrapper;
+        if (
+            !DQ ||
+            !this.humanoidModel ||
+            typeof this.humanoidModel.fkmEffector !== 'function' ||
+            typeof this.humanoidModel.poseJacobianEffector !== 'function'
+        ) {
+            return null;
+        }
+
+        const bodyPose = this.humanoidModel.fkmEffector(q, 0);
+        const bodyJacobian = this.humanoidModel.poseJacobianEffector(q, 0);
+        if (!Array.isArray(bodyPose) || !Array.isArray(bodyJacobian) || bodyJacobian.length < 8) {
+            return null;
+        }
+        const bodyTwistJacobian = computeTwistJacobian(bodyJacobian, bodyPose);
+        if (!Array.isArray(bodyTwistJacobian) || bodyTwistJacobian.length < 6) {
+            return null;
+        }
+        const translation = DQ.getTranslation(DQ.createFromArray(bodyPose));
+        return {
+            value: [
+                Number(translation?.[1] ?? 0),
+                Number(translation?.[3] ?? 0)
+            ],
+            jacobianFull: [
+                Array.isArray(bodyTwistJacobian[3]) ? bodyTwistJacobian[3].slice() : [],
+                Array.isArray(bodyTwistJacobian[5]) ? bodyTwistJacobian[5].slice() : []
+            ]
+        };
+    }
+
     _matVecProduct(M, v) {
         if (!Array.isArray(M) || M.length === 0 || !Array.isArray(v)) return [];
         const out = new Array(M.length).fill(0);
@@ -1685,6 +1902,23 @@ export class RobotVisualizer {
             lines.push(
                 `jog_metric: ${payload.jogMetric.trim()}  ${payload.jogMetricState || 'n/a'}${axisPart}  before=${this._formatDiagNumber(payload.jogMetricBefore)}  after=${this._formatDiagNumber(payload.jogMetricAfter)}  applied=${payload.jogMetricApplied ? 'yes' : 'no'}`
             );
+            if (typeof payload.taskMetricLabel === 'string' && payload.taskMetricLabel.trim().length > 0) {
+                lines.push(`task_w: ${payload.taskMetricLabel.trim()}`);
+            }
+        }
+        if (payload.solverMode === 'mj_restore_pre_w') {
+            if (typeof payload.preWState === 'string' && payload.preWState.trim().length > 0) {
+                lines.push(`pre_w: ${payload.preWState.trim()}`);
+            }
+            if (typeof payload.preWMetric === 'string' && payload.preWMetric.trim().length > 0) {
+                lines.push(`pre_w_metric: ${payload.preWMetric.trim()}`);
+                if (typeof payload.taskPreWMetricLabel === 'string' && payload.taskPreWMetricLabel.trim().length > 0) {
+                    lines.push(`task_pre_w: ${payload.taskPreWMetricLabel.trim()}`);
+                }
+            }
+            if (typeof payload.preWStart === 'string' && payload.preWStart.trim().length > 0) {
+                lines.push(`pre_w_start: ${payload.preWStart.trim()}`);
+            }
         }
         if (Number.isFinite(payload.hierarchicalVfiBlend)) {
             lines.push(`hier_vfi_blend: alpha=${this._formatDiagNumber(payload.hierarchicalVfiBlend)}`);
@@ -1764,7 +1998,7 @@ export class RobotVisualizer {
                 `wvfi_floor: value=${this._formatDiagNumber(payload.wvfiFloorValue)}  min=${this._formatDiagNumber(payload.wvfiFloorLowerBound)}  slack=${this._formatDiagNumber(payload.wvfiFloorSlack)}  viol=${this._formatDiagNumber(payload.wvfiFloorViolation)}`
             );
         } else if (
-            payload.solverMode === 'mj_restore' &&
+            (payload.solverMode === 'mj_restore' || payload.solverMode === 'mj_restore_pre_w') &&
             (
                 Number.isFinite(payload.cctsmWvfi) ||
                 Number.isFinite(payload.vfiTotalCount)
@@ -3154,6 +3388,46 @@ export class RobotVisualizer {
         return this._humanoidMJWorkerWarmPromise;
     }
 
+    _enqueueHumanoidJogMJRestorePreWRequest(request) {
+        this._humanoidMJPreWPendingRequest = request;
+        if (this._humanoidMJPreWLoopActive) {
+            return true;
+        }
+        this._humanoidMJPreWLoopActive = true;
+        const drainQueue = async () => {
+            try {
+                while (this._humanoidMJPreWPendingRequest) {
+                    const nextRequest = this._humanoidMJPreWPendingRequest;
+                    this._humanoidMJPreWPendingRequest = null;
+                    await this._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstMJRestorePreW(
+                        nextRequest.dqAbsoluteTargetArray,
+                        nextRequest.currentQ,
+                        nextRequest.enableJointLimitAvoidance,
+                        nextRequest.includeWaist,
+                        nextRequest.keepBodyZVertical,
+                        nextRequest.fixedRelativeTargetArray,
+                        nextRequest.translationAxisGuard
+                    );
+                }
+            } catch (error) {
+                console.error('MuJoCo 风格恢复 + w预优化 队列异常:', error);
+                this._setIKFailureStatus({
+                    solver: 'mj_restore_pre_w',
+                    mode: 'humanoid_absolute',
+                    reason: 'async_exception',
+                    message: `MuJoCo 风格恢复 + w预优化 异常：${error?.message || 'unknown'}`
+                });
+            } finally {
+                this._humanoidMJPreWLoopActive = false;
+                if (this._humanoidMJPreWPendingRequest) {
+                    this._enqueueHumanoidJogMJRestorePreWRequest(this._humanoidMJPreWPendingRequest);
+                }
+            }
+        };
+        void drainQueue();
+        return true;
+    }
+
     _enqueueHumanoidJogMJRestoreWorkerRequest(request) {
         this._humanoidMJWorkerPendingRequest = request;
         if (this._humanoidMJWorkerLoopActive) {
@@ -3174,12 +3448,17 @@ export class RobotVisualizer {
                         nextRequest.keepBodyZVertical,
                         nextRequest.fixedRelativeTargetArray,
                         {
-                            solverMode: 'mj_restore',
+                            solverMode: typeof nextRequest.solverMode === 'string'
+                                ? normalizeHumanoidJogSolverMode(nextRequest.solverMode)
+                                : 'mj_restore',
                             translationAxisGuard: nextRequest.translationAxisGuard,
                             requestToken,
                             preferWorker: true,
                             jogMetricOverride: nextRequest.jogMetricOverride,
-                            metricDirection: nextRequest.metricDirection
+                            metricDirection: nextRequest.metricDirection,
+                            preWState: nextRequest.preWState,
+                            preWMetric: nextRequest.preWMetric,
+                            preWStart: nextRequest.preWStart
                         }
                     );
                 }
@@ -5636,22 +5915,87 @@ export class RobotVisualizer {
         }
 
         const requestDirection = direction === 'decrease' ? 'decrease' : 'increase';
+        const internalOptions = {
+            solverMode: 'mj_restore',
+            preferWorker: true,
+            jogMetricOverride: requestMetric,
+            metricDirection: requestDirection
+        };
         try {
-            const result = this._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstMJRestore(
-                dqAbsoluteTargetArray.slice(),
-                currentQ,
-                enableJointLimitAvoidance,
-                includeWaist,
-                keepBodyZVertical,
-                fixedRelativeTargetArray,
-                null,
-                {
-                    solverMode: 'mj_restore',
-                    preferWorker: true,
-                    jogMetricOverride: requestMetric,
-                    metricDirection: requestDirection
-                }
-            );
+            let result = null;
+            if (controlMode === 'robot1' || controlMode === 'robot2' || controlMode === 'waist-body-link-xz') {
+                const runSpecialMetricOptimization = async () => {
+                    let preWResult = null;
+                    if (controlMode === 'robot1' || controlMode === 'robot2') {
+                        const armIndex = controlMode === 'robot1' ? 1 : 2;
+                        const { start, count } = this._humanoidSingleArmIndices(armIndex);
+                        const jointLimits = this._getHumanoidJointLimits();
+                        preWResult = await this._runHumanoidMJRestoreSpecialModePreWStage({
+                            q0: currentQ,
+                            armStart: start,
+                            activeCount: count,
+                            hardLimits: jointLimits ? jointLimits.slice(start, start + count) : null,
+                            poseGetter: armIndex === 1
+                                ? (q) => this._getHumanoidPose1(q)
+                                : (q) => this._getHumanoidPose2(q),
+                            jacobianGetter: (q) => this._getHumanoidSingleArmPoseJacobian(q, armIndex),
+                            mode: controlMode,
+                            preWMetric: requestMetric,
+                            includeWaist: false,
+                            keepBodyZVertical: false
+                        });
+                    } else {
+                        const { start, count } = this._humanoidWaistIndices();
+                        const jointLimits = this._getHumanoidJointLimits();
+                        preWResult = await this._runHumanoidMJRestoreSpecialModePreWStage({
+                            q0: currentQ,
+                            armStart: start,
+                            activeCount: count,
+                            hardLimits: jointLimits ? jointLimits.slice(start, start + count) : null,
+                            poseGetter: (q) => this.humanoidModel?.fkmEffector?.(q, 0),
+                            jacobianGetter: (q) => this.humanoidModel?.poseJacobianEffector?.(q, 0),
+                            mode: controlMode,
+                            preWMetric: requestMetric,
+                            includeWaist: true,
+                            keepBodyZVertical: false
+                        });
+                    }
+                    const preWOutcome = mapHumanoidJogMJPreWOutcome(preWResult);
+                    if (preWOutcome.qPreEligible === true && Array.isArray(preWResult?.qApplied) && preWResult.qApplied.length > 0) {
+                        this._applyHumanoidJointSolution(preWResult.qApplied);
+                        return true;
+                    }
+                    return false;
+                };
+                result = runSpecialMetricOptimization();
+            } else if (controlMode === 'relative' || controlMode === 'relative-fullbody') {
+                result = this._updateHumanoidJointsFromRelativePoseTargetAbsoluteFirstMJRestore(
+                    fixedRelativeTargetArray.slice(),
+                    currentQ,
+                    enableJointLimitAvoidance,
+                    controlMode === 'relative-fullbody',
+                    internalOptions
+                );
+            } else if (controlMode === 'distance' || controlMode === 'distance-fullbody') {
+                result = this._updateHumanoidJointsFromRelativeDistanceDeltaMJRestore(
+                    0,
+                    currentQ,
+                    enableJointLimitAvoidance,
+                    controlMode === 'distance-fullbody',
+                    internalOptions
+                );
+            } else {
+                result = this._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstMJRestore(
+                    dqAbsoluteTargetArray.slice(),
+                    currentQ,
+                    enableJointLimitAvoidance,
+                    includeWaist,
+                    keepBodyZVertical,
+                    fixedRelativeTargetArray,
+                    null,
+                    internalOptions
+                );
+            }
             if (result && typeof result.then === 'function') {
                 void result.catch((error) => {
                     console.error('w 指标优化（MJ 恢复）失败:', error);
@@ -5682,7 +6026,149 @@ export class RobotVisualizer {
         return 'absolute';
     }
 
+    async _runHumanoidMJRestoreMetricOnlyPreWAttempt({
+        q0,
+        armStart,
+        activeCount,
+        hardLimits = null,
+        includeWaist = false,
+        keepBodyZVertical = false,
+        jogMetric = 'w_abs_hier',
+        metricDirection = 'increase',
+        buildProblem = null,
+        projectionPasses = 3,
+        stepSize = 0.01
+    } = {}) {
+        if (!Array.isArray(q0) || q0.length === 0 || typeof buildProblem !== 'function' || activeCount <= 0) {
+            return {
+                state: 'failed(invalid_metric_result)',
+                qApplied: Array.isArray(q0) ? q0.slice() : [],
+                applied: false,
+                qPreEligible: false,
+                acceptedCandidate: false,
+                converged: false
+            };
+        }
+
+        const qInitialFull = q0.slice();
+        const qInitialActive = this._sliceHumanoidActiveJoints(qInitialFull, armStart, activeCount);
+        const cfg = this.vfiConfig || {};
+        const jointLimits = this._getHumanoidJointLimits();
+        const localHardLimits = Array.isArray(hardLimits) && hardLimits.length === activeCount
+            ? hardLimits
+            : (jointLimits ? jointLimits.slice(armStart, armStart + activeCount) : null);
+        const lowerBounds = localHardLimits
+            ? localHardLimits.map((limit) => limit?.lower ?? -Math.PI)
+            : new Array(activeCount).fill(-Math.PI);
+        const upperBounds = localHardLimits
+            ? localHardLimits.map((limit) => limit?.upper ?? Math.PI)
+            : new Array(activeCount).fill(Math.PI);
+        const maxStep = Number.isFinite(cfg.mjRestoreMaxStep)
+            ? cfg.mjRestoreMaxStep
+            : (Number.isFinite(cfg.maxStep) ? cfg.maxStep : 0.05);
+        const jointMaxSteps = buildHumanoidJogManifoldStepBounds({
+            maxStep,
+            includeWaist,
+            keepBodyZVertical,
+            waistCount: includeWaist ? this.humanoidWaistLength : 0,
+            activeCount,
+            waistStepFraction: Number.isFinite(cfg.manifoldWaistStepFraction)
+                ? cfg.manifoldWaistStepFraction
+                : 1.0
+        });
+        const restoreProfile = resolveHumanoidJogMJRestoreProfile({
+            includeWaist,
+            fallbackReason: null,
+            config: cfg
+        });
+        const equalityTolerance = Math.min(
+            Number.isFinite(cfg.hardCommandTolPose) ? cfg.hardCommandTolPose : 1e-6,
+            Number.isFinite(cfg.hardInvariantTol) ? cfg.hardInvariantTol : 5e-5
+        );
+        const inequalityTolerance = Number.isFinite(cfg.mjRestoreHardTolerance)
+            ? Math.max(0, cfg.mjRestoreHardTolerance)
+            : 1e-8;
+        const minScale = Number.isFinite(cfg.mjRestoreLineSearchMinScale)
+            ? Math.max(1e-8, cfg.mjRestoreLineSearchMinScale)
+            : 1e-6;
+        const reductionFactor = Number.isFinite(cfg.mjRestoreLineSearchReductionFactor)
+            ? cfg.mjRestoreLineSearchReductionFactor
+            : 0.5;
+        const metricIterations = Number.isFinite(cfg.mjRestorePreWMetricIterations)
+            ? Math.max(1, Math.floor(cfg.mjRestorePreWMetricIterations))
+            : 3;
+        const context = {
+            qInitialFull,
+            qInitialActive,
+            armStart,
+            activeCount,
+            hardLimits: localHardLimits,
+            lowerBounds,
+            upperBounds,
+            stepBounds: jointMaxSteps,
+            includeWaist,
+            keepBodyZVertical,
+            restoreProfile
+        };
+        const evaluateProblem = (qActiveEval) => buildProblem(qActiveEval, context);
+        const baseProblem = evaluateProblem(qInitialActive);
+        if (!baseProblem) {
+            return {
+                state: 'failed(invalid_metric_result)',
+                qApplied: qInitialFull.slice(),
+                applied: false,
+                qPreEligible: false,
+                acceptedCandidate: false,
+                converged: false
+            };
+        }
+
+        const preWAttempt = await this._attemptHumanoidJogManifoldMetricRefinement({
+            baseProblem,
+            baseQActive: qInitialActive,
+            metric: jogMetric,
+            direction: metricDirection,
+            axis: '',
+            evaluateProblem,
+            armStart,
+            activeCount,
+            activeLimits: localHardLimits,
+            lowerBounds,
+            upperBounds,
+            stepBounds: jointMaxSteps,
+            wvfiMin: 0,
+            restoreMaxIterations: metricIterations,
+            damping: restoreProfile.damping,
+            minScale,
+            reductionFactor,
+            equalityTolerance,
+            inequalityTolerance,
+            stepSize,
+            preferWVFIFallbackOnClip: jogMetric === 'w_abs_hier_vfi',
+            directionFallbackMetric: jogMetric === 'w_abs_hier_vfi' ? 'w_abs_hier_vfi' : '',
+            preferActiveLimitRetreat: jogMetric === 'w_abs_hier_vfi',
+            projectionOnly: true,
+            projectionPasses,
+            restoreFn: restoreHumanoidJogMJ,
+            restoreConfig: {
+                referenceStiffness: restoreProfile.referenceStiffness,
+                referenceDamping: restoreProfile.referenceDamping
+            }
+        });
+
+        const qApplied = preWAttempt?.applied === true && Array.isArray(preWAttempt?.refineResult?.qApplied)
+            ? this._writeHumanoidActiveJoints(qInitialFull, preWAttempt.refineResult.qApplied, armStart, activeCount)
+            : qInitialFull.slice();
+
+        return {
+            ...preWAttempt,
+            qApplied,
+            qPreEligible: preWAttempt?.applied === true && Array.isArray(preWAttempt?.refineResult?.qApplied)
+        };
+    }
+
     async _runHumanoidMJRestorePreWStage({
+        controlMode,
         q0,
         dqAbsoluteProtectedTargetArray,
         fixedRelativeProtectedTargetArray,
@@ -5692,6 +6178,249 @@ export class RobotVisualizer {
         jogMetric,
         metricDirection
     }) {
+        if (!supportsHumanoidJogMJPreWControlMode(controlMode)) {
+            return {
+                state: 'skipped(unsupported_control_mode)',
+                qPreEligible: false
+            };
+        }
+        if (controlMode === 'absolute' || controlMode === 'decoupled' || controlMode === 'decoupled-upright') {
+            const cfg = this.vfiConfig || {};
+            const metricIterations = Number.isFinite(cfg.mjRestorePreWMetricIterations)
+                ? Math.max(0, Math.floor(cfg.mjRestorePreWMetricIterations))
+                : 3;
+            const restoreIterations = Number.isFinite(cfg.mjRestorePreWRestoreIterations)
+                ? Math.max(0, Math.floor(cfg.mjRestorePreWRestoreIterations))
+                : 1;
+            return this._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstManifold(
+                dqAbsoluteProtectedTargetArray,
+                q0,
+                enableJointLimitAvoidance,
+                includeWaist,
+                keepBodyZVertical,
+                fixedRelativeProtectedTargetArray,
+                {
+                    solverMode: 'mj_restore_pre_w',
+                    preferWorker: true,
+                    suppressFailureNotification: true,
+                    candidateOnly: true,
+                    allowArmOnlyFallback: false,
+                    jogMetricOverride: jogMetric,
+                    metricDirection,
+                    iterativeMetricProjectionPlan: {
+                        metricIterations,
+                        restoreIterations
+                    }
+                }
+            );
+        }
+
+        const qInitialFull = Array.isArray(q0) ? q0.slice() : [];
+        const { armStart, activeCount } = this._getHumanoidActiveSliceInfo(includeWaist);
+        if (activeCount <= 0) {
+            return {
+                state: 'failed(invalid_metric_result)',
+                qApplied: qInitialFull,
+                applied: false,
+                qPreEligible: false,
+                acceptedCandidate: false,
+                converged: false
+            };
+        }
+        const jointLimits = this._getHumanoidJointLimits();
+        const hardLimits = enableJointLimitAvoidance && jointLimits
+            ? jointLimits.slice(armStart, armStart + activeCount)
+            : null;
+        const extractActiveColumns = (rows) => (Array.isArray(rows) ? rows : []).map((row) => {
+            const out = new Array(activeCount).fill(0);
+            if (!Array.isArray(row)) return out;
+            for (let i = 0; i < activeCount; i += 1) out[i] = row[armStart + i] || 0;
+            return out;
+        });
+
+        if (controlMode === 'relative' || controlMode === 'relative-fullbody') {
+            const absCurrentArray = this._getHumanoidAbsolutePose(qInitialFull);
+            const relCurrentArray = this._getHumanoidRelativePose(qInitialFull);
+            if (!absCurrentArray || !relCurrentArray) {
+                return {
+                    state: 'failed(invalid_metric_result)',
+                    qApplied: qInitialFull,
+                    applied: false,
+                    qPreEligible: false,
+                    acceptedCandidate: false,
+                    converged: false
+                };
+            }
+            return this._runHumanoidMJRestoreMetricOnlyPreWAttempt({
+                q0: qInitialFull,
+                armStart,
+                activeCount,
+                hardLimits,
+                includeWaist,
+                keepBodyZVertical: false,
+                jogMetric,
+                metricDirection,
+                buildProblem: (qActiveEval, context) => {
+                    const qFull = this._writeHumanoidActiveJoints(context.qInitialFull, qActiveEval, context.armStart, context.activeCount);
+                    const absPose = this._getHumanoidAbsolutePose(qFull);
+                    const relPose = this._getHumanoidRelativePose(qFull);
+                    const JabsFull = this._getHumanoidAbsolutePoseJacobian(qFull);
+                    const JrelFull = this._getHumanoidRelativePoseJacobian(qFull);
+                    if (!absPose || !relPose || !JabsFull || !JrelFull) return null;
+                    const absJacobian = extractActiveColumns(JabsFull);
+                    const relJacobian = extractActiveColumns(JrelFull);
+                    const absTwistJacobian = computeTwistJacobian(absJacobian, absPose);
+                    const relTwistJacobian = computeTwistJacobian(relJacobian, relPose);
+                    if (!absTwistJacobian || !relTwistJacobian) return null;
+                    const vfiConstraints = this._buildManipulabilityVFIConstraints(qFull, context.armStart, context.activeCount, context.hardLimits);
+                    const cctsm = this._computeModeCCTSM(qFull, context.armStart, context.activeCount, controlMode, vfiConstraints, { force: true });
+                    const problem = buildHumanoidJogMJProblem({
+                        q: qActiveEval,
+                        qCurrent: context.qInitialActive,
+                        absoluteTarget: absCurrentArray,
+                        relativeTarget: relCurrentArray,
+                        absolutePose: () => absPose,
+                        relativePose: () => relPose,
+                        absoluteJacobian: () => absJacobian,
+                        relativeJacobian: () => relJacobian,
+                        includeBodyZ: false,
+                        bodyEqualityTolerance: 0,
+                        absoluteWeight: 1,
+                        relativeWeight: 1,
+                        bodyWeight: 0,
+                        wvfiLowerBound: 0,
+                        lowerBounds: context.lowerBounds,
+                        upperBounds: context.upperBounds,
+                        stepBounds: context.stepBounds,
+                        waistXCorridor: this._buildHumanoidManifoldWaistXCorridor({
+                            qFull,
+                            qInitialFull: context.qInitialFull,
+                            armStart: context.armStart,
+                            activeCount: context.activeCount,
+                            includeWaist: context.includeWaist
+                        }),
+                        referenceModel: {
+                            absolute: {
+                                stiffness: context.restoreProfile.referenceStiffness,
+                                damping: context.restoreProfile.referenceDamping
+                            },
+                            relative: {
+                                stiffness: context.restoreProfile.referenceStiffness,
+                                damping: context.restoreProfile.referenceDamping
+                            },
+                            bodyZ: {
+                                stiffness: 0,
+                                damping: 0
+                            }
+                        }
+                    });
+                    problem.metadata = {
+                        qFull,
+                        cctsm,
+                        Jcmd: relTwistJacobian,
+                        protectedRows: absTwistJacobian,
+                        metricMode: 'relative'
+                    };
+                    return problem;
+                }
+            });
+        }
+
+        if (controlMode === 'distance' || controlMode === 'distance-fullbody') {
+            const absCurrentArray = this._getHumanoidAbsolutePose(qInitialFull);
+            const relStartArray = this._getHumanoidRelativePose(qInitialFull);
+            if (!absCurrentArray || !relStartArray) {
+                return {
+                    state: 'failed(invalid_metric_result)',
+                    qApplied: qInitialFull,
+                    applied: false,
+                    qPreEligible: false,
+                    acceptedCandidate: false,
+                    converged: false
+                };
+            }
+            return this._runHumanoidMJRestoreMetricOnlyPreWAttempt({
+                q0: qInitialFull,
+                armStart,
+                activeCount,
+                hardLimits,
+                includeWaist,
+                keepBodyZVertical: false,
+                jogMetric,
+                metricDirection,
+                buildProblem: (qActiveEval, context) => {
+                    const qFull = this._writeHumanoidActiveJoints(context.qInitialFull, qActiveEval, context.armStart, context.activeCount);
+                    const absPose = this._getHumanoidAbsolutePose(qFull);
+                    const relPose = this._getHumanoidRelativePose(qFull);
+                    const JabsFull = this._getHumanoidAbsolutePoseJacobian(qFull);
+                    const JrelFull = this._getHumanoidRelativePoseJacobian(qFull);
+                    if (!absPose || !relPose || !JabsFull || !JrelFull) return null;
+                    const absJacobian = extractActiveColumns(JabsFull);
+                    const relJacobian = extractActiveColumns(JrelFull);
+                    const absTwistJacobian = computeTwistJacobian(absJacobian, absPose);
+                    const relTwistJacobian = computeTwistJacobian(relJacobian, relPose);
+                    if (!absTwistJacobian || !relTwistJacobian) return null;
+                    const vfiConstraints = this._buildManipulabilityVFIConstraints(qFull, context.armStart, context.activeCount, context.hardLimits);
+                    const cctsm = this._computeModeCCTSM(qFull, context.armStart, context.activeCount, 'relative', vfiConstraints, { force: true });
+                    const problem = buildHumanoidJogMJProblem({
+                        q: qActiveEval,
+                        qCurrent: context.qInitialActive,
+                        absoluteTarget: absCurrentArray,
+                        relativeTarget: relStartArray,
+                        absolutePose: () => absPose,
+                        relativePose: () => relPose,
+                        absoluteJacobian: () => absJacobian,
+                        relativeJacobian: () => relJacobian,
+                        includeBodyZ: false,
+                        bodyEqualityTolerance: 0,
+                        absoluteWeight: 1,
+                        relativeWeight: 1,
+                        bodyWeight: 0,
+                        lowerBounds: context.lowerBounds,
+                        upperBounds: context.upperBounds,
+                        stepBounds: context.stepBounds,
+                        wvfiLowerBound: 0,
+                        waistXCorridor: this._buildHumanoidManifoldWaistXCorridor({
+                            qFull,
+                            qInitialFull: context.qInitialFull,
+                            armStart: context.armStart,
+                            activeCount: context.activeCount,
+                            includeWaist: context.includeWaist
+                        }),
+                        referenceModel: {
+                            absolute: {
+                                stiffness: context.restoreProfile.referenceStiffness,
+                                damping: context.restoreProfile.referenceDamping
+                            },
+                            relative: {
+                                stiffness: context.restoreProfile.referenceStiffness,
+                                damping: context.restoreProfile.referenceDamping
+                            },
+                            bodyZ: {
+                                stiffness: 0,
+                                damping: 0
+                            }
+                        }
+                    });
+                    problem.metadata = {
+                        qFull,
+                        cctsm,
+                        Jcmd: relTwistJacobian,
+                        protectedRows: absTwistJacobian,
+                        metricMode: 'relative'
+                    };
+                    return problem;
+                }
+            });
+        }
+
+        const cfg = this.vfiConfig || {};
+        const metricIterations = Number.isFinite(cfg.mjRestorePreWMetricIterations)
+            ? Math.max(0, Math.floor(cfg.mjRestorePreWMetricIterations))
+            : 3;
+        const restoreIterations = Number.isFinite(cfg.mjRestorePreWRestoreIterations)
+            ? Math.max(0, Math.floor(cfg.mjRestorePreWRestoreIterations))
+            : 1;
         return this._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstManifold(
             dqAbsoluteProtectedTargetArray,
             q0,
@@ -5700,15 +6429,142 @@ export class RobotVisualizer {
             keepBodyZVertical,
             fixedRelativeProtectedTargetArray,
             {
-                solverMode: 'mj_restore',
-                preferWorker: false,
+                solverMode: 'mj_restore_pre_w',
+                preferWorker: true,
                 suppressFailureNotification: true,
                 candidateOnly: true,
                 allowArmOnlyFallback: false,
                 jogMetricOverride: jogMetric,
-                metricDirection
+                metricDirection,
+                iterativeMetricProjectionPlan: {
+                    metricIterations,
+                    restoreIterations
+                }
             }
         );
+    }
+
+    async _runHumanoidMJRestoreSpecialModePreWStage({
+        q0,
+        armStart,
+        activeCount,
+        hardLimits = null,
+        poseGetter = null,
+        jacobianGetter = null,
+        mode = 'absolute',
+        preWMetric = 'w_abs_hier',
+        metricDirection = 'increase',
+        includeWaist = false,
+        keepBodyZVertical = false,
+        projectionPasses = 3,
+        stepSize = 0.01
+    } = {}) {
+        if (!Array.isArray(q0) || q0.length === 0 || typeof poseGetter !== 'function' || typeof jacobianGetter !== 'function') {
+            return {
+                state: 'failed(invalid_metric_result)',
+                qApplied: Array.isArray(q0) ? q0.slice() : [],
+                applied: false,
+                qPreEligible: false,
+                acceptedCandidate: false,
+                converged: false
+            };
+        }
+
+        const qInitialFull = q0.slice();
+        const getCurrentTaskState = (qFull) => {
+            if (mode === 'waist-body-link-xz') {
+                return this._getHumanoidWaistBodyLinkXZTask(qFull);
+            }
+            return {
+                value: poseGetter(qFull),
+                jacobianFull: jacobianGetter(qFull)
+            };
+        };
+        const currentTaskState = getCurrentTaskState(qInitialFull);
+        if (!Array.isArray(currentTaskState?.value) || currentTaskState.value.length === 0 || !Array.isArray(currentTaskState?.jacobianFull)) {
+            return {
+                state: 'failed(invalid_metric_result)',
+                qApplied: qInitialFull.slice(),
+                applied: false,
+                qPreEligible: false,
+                acceptedCandidate: false,
+                converged: false
+            };
+        }
+
+        return this._runHumanoidMJRestoreMetricOnlyPreWAttempt({
+            q0: qInitialFull,
+            armStart,
+            activeCount,
+            hardLimits,
+            includeWaist,
+            keepBodyZVertical,
+            jogMetric: preWMetric,
+            metricDirection,
+            projectionPasses,
+            stepSize,
+            buildProblem: (qActiveEval, context) => {
+                const qFull = this._writeHumanoidActiveJoints(context.qInitialFull, qActiveEval, context.armStart, context.activeCount);
+                const taskState = getCurrentTaskState(qFull);
+                if (!Array.isArray(taskState?.value) || taskState.value.length === 0 || !Array.isArray(taskState?.jacobianFull)) {
+                    return null;
+                }
+                const commandJacobian = taskState.jacobianFull.map((row) => {
+                    const srcRow = Array.isArray(row) ? row : [];
+                    return srcRow.slice(context.armStart, context.armStart + context.activeCount);
+                });
+                const vfiConstraints = this._buildManipulabilityVFIConstraints(qFull, context.armStart, context.activeCount, context.hardLimits);
+                const cctsm = this._computeModeCCTSM(qFull, context.armStart, context.activeCount, mode, vfiConstraints, { force: true });
+                const problem = buildHumanoidJogMJProblem({
+                    q: qActiveEval,
+                    qCurrent: context.qInitialActive,
+                    absoluteTarget: currentTaskState.value,
+                    relativeTarget: [],
+                    absolutePose: () => taskState.value,
+                    relativePose: () => [],
+                    absoluteJacobian: () => commandJacobian,
+                    relativeJacobian: () => [],
+                    includeBodyZ: false,
+                    bodyEqualityTolerance: 0,
+                    absoluteWeight: 1,
+                    relativeWeight: 0,
+                    bodyWeight: 0,
+                    wvfiLowerBound: 0,
+                    lowerBounds: context.lowerBounds,
+                    upperBounds: context.upperBounds,
+                    stepBounds: context.stepBounds,
+                    waistXCorridor: this._buildHumanoidManifoldWaistXCorridor({
+                        qFull,
+                        qInitialFull: context.qInitialFull,
+                        armStart: context.armStart,
+                        activeCount: context.activeCount,
+                        includeWaist: context.includeWaist
+                    }),
+                    referenceModel: {
+                        absolute: {
+                            stiffness: context.restoreProfile.referenceStiffness,
+                            damping: context.restoreProfile.referenceDamping
+                        },
+                        relative: {
+                            stiffness: 0,
+                            damping: 0
+                        },
+                        bodyZ: {
+                            stiffness: 0,
+                            damping: 0
+                        }
+                    }
+                });
+                problem.metadata = {
+                    qFull,
+                    cctsm,
+                    Jcmd: commandJacobian,
+                    protectedRows: [],
+                    metricMode: mode
+                };
+                return problem;
+            }
+        });
     }
 
     async _updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstMJRestorePreW(
@@ -5779,7 +6635,12 @@ export class RobotVisualizer {
             keepBodyZVertical,
             fixedRelativeProtectedTargetArray,
             translationAxisGuard,
-            null
+            {
+                solverMode: 'mj_restore_pre_w',
+                preWState: preWOutcome.state,
+                preWMetric: jogMetric,
+                preWStart: preWOutcome.qPreEligible === true ? 'q_pre' : 'q0'
+            }
         );
     }
 
@@ -5794,22 +6655,22 @@ export class RobotVisualizer {
             return evaluateHumanoidJogProjectedManipulability(cctsmResult);
         }
         if (metric === 'w_abs') {
-            return evaluateHumanoidJogAbsoluteManipulability(cctsmResult);
+            return evaluateHumanoidJogTaskManipulability(cctsmResult);
         }
         if (metric === 'w_abs_arm') {
-            return evaluateHumanoidJogAbsoluteArmManipulability(cctsmResult);
+            return evaluateHumanoidJogTaskArmManipulability(cctsmResult);
         }
         if (metric === 'w_abs_arm_vfi') {
-            return evaluateHumanoidJogAbsoluteArmVFIManipulability(cctsmResult);
+            return evaluateHumanoidJogTaskArmVFIManipulability(cctsmResult);
         }
         if (metric === 'w_abs_vfi') {
-            return evaluateHumanoidJogAbsoluteVFIManipulability(cctsmResult);
+            return evaluateHumanoidJogTaskVFIManipulability(cctsmResult);
         }
         if (metric === 'w_abs_hier') {
-            return evaluateHumanoidJogAbsoluteHierarchicalManipulability(cctsmResult);
+            return evaluateHumanoidJogTaskHierarchicalManipulability(cctsmResult);
         }
         if (metric === 'w_abs_hier_vfi') {
-            return evaluateHumanoidJogAbsoluteHierarchicalVFIManipulability(
+            return evaluateHumanoidJogTaskHierarchicalVFIManipulability(
                 cctsmResult,
                 { hierarchicalVfiBlend: this._getHumanoidHierarchicalVfiBlend() }
             );
@@ -5831,7 +6692,10 @@ export class RobotVisualizer {
         activeCount = 0,
         activeLimits = null
     } = {}) {
-        if (!problem?.metadata?.qFull || !Array.isArray(problem?.metadata?.Jabs) || !Array.isArray(problem?.metadata?.protectedRows)) {
+        const commandRows = Array.isArray(problem?.metadata?.Jcmd)
+            ? problem.metadata.Jcmd
+            : (Array.isArray(problem?.metadata?.Jabs) ? problem.metadata.Jabs : null);
+        if (!problem?.metadata?.qFull || !Array.isArray(commandRows) || !Array.isArray(problem?.metadata?.protectedRows)) {
             return null;
         }
         if (metric === 'w_vfi') {
@@ -5839,6 +6703,9 @@ export class RobotVisualizer {
                 ? problem.inequalities.wvfiFloor.gradient.slice()
                 : null;
         }
+        const metricMode = typeof problem?.metadata?.metricMode === 'string' && problem.metadata.metricMode.trim().length > 0
+            ? problem.metadata.metricMode.trim()
+            : 'absolute';
         const gradientMetric = metric === 'w_cmd' ? 'w' : metric;
         let directionalVector = null;
         if (metric === 'sigma') {
@@ -5852,8 +6719,8 @@ export class RobotVisualizer {
             q: problem.metadata.qFull,
             armStart,
             activeCount,
-            mode: 'absolute',
-            Jcmd: problem.metadata.Jabs,
+            mode: metricMode,
+            Jcmd: commandRows,
             Jinvariant: problem.metadata.protectedRows,
             activeLimits,
             forceInvariantEquality: true,
@@ -8221,9 +9088,14 @@ export class RobotVisualizer {
         fixedRelativeTargetArray = null,
         internalOptions = null
     ) {
-        const solverMode = internalOptions?.solverMode === 'mj_restore' ? 'mj_restore' : 'manifold';
+        const normalizedSolverMode = typeof internalOptions?.solverMode === 'string'
+            ? normalizeHumanoidJogSolverMode(internalOptions.solverMode)
+            : 'manifold';
+        const solverMode = normalizedSolverMode === 'mj_restore_pre_w'
+            ? 'mj_restore_pre_w'
+            : (normalizedSolverMode === 'mj_restore' ? 'mj_restore' : 'manifold');
         const solverDisplayName = getHumanoidJogSolverDisplayName(solverMode);
-        const isMJRestore = solverMode === 'mj_restore';
+        const isMJRestore = solverMode === 'mj_restore' || solverMode === 'mj_restore_pre_w';
         const candidateOnly = internalOptions?.candidateOnly === true;
         const translationAxisGuard = getHumanoidJogTranslationAxisGuard(internalOptions);
         const allowArmOnlyFallback = internalOptions?.allowArmOnlyFallback !== false;
@@ -8850,7 +9722,7 @@ export class RobotVisualizer {
             const nullspaceStepSize = mjNullspaceStepSize;
             if (
                 iterativeMetricProjectionPlan &&
-                resolvedJogMetric.metric === 'w_abs_hier_vfi' &&
+                resolvedJogMetric.family === 'hierarchical' &&
                 (iterativeMetricProjectionPlan.metricIterations > 0 || iterativeMetricProjectionPlan.restoreIterations > 0)
             ) {
                 const metricAttempt = await this._runHumanoidIterativeMetricProjectionPlan({
@@ -9239,6 +10111,7 @@ export class RobotVisualizer {
         }
 
         const cctsmStartMs = isMJRestore ? nowMs() : Number.NaN;
+        const localSolveMs = isMJRestore ? (cctsmStartMs - mjTimingStartMs) : Number.NaN;
         const vfiConstraintsForDiagnostics = this._buildManipulabilityVFIConstraints(qApplied, armStart, activeCount, hardLimits);
         const vfiDiagnostics = summarizeManipulabilityVFIConstraints(vfiConstraintsForDiagnostics);
         const cctsmResult = this._computeModeCCTSM(
@@ -9252,6 +10125,9 @@ export class RobotVisualizer {
         const diagnosticBuildStartMs = isMJRestore ? nowMs() : Number.NaN;
         const diagnosticsPayload = isMJRestore
             ? buildHumanoidJogMJDiagnostics({
+                solverMode: typeof internalOptions?.solverMode === 'string'
+                    ? normalizeHumanoidJogSolverMode(internalOptions.solverMode)
+                    : 'mj_restore',
                 modeTag: 'absolute-target',
                 includeWaist,
                 keepBodyZVertical,
@@ -9280,6 +10156,9 @@ export class RobotVisualizer {
                 jogMetricAfter,
                 jogMetricApplied,
                 jogMetricAxis,
+                preWState: typeof internalOptions?.preWState === 'string' ? internalOptions.preWState : '',
+                preWMetric: typeof internalOptions?.preWMetric === 'string' ? internalOptions.preWMetric : '',
+                preWStart: typeof internalOptions?.preWStart === 'string' ? internalOptions.preWStart : '',
                 hierarchicalVfiBlend: this._getHumanoidHierarchicalVfiBlend(),
                 relativeResidualNorm: finalRelativeNorm,
                 bodyResidualNorm: finalBodyNorm,
@@ -9331,19 +10210,19 @@ export class RobotVisualizer {
         if (isMJRestore) {
             diagnosticsPayload.timingPreMs = Number.isFinite(restorationResult?.timings?.preMs)
                 ? restorationResult.timings.preMs
-                : Number.NaN;
+                : 0;
             diagnosticsPayload.timingWorkerInitMs = Number.isFinite(restorationResult?.timings?.workerInitMs)
                 ? restorationResult.timings.workerInitMs
-                : Number.NaN;
+                : 0;
             diagnosticsPayload.timingSolveWaitMs = Number.isFinite(restorationResult?.timings?.solveWaitMs)
                 ? restorationResult.timings.solveWaitMs
-                : Number.NaN;
+                : 0;
             diagnosticsPayload.timingSolveMs = Number.isFinite(restorationResult?.timings?.solveMs)
                 ? restorationResult.timings.solveMs
-                : Number.NaN;
+                : localSolveMs;
             diagnosticsPayload.timingPostMs = Number.isFinite(restorationResult?.timings?.postMs)
                 ? restorationResult.timings.postMs
-                : Number.NaN;
+                : 0;
             diagnosticsPayload.timingCCTSMMs = cctsmMs;
             diagnosticsPayload.timingDiagnosticMs = diagnosticMs;
             diagnosticsPayload.timingTotalMs = totalMs;
@@ -9414,6 +10293,12 @@ export class RobotVisualizer {
         translationAxisGuard = null,
         internalOptions = null
     ) {
+        const forwardedSolverMode = typeof internalOptions?.solverMode === 'string'
+            ? normalizeHumanoidJogSolverMode(internalOptions.solverMode)
+            : 'mj_restore';
+        const forwardedPreWState = typeof internalOptions?.preWState === 'string' ? internalOptions.preWState : '';
+        const forwardedPreWMetric = typeof internalOptions?.preWMetric === 'string' ? internalOptions.preWMetric : '';
+        const forwardedPreWStart = typeof internalOptions?.preWStart === 'string' ? internalOptions.preWStart : '';
         const forwardedJogMetricOverride = typeof internalOptions?.jogMetricOverride === 'string'
             ? internalOptions.jogMetricOverride
             : 'none';
@@ -9480,11 +10365,14 @@ export class RobotVisualizer {
                 keepBodyZVertical,
                 fixedRelativeTargetArray,
                 {
-                    solverMode: 'mj_restore',
+                    solverMode: forwardedSolverMode,
                     translationAxisGuard,
                     preferWorker: false,
                     jogMetricOverride: forwardedJogMetricOverride,
-                    metricDirection: internalOptions?.metricDirection
+                    metricDirection: internalOptions?.metricDirection,
+                    preWState: forwardedPreWState,
+                    preWMetric: forwardedPreWMetric,
+                    preWStart: forwardedPreWStart
                 }
             );
         }
@@ -9497,8 +10385,12 @@ export class RobotVisualizer {
                 keepBodyZVertical,
                 fixedRelativeTargetArray: Array.isArray(fixedRelativeTargetArray) ? fixedRelativeTargetArray.slice() : null,
                 translationAxisGuard,
+                solverMode: forwardedSolverMode,
                 jogMetricOverride: forwardedJogMetricOverride,
-                metricDirection: internalOptions?.metricDirection
+                metricDirection: internalOptions?.metricDirection,
+                preWState: forwardedPreWState,
+                preWMetric: forwardedPreWMetric,
+                preWStart: forwardedPreWStart
             });
         }
         return this._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstManifold(
@@ -9509,24 +10401,34 @@ export class RobotVisualizer {
             keepBodyZVertical,
             fixedRelativeTargetArray,
             {
-                solverMode: 'mj_restore',
+                solverMode: forwardedSolverMode,
                 translationAxisGuard,
                 jogMetricOverride: forwardedJogMetricOverride,
-                metricDirection: internalOptions?.metricDirection
+                metricDirection: internalOptions?.metricDirection,
+                preWState: forwardedPreWState,
+                preWMetric: forwardedPreWMetric,
+                preWStart: forwardedPreWStart
             }
         );
     }
 
-    _updateHumanoidJointsFromRelativeDistanceDeltaMJRestore(
+    async _updateHumanoidJointsFromRelativeDistanceDeltaMJRestore(
         deltaDistance,
         currentQ,
         enableJointLimitAvoidance = true,
         includeWaist = false,
         internalOptions = null
     ) {
+        const failureSolverMode = (
+            typeof internalOptions?.solverMode === 'string'
+                ? normalizeHumanoidJogSolverMode(internalOptions.solverMode)
+                : 'mj_restore'
+        ) === 'mj_restore_pre_w'
+            ? 'mj_restore_pre_w'
+            : 'mj_restore';
         if (!this.humanoidModel || !window.humanoidQ || !Array.isArray(currentQ) || currentQ.length === 0) {
             return this._setIKFailureStatus({
-                solver: 'mj_restore',
+                solver: failureSolverMode,
                 mode: 'humanoid_distance',
                 reason: 'invalid_state',
                 message: '人形状态未初始化。'
@@ -9536,7 +10438,7 @@ export class RobotVisualizer {
         const Kinematics = window.DQModule?.Kinematics;
         if (!DQ || !Kinematics?.distanceJacobian) {
             return this._setIKFailureStatus({
-                solver: 'mj_restore',
+                solver: failureSolverMode,
                 mode: 'humanoid_distance',
                 reason: 'dq_unavailable',
                 message: 'DQ 距离雅可比模块未加载。'
@@ -9546,7 +10448,7 @@ export class RobotVisualizer {
         const { waistCount, armStart, activeCount } = this._getHumanoidActiveSliceInfo(includeWaist);
         if (activeCount <= 0) {
             return this._setIKFailureStatus({
-                solver: 'mj_restore',
+                solver: failureSolverMode,
                 mode: 'humanoid_distance',
                 reason: 'no_active_joints',
                 message: '当前模式下没有可用活动关节。'
@@ -9559,7 +10461,7 @@ export class RobotVisualizer {
         const pose2StartArray = this._getHumanoidPose2(currentQ);
         if (!absCurrentArray || !relStartArray || !pose1StartArray || !pose2StartArray) {
             return this._setIKFailureStatus({
-                solver: 'mj_restore',
+                solver: failureSolverMode,
                 mode: 'humanoid_distance',
                 reason: 'fk_unavailable',
                 message: '当前人形位姿计算失败。'
@@ -9631,6 +10533,12 @@ export class RobotVisualizer {
             ? performance.now()
             : Date.now();
         const mjTimingStartMs = nowMs();
+        const isPreWSolver = (
+            typeof internalOptions?.solverMode === 'string'
+                ? normalizeHumanoidJogSolverMode(internalOptions.solverMode)
+                : 'mj_restore'
+        ) === 'mj_restore_pre_w';
+        const preferWorker = internalOptions?.preferWorker === true;
 
         const requestedJogMetric = typeof internalOptions?.jogMetricOverride === 'string'
             ? normalizeHumanoidJogManifoldJogMetric(internalOptions.jogMetricOverride)
@@ -9639,11 +10547,57 @@ export class RobotVisualizer {
             hierarchicalVfiBlend: this._getHumanoidHierarchicalVfiBlend()
         });
         const jogMetricDiagnostic = resolvedJogMetric.diagnosticMetric || resolvedJogMetric.metric;
-        const shouldComputeManipData = shouldComputeHumanoidJogMJTrialManipData({
-            metric: resolvedJogMetric.metric,
-            nullspaceRefineEnabled: false,
-            wvfiLowerBound: 0
+        const jogMetricDirection = internalOptions?.metricDirection === 'decrease' ? 'decrease' : 'increase';
+        const isMetricOnlyJogRequest = (
+            resolvedJogMetric.shouldSkip !== true &&
+            Math.abs(Number(deltaDistance) || 0) <= 1e-12
+        );
+        const mjEnableNullspaceRefine = shouldEnableHumanoidJogMJNullspaceRefine({
+            enabled: cfg.mjRestoreEnableNullspaceRefine === true,
+            metric: resolvedJogMetric.requestedMetric || resolvedJogMetric.metric
         });
+        const nullspaceRestoreMaxIterations = Number.isFinite(cfg.mjRestoreNullspaceRestoreMaxIter)
+            ? Math.max(1, Math.floor(cfg.mjRestoreNullspaceRestoreMaxIter))
+            : 24;
+        const mjNullspaceStepSize = Number.isFinite(cfg.mjRestoreNullspaceStepSize)
+            ? Math.max(0, cfg.mjRestoreNullspaceStepSize)
+            : (Number.isFinite(cfg.manifoldNullspaceStepSize) ? Math.max(0, cfg.manifoldNullspaceStepSize) : 0.01);
+        const useProjectionOnlyMetricJog = shouldUseHumanoidJogMJProjectionOnlyMetricStep({
+            isMetricOnlyJogRequest,
+            requestedMetric: jogMetricDiagnostic,
+            stageMetric: resolvedJogMetric.metric
+        });
+        const mjProjectionOnlyStepSize = useProjectionOnlyMetricJog
+            ? Math.min(
+                mjNullspaceStepSize,
+                Number.isFinite(cfg.mjRestoreMetricProjectionStepSize)
+                    ? Math.max(1e-6, cfg.mjRestoreMetricProjectionStepSize)
+                    : 0.002
+            )
+            : mjNullspaceStepSize;
+        const mjProjectionOnlyPasses = useProjectionOnlyMetricJog
+            ? (Number.isFinite(cfg.mjRestoreMetricProjectionPasses)
+                ? Math.max(1, Math.floor(cfg.mjRestoreMetricProjectionPasses))
+                : 16)
+            : 1;
+        const metricToleranceProfile = resolveHumanoidJogMJMetricTolerances({
+            isMetricOnlyJogRequest,
+            isHierarchicalVFIJogMetric: resolvedJogMetric.metric === 'w_abs_hier_vfi' || resolvedJogMetric.metric === 'w_abs_vfi',
+            hardTolerance: Math.min(hardCmdTol, hardInvariantTol),
+            metricButtonCommandTolerance: Number.isFinite(cfg.mjRestoreMetricButtonCommandTolerance)
+                ? Math.max(0, cfg.mjRestoreMetricButtonCommandTolerance)
+                : 1e-3,
+            metricButtonInvariantTolerance: Number.isFinite(cfg.mjRestoreMetricButtonInvariantTolerance)
+                ? Math.max(0, cfg.mjRestoreMetricButtonInvariantTolerance)
+                : 1e-4,
+            activeLimitRetreatCommandTolerance: Number.isFinite(cfg.mjRestoreActiveLimitRetreatCommandTolerance)
+                ? cfg.mjRestoreActiveLimitRetreatCommandTolerance
+                : 5e-3,
+            activeLimitRetreatInvariantTolerance: Number.isFinite(cfg.mjRestoreActiveLimitRetreatInvariantTolerance)
+                ? cfg.mjRestoreActiveLimitRetreatInvariantTolerance
+                : 1e-3
+        });
+        const metricRefinementTolerance = metricToleranceProfile.metricRefinementTolerance;
 
         const extractActiveColumns = (rows) => (Array.isArray(rows) ? rows : []).map((row) => {
             const out = new Array(activeCount).fill(0);
@@ -9652,6 +10606,21 @@ export class RobotVisualizer {
             return out;
         });
 
+        const useRelativeMetricManifold = isMetricOnlyJogRequest && resolvedJogMetric.shouldSkip !== true;
+        const workerAvailable = preferWorker === true &&
+            useRelativeMetricManifold &&
+            this._canUseHumanoidJogMJRestoreWorker();
+        const mjWorkerSecondaryMetricRequest = buildHumanoidJogMJWorkerSecondaryMetricRequest({
+            metric: resolvedJogMetric.metric,
+            metricMode: 'relative',
+            preferWorker,
+            workerAvailable,
+            nullspaceRefineEnabled: mjEnableNullspaceRefine === true,
+            stepSize: mjNullspaceStepSize,
+            restoreMaxIterations: nullspaceRestoreMaxIterations,
+            waistActiveCount: armStart === 0 ? Math.min(this.humanoidWaistLength, activeCount) : 0,
+            hierarchicalVfiBlend: this._getHumanoidHierarchicalVfiBlend()
+        });
         const evaluateProblem = (qActiveEval, options = {}) => {
             const qFull = this._writeHumanoidActiveJoints(qInitialFull, qActiveEval, armStart, activeCount);
             const absPose = this._getHumanoidAbsolutePose(qFull);
@@ -9660,19 +10629,102 @@ export class RobotVisualizer {
             const JrelFull = this._getHumanoidRelativePoseJacobian(qFull);
             if (!absPose || !relPose || !JabsFull || !JrelFull) return null;
 
+            const absResidual = this._signedPoseError(absCurrentArray, absPose);
+            const absJacobian = extractActiveColumns(JabsFull);
+            const relJacobian = extractActiveColumns(JrelFull);
+            const absTwistJacobian = computeTwistJacobian(absJacobian, absPose);
+            const relTwistJacobian = computeTwistJacobian(relJacobian, relPose);
+            if (!absTwistJacobian || !relTwistJacobian) return null;
+
+            if (useRelativeMetricManifold) {
+                const computeManipData = typeof options.computeManipData === 'boolean'
+                    ? options.computeManipData
+                    : (mjEnableNullspaceRefine && resolvedJogMetric.shouldSkip !== true);
+                const vfiConstraints = computeManipData
+                    ? this._buildManipulabilityVFIConstraints(qFull, armStart, activeCount, manipActiveLimits)
+                    : null;
+                const cctsm = computeManipData
+                    ? this._computeModeCCTSM(qFull, armStart, activeCount, 'relative', vfiConstraints)
+                    : null;
+                const wvfiGradient = computeManipData
+                    ? this._computeProtectedManipulabilityGradient({
+                        q: qFull,
+                        armStart,
+                        activeCount,
+                        mode: 'relative',
+                        Jcmd: relTwistJacobian,
+                        Jinvariant: absTwistJacobian,
+                        activeLimits: manipActiveLimits,
+                        forceInvariantEquality: true
+                    })
+                    : null;
+                const problem = buildHumanoidJogMJProblem({
+                    q: qActiveEval,
+                    qCurrent: qInitialActive,
+                    absoluteTarget: absCurrentArray,
+                    relativeTarget: relStartArray,
+                    absolutePose: () => absPose,
+                    relativePose: () => relPose,
+                    absoluteJacobian: () => absJacobian,
+                    relativeJacobian: () => relJacobian,
+                    includeBodyZ: false,
+                    wvfiState: computeManipData
+                        ? () => ({
+                            value: cctsm?.w_vfi ?? Number.NaN,
+                            gradient: Array.isArray(wvfiGradient) ? wvfiGradient.slice() : new Array(activeCount).fill(0)
+                        })
+                        : null,
+                    wvfiLowerBound: 0,
+                    lowerBounds,
+                    upperBounds,
+                    stepBounds: jointMaxSteps,
+                    waistXCorridor: this._buildHumanoidManifoldWaistXCorridor({
+                        qFull,
+                        qInitialFull,
+                        armStart,
+                        activeCount,
+                        includeWaist
+                    }),
+                    referenceModel: {
+                        absolute: {
+                            stiffness: referenceStiffness,
+                            damping: referenceDamping
+                        },
+                        relative: {
+                            stiffness: referenceStiffness,
+                            damping: referenceDamping
+                        },
+                        bodyZ: {
+                            stiffness: 0,
+                            damping: 0
+                        }
+                    }
+                });
+                problem.metadata = {
+                    qFull,
+                    cctsm,
+                    metricMode: 'relative',
+                    Jcmd: relTwistJacobian,
+                    protectedRows: absTwistJacobian
+                };
+                return problem;
+            }
+
             const Jd2Full = Kinematics.distanceJacobian(JrelFull, relPose);
             const Jd2Row = Array.isArray(Jd2Full) && Array.isArray(Jd2Full[0]) ? Jd2Full[0] : null;
             if (!Jd2Row) return null;
 
-            const absResidual = this._signedPoseError(absCurrentArray, absPose);
-            const absJacobian = extractActiveColumns(JabsFull);
-
             const relativeResidual = [];
             const relativeJacobian = [];
+            const protectedMetricRows = [...absTwistJacobian];
             if (distanceKeepRelativeRotation) {
                 const relRotNow = relPose.slice(0, 4);
                 relativeResidual.push(...this._signedPoseError(relRotTarget, relRotNow));
-                relativeJacobian.push(...extractActiveColumns(JrelFull.slice(0, 4)));
+                const relativeRotationJacobian = extractActiveColumns(JrelFull.slice(0, 4));
+                relativeJacobian.push(...relativeRotationJacobian);
+                const relativeAngularJacobian = computeAngularJacobian(relativeRotationJacobian, relRotNow);
+                if (!relativeAngularJacobian) return null;
+                protectedMetricRows.push(...relativeAngularJacobian);
             }
             if (distanceKeepHandOrientation) {
                 const pose1Now = this._getHumanoidPose1(qFull);
@@ -9682,8 +10734,14 @@ export class RobotVisualizer {
                 if (!pose1Now || !pose2Now || !Jpose1Full || !Jpose2Full) return null;
                 relativeResidual.push(...this._signedPoseError(hand1RotTarget, pose1Now.slice(0, 4)));
                 relativeResidual.push(...this._signedPoseError(hand2RotTarget, pose2Now.slice(0, 4)));
-                relativeJacobian.push(...extractActiveColumns(Jpose1Full.slice(0, 4)));
-                relativeJacobian.push(...extractActiveColumns(Jpose2Full.slice(0, 4)));
+                const hand1RotationJacobian = extractActiveColumns(Jpose1Full.slice(0, 4));
+                const hand2RotationJacobian = extractActiveColumns(Jpose2Full.slice(0, 4));
+                relativeJacobian.push(...hand1RotationJacobian);
+                relativeJacobian.push(...hand2RotationJacobian);
+                const hand1AngularJacobian = computeAngularJacobian(hand1RotationJacobian, pose1Now.slice(0, 4));
+                const hand2AngularJacobian = computeAngularJacobian(hand2RotationJacobian, pose2Now.slice(0, 4));
+                if (!hand1AngularJacobian || !hand2AngularJacobian) return null;
+                protectedMetricRows.push(...hand1AngularJacobian, ...hand2AngularJacobian);
             }
 
             const tNow = DQ.getTranslation(DQ.createFromArray(relPose));
@@ -9692,7 +10750,7 @@ export class RobotVisualizer {
 
             const computeManipData = typeof options.computeManipData === 'boolean'
                 ? options.computeManipData
-                : shouldComputeManipData;
+                : (mjEnableNullspaceRefine && resolvedJogMetric.shouldSkip !== true);
             const vfiConstraints = computeManipData
                 ? this._buildManipulabilityVFIConstraints(qFull, armStart, activeCount, manipActiveLimits)
                 : null;
@@ -9706,7 +10764,7 @@ export class RobotVisualizer {
                     activeCount,
                     mode: 'distance',
                     Jcmd: commandJacobian,
-                    Jinvariant: [...absJacobian, ...relativeJacobian],
+                    Jinvariant: protectedMetricRows,
                     activeLimits: manipActiveLimits,
                     forceInvariantEquality: true
                 })
@@ -9767,25 +10825,101 @@ export class RobotVisualizer {
             problem.metadata = {
                 qFull,
                 cctsm,
+                metricMode: 'relative',
                 Jcmd: commandJacobian,
-                protectedRows: [...absJacobian, ...relativeJacobian]
+                protectedRows: protectedMetricRows
             };
             return problem;
         };
+        const evaluateProblemVFIMinDistance = (problem) => {
+            const constraints = this._buildManipulabilityVFIConstraints(
+                Array.isArray(problem?.metadata?.qFull) ? problem.metadata.qFull : [],
+                armStart,
+                activeCount,
+                hardLimits
+            );
+            const summary = summarizeManipulabilityVFIConstraints(constraints);
+            if (Number.isFinite(summary.minDistance)) return summary.minDistance;
+            const activationThreshold = Number.isFinite(this.vfiConfig?.jointLimitManipulabilityActivationThreshold)
+                ? Math.max(0, this.vfiConfig.jointLimitManipulabilityActivationThreshold)
+                : 0.15;
+            return activationThreshold;
+        };
 
-        const restorationResult = restoreHumanoidJogMJ({
-            qInitial: qInitialActive,
-            evaluateProblem,
-            maxIterations: restoreMaxIterations,
-            damping,
-            referenceStiffness,
-            referenceDamping,
-            initialScale: 1,
-            minScale,
-            reductionFactor,
-            equalityTolerance: equalityTol,
-            inequalityTolerance: inequalityTol
-        });
+        let restorationResult = null;
+        if (useRelativeMetricManifold && workerAvailable && mjWorkerSecondaryMetricRequest) {
+            const jointLimitActivationThreshold = Number.isFinite(cfg.jointLimitManipulabilityActivationThreshold)
+                ? Math.max(0, cfg.jointLimitManipulabilityActivationThreshold)
+                : 0.05;
+            try {
+                const wasmAttempt = await attemptHumanoidJogMJRestoreWasmWorker({
+                    workerClient: this._getHumanoidJogMJWorkerClient(),
+                    modelSpec: this.humanoidMJWorkerModelSpec,
+                    qInitial: qInitialActive,
+                    evaluateProblem,
+                    activeStart: armStart,
+                    activeCount,
+                    absoluteTarget: absCurrentArray,
+                    relativeTarget: relStartArray,
+                    keepBodyZVertical: false,
+                    bodyEqualityTolerance: 0,
+                    absoluteWeight: 1.0,
+                    relativeWeight: 1.0,
+                    bodyWeight: 0,
+                    lowerBounds,
+                    upperBounds,
+                    stepBounds: jointMaxSteps,
+                    wvfiLowerBound: 0,
+                    jointLimitActivationThreshold,
+                    referenceModel: {
+                        absolute: {
+                            stiffness: referenceStiffness,
+                            damping: referenceDamping
+                        },
+                        relative: {
+                            stiffness: referenceStiffness,
+                            damping: referenceDamping
+                        },
+                        bodyZ: {
+                            stiffness: 0,
+                            damping: 0
+                        }
+                    },
+                    maxIterations: restoreMaxIterations,
+                    damping,
+                    initialScale: 1,
+                    minScale,
+                    reductionFactor,
+                    equalityTolerance: equalityTol,
+                    inequalityTolerance: inequalityTol,
+                    secondaryMetricRequest: mjWorkerSecondaryMetricRequest
+                });
+                if (wasmAttempt) {
+                    restorationResult = buildHumanoidJogMJRestoreWasmEnvelope({
+                        attempt: wasmAttempt,
+                        qInitial: qInitialActive,
+                        evaluateProblem
+                    });
+                }
+            } catch (error) {
+                console.warn('MuJoCo 风格恢复 Worker(distance-target) 求解失败，回退本地路径:', error);
+            }
+        }
+        if (!restorationResult) {
+            restorationResult = restoreHumanoidJogMJ({
+                qInitial: qInitialActive,
+                evaluateProblem,
+                maxIterations: restoreMaxIterations,
+                damping,
+                referenceStiffness,
+                referenceDamping,
+                initialScale: 1,
+                minScale,
+                reductionFactor,
+                equalityTolerance: equalityTol,
+                inequalityTolerance: inequalityTol
+            });
+        }
 
         let effectiveRestorationResult = restorationResult;
         let mjPolishResult = null;
@@ -9827,14 +10961,225 @@ export class RobotVisualizer {
         let effectiveResult = effectiveRestorationResult;
         let nullspaceResult = null;
         let nullspaceRefineResult = null;
-        const restoredProblem = effectiveRestorationResult.currentProblem || evaluateProblem(effectiveRestorationResult.qApplied);
-        const jogMetricState = effectiveRestorationResult.converged === true
-            ? (resolvedJogMetric.shouldSkip ? 'skipped(none)' : 'skipped(disabled_for_distance_target)')
-            : 'skipped(waiting_for_restore)';
-        const jogMetricBefore = Number.NaN;
-        const jogMetricAfter = Number.NaN;
-        const jogMetricApplied = false;
-        const jogMetricAxis = resolvedJogMetric.family === 'directional' ? (this.lastHumanoidJogAxis || '') : '';
+        const restoredProblem = effectiveRestorationResult.currentProblem || evaluateProblem(effectiveRestorationResult.qApplied, { computeManipData: true });
+        let jogMetricState = effectiveRestorationResult.converged === true ? 'skipped(none)' : 'skipped(waiting_for_restore)';
+        let jogMetricBefore = Number.NaN;
+        let jogMetricAfter = Number.NaN;
+        let jogMetricApplied = false;
+        const jogMetricAxis = '';
+        const workerMetricAttempt = effectiveRestorationResult?.secondaryMetricAttempt ?? null;
+        const retryRejectedWorkerMetricLocally = shouldRetryHumanoidJogMJLocalRefineAfterWorkerMetricAttempt({
+            metric: resolvedJogMetric.metric,
+            isMetricOnlyJogRequest,
+            workerMetricAttempt
+        });
+        if (effectiveRestorationResult.converged &&
+            restoredProblem &&
+            workerMetricAttempt &&
+            workerMetricAttempt.metric === resolvedJogMetric.metric &&
+            retryRejectedWorkerMetricLocally !== true) {
+            jogMetricState = workerMetricAttempt.state || 'unknown';
+            jogMetricBefore = workerMetricAttempt.before;
+            jogMetricAfter = workerMetricAttempt.after;
+            jogMetricApplied = workerMetricAttempt.applied === true;
+        } else if (effectiveRestorationResult.converged && restoredProblem && mjEnableNullspaceRefine) {
+            if (!resolvedJogMetric.shouldSkip) {
+                if (resolvedJogMetric.family === 'hierarchical') {
+                    const primaryMetric = resolvedJogMetric.metric === 'w_abs_hier_vfi'
+                        ? 'w_abs_arm_vfi'
+                        : 'w_abs_arm';
+                    const primaryAttempt = await this._attemptHumanoidJogManifoldMetricRefinement({
+                        baseProblem: restoredProblem,
+                        baseQActive: effectiveRestorationResult.qApplied,
+                        metric: primaryMetric,
+                        direction: jogMetricDirection,
+                        axis: '',
+                        evaluateProblem,
+                        armStart,
+                        activeCount,
+                        activeLimits: hardLimits,
+                        lowerBounds,
+                        upperBounds,
+                        stepBounds: jointMaxSteps,
+                        wvfiMin: 0,
+                        restoreMaxIterations: nullspaceRestoreMaxIterations,
+                        damping,
+                        minScale,
+                        reductionFactor,
+                        equalityTolerance: metricRefinementTolerance,
+                        inequalityTolerance: metricRefinementTolerance,
+                        stepSize: shouldUseHumanoidJogMJProjectionOnlyMetricStep({
+                            isMetricOnlyJogRequest,
+                            requestedMetric: jogMetricDiagnostic,
+                            stageMetric: primaryMetric
+                        }) ? mjProjectionOnlyStepSize : mjNullspaceStepSize,
+                        preferWVFIFallbackOnClip: resolvedJogMetric.metric === 'w_abs_hier_vfi' || resolvedJogMetric.metric === 'w_abs_vfi',
+                        directionFallbackMetric: resolvedJogMetric.metric === 'w_abs_hier_vfi' ? 'w_abs_hier_vfi' : '',
+                        preferActiveLimitRetreat: resolvedJogMetric.metric === 'w_abs_hier_vfi' || resolvedJogMetric.metric === 'w_abs_vfi',
+                        projectionOnly: shouldUseHumanoidJogMJProjectionOnlyMetricStep({
+                            isMetricOnlyJogRequest,
+                            requestedMetric: jogMetricDiagnostic,
+                            stageMetric: primaryMetric
+                        }),
+                        projectionPasses: shouldUseHumanoidJogMJProjectionOnlyMetricStep({
+                            isMetricOnlyJogRequest,
+                            requestedMetric: jogMetricDiagnostic,
+                            stageMetric: primaryMetric
+                        }) ? mjProjectionOnlyPasses : 1,
+                        restoreFn: restoreHumanoidJogMJ,
+                        restoreConfig: {
+                            referenceStiffness,
+                            referenceDamping
+                        }
+                    });
+                    jogMetricBefore = this._evaluateHumanoidJogManifoldMetricValue(
+                        resolvedJogMetric.metric,
+                        restoredProblem?.metadata?.cctsm,
+                        ''
+                    );
+                    jogMetricAfter = jogMetricBefore;
+                    jogMetricState = primaryAttempt.state;
+                    if (primaryAttempt.applied === true) {
+                        nullspaceResult = primaryAttempt.nullspaceResult;
+                        nullspaceRefineResult = primaryAttempt.refineResult;
+                        effectiveResult = primaryAttempt.refineResult;
+                        const primaryProblem = primaryAttempt.finalProblem || (primaryAttempt.refineResult?.currentProblem ?? null);
+                        const secondaryAttempt = await this._attemptHumanoidJogManifoldMetricRefinement({
+                            baseProblem: primaryProblem,
+                            baseQActive: primaryAttempt.refineResult?.qApplied ?? effectiveRestorationResult.qApplied,
+                            metric: resolvedJogMetric.metric,
+                            direction: jogMetricDirection,
+                            axis: '',
+                            evaluateProblem,
+                            armStart,
+                            activeCount,
+                            activeLimits: hardLimits,
+                            lowerBounds,
+                            upperBounds,
+                            stepBounds: jointMaxSteps,
+                            wvfiMin: 0,
+                            restoreMaxIterations: nullspaceRestoreMaxIterations,
+                            damping,
+                            minScale,
+                            reductionFactor,
+                            equalityTolerance: metricRefinementTolerance,
+                            inequalityTolerance: metricRefinementTolerance,
+                            stepSize: shouldUseHumanoidJogMJProjectionOnlyMetricStep({
+                                isMetricOnlyJogRequest,
+                                requestedMetric: jogMetricDiagnostic,
+                                stageMetric: resolvedJogMetric.metric
+                            }) ? mjProjectionOnlyStepSize : mjNullspaceStepSize,
+                            preferWVFIFallbackOnClip: resolvedJogMetric.metric === 'w_abs_hier_vfi' || resolvedJogMetric.metric === 'w_abs_vfi',
+                            preferActiveLimitRetreat: resolvedJogMetric.metric === 'w_abs_hier_vfi' || resolvedJogMetric.metric === 'w_abs_vfi',
+                            projectionOnly: shouldUseHumanoidJogMJProjectionOnlyMetricStep({
+                                isMetricOnlyJogRequest,
+                                requestedMetric: jogMetricDiagnostic,
+                                stageMetric: resolvedJogMetric.metric
+                            }),
+                            projectionPasses: shouldUseHumanoidJogMJProjectionOnlyMetricStep({
+                                isMetricOnlyJogRequest,
+                                requestedMetric: jogMetricDiagnostic,
+                                stageMetric: resolvedJogMetric.metric
+                            }) ? mjProjectionOnlyPasses : 1,
+                            restoreFn: restoreHumanoidJogMJ,
+                            restoreConfig: {
+                                referenceStiffness,
+                                referenceDamping
+                            }
+                        });
+                        const armGuard = evaluateHumanoidJogManifoldNonDegradation({
+                            before: this._evaluateHumanoidJogManifoldMetricValue(primaryMetric, primaryProblem?.metadata?.cctsm, ''),
+                            after: this._evaluateHumanoidJogManifoldMetricValue(primaryMetric, secondaryAttempt.finalProblem?.metadata?.cctsm, ''),
+                            direction: jogMetricDirection
+                        });
+                        const vfiDistanceGuard = resolvedJogMetric.metric === 'w_abs_hier_vfi'
+                            ? evaluateHumanoidJogManifoldNonDegradation({
+                                before: evaluateProblemVFIMinDistance(primaryProblem),
+                                after: evaluateProblemVFIMinDistance(secondaryAttempt.finalProblem),
+                                direction: 'increase'
+                            })
+                            : { applied: true, reason: 'protected' };
+                        jogMetricAfter = this._evaluateHumanoidJogManifoldMetricValue(
+                            resolvedJogMetric.metric,
+                            (secondaryAttempt.applied === true && armGuard.applied === true && vfiDistanceGuard.applied === true
+                                ? secondaryAttempt.finalProblem?.metadata?.cctsm
+                                : primaryProblem?.metadata?.cctsm),
+                            ''
+                        );
+                        jogMetricApplied = true;
+                        if (secondaryAttempt.applied === true && armGuard.applied === true && vfiDistanceGuard.applied === true) {
+                            jogMetricState = 'active';
+                            nullspaceResult = secondaryAttempt.nullspaceResult;
+                            nullspaceRefineResult = secondaryAttempt.refineResult;
+                            effectiveResult = secondaryAttempt.refineResult;
+                        } else {
+                            jogMetricState = secondaryAttempt.applied !== true
+                                ? `active(primary_only; secondary=${secondaryAttempt.state})`
+                                : (armGuard.applied !== true
+                                    ? 'active(primary_only; secondary=arm_guard)'
+                                    : 'active(primary_only; secondary=vfi_guard)');
+                        }
+                    }
+                } else {
+                    const metricAttempt = await this._attemptHumanoidJogManifoldMetricRefinement({
+                        baseProblem: restoredProblem,
+                        baseQActive: effectiveRestorationResult.qApplied,
+                        metric: resolvedJogMetric.metric,
+                        direction: jogMetricDirection,
+                        axis: '',
+                        evaluateProblem,
+                        armStart,
+                        activeCount,
+                        activeLimits: hardLimits,
+                        lowerBounds,
+                        upperBounds,
+                        stepBounds: jointMaxSteps,
+                        wvfiMin: 0,
+                        restoreMaxIterations: nullspaceRestoreMaxIterations,
+                        damping,
+                        minScale,
+                        reductionFactor,
+                        equalityTolerance: metricRefinementTolerance,
+                        inequalityTolerance: metricRefinementTolerance,
+                        stepSize: useProjectionOnlyMetricJog ? mjProjectionOnlyStepSize : mjNullspaceStepSize,
+                        preferWVFIFallbackOnClip: resolvedJogMetric.metric === 'w_abs_hier_vfi' || resolvedJogMetric.metric === 'w_abs_vfi',
+                        preferActiveLimitRetreat: resolvedJogMetric.metric === 'w_abs_hier_vfi' || resolvedJogMetric.metric === 'w_abs_vfi',
+                        projectionOnly: useProjectionOnlyMetricJog,
+                        projectionPasses: mjProjectionOnlyPasses,
+                        restoreFn: restoreHumanoidJogMJ,
+                        restoreConfig: {
+                            referenceStiffness,
+                            referenceDamping
+                        }
+                    });
+                    jogMetricState = metricAttempt.state;
+                    jogMetricBefore = metricAttempt.before;
+                    jogMetricAfter = metricAttempt.after;
+                    jogMetricApplied = metricAttempt.applied === true;
+                    nullspaceResult = metricAttempt.nullspaceResult;
+                    nullspaceRefineResult = metricAttempt.refineResult;
+                    if (metricAttempt.applied === true && metricAttempt.refineResult) {
+                        effectiveResult = metricAttempt.refineResult;
+                    }
+                }
+            } else {
+                jogMetricBefore = this._evaluateHumanoidJogManifoldMetricValue(
+                    resolvedJogMetric.metric,
+                    restoredProblem?.metadata?.cctsm,
+                    ''
+                );
+                jogMetricAfter = jogMetricBefore;
+                jogMetricState = 'skipped(none)';
+            }
+        } else if (effectiveRestorationResult.converged && restoredProblem && !mjEnableNullspaceRefine) {
+            jogMetricBefore = this._evaluateHumanoidJogManifoldMetricValue(
+                resolvedJogMetric.metric,
+                restoredProblem?.metadata?.cctsm,
+                ''
+            );
+            jogMetricAfter = jogMetricBefore;
+            jogMetricState = resolvedJogMetric.shouldSkip ? 'skipped(none)' : 'skipped(disabled_for_mj_restore)';
+        }
 
         return this._finalizeHumanoidMJDistanceResult({
             qInitialFull,
@@ -9857,9 +11202,15 @@ export class RobotVisualizer {
             jogMetricAfter,
             jogMetricApplied,
             jogMetricAxis,
+            solverMode: isPreWSolver ? 'mj_restore_pre_w' : 'mj_restore',
+            preWState: isPreWSolver ? 'disabled_for_mode' : '',
+            preWMetric: isPreWSolver ? resolveHumanoidJogMJPreWMetric(this._getHumanoidManifoldJogSecondaryMetric()) : '',
+            preWStart: isPreWSolver ? 'q0' : '',
             referenceModel: restoredProblem?.referenceModel ?? null,
             hardCmdTol,
             hardInvariantTol,
+            acceptanceCommandTol: metricToleranceProfile.acceptanceCommandTolerance,
+            acceptanceInvariantTol: metricToleranceProfile.acceptanceRelativeTolerance,
             inequalityTol,
             mjTimingStartMs
         });
@@ -9886,9 +11237,15 @@ export class RobotVisualizer {
         jogMetricAfter,
         jogMetricApplied,
         jogMetricAxis,
+        solverMode = 'mj_restore',
+        preWState = '',
+        preWMetric = '',
+        preWStart = '',
         referenceModel,
         hardCmdTol,
         hardInvariantTol,
+        acceptanceCommandTol = hardCmdTol,
+        acceptanceInvariantTol = hardInvariantTol,
         inequalityTol,
         mjTimingStartMs
     }) {
@@ -9915,8 +11272,8 @@ export class RobotVisualizer {
             finalProblem?.inequalities?.waistXCorridor?.violation ?? 0
         );
         const converged = effectiveResult?.converged === true &&
-            finalCmdNorm <= hardCmdTol &&
-            finalInvariantNorm <= hardInvariantTol &&
+            finalCmdNorm <= acceptanceCommandTol &&
+            finalInvariantNorm <= acceptanceInvariantTol &&
             finalInequalityViolation <= inequalityTol;
         const qApplied = converged ? qCandidate : qInitialFull.slice();
         if (!converged) {
@@ -9924,6 +11281,7 @@ export class RobotVisualizer {
         }
 
         const cctsmStartMs = nowMs();
+        const localSolveMs = cctsmStartMs - mjTimingStartMs;
         const vfiConstraintsForDiagnostics = this._buildManipulabilityVFIConstraints(qApplied, armStart, activeCount, manipActiveLimits);
         const vfiDiagnostics = summarizeManipulabilityVFIConstraints(vfiConstraintsForDiagnostics);
         const cctsmResult = this._computeModeCCTSM(
@@ -9936,6 +11294,7 @@ export class RobotVisualizer {
         const cctsmMs = nowMs() - cctsmStartMs;
         const diagnosticBuildStartMs = nowMs();
         const diagnosticsPayload = buildHumanoidJogMJDiagnostics({
+            solverMode,
             modeTag: 'distance-target',
             includeWaist,
             keepBodyZVertical: false,
@@ -9964,6 +11323,9 @@ export class RobotVisualizer {
             jogMetricAfter,
             jogMetricApplied,
             jogMetricAxis,
+            preWState,
+            preWMetric,
+            preWStart,
             relativeResidualNorm: finalInvariantNorm,
             bodyResidualNorm: Number.NaN,
             vfiJointLimitCount: vfiDiagnostics.jointLimitCount,
@@ -9985,11 +11347,11 @@ export class RobotVisualizer {
         ].filter(Boolean).join('; ');
         const diagnosticMs = nowMs() - diagnosticBuildStartMs;
         const totalMs = nowMs() - mjTimingStartMs;
-        diagnosticsPayload.timingPreMs = Number.isFinite(restorationResult?.timings?.preMs) ? restorationResult.timings.preMs : Number.NaN;
-        diagnosticsPayload.timingWorkerInitMs = Number.isFinite(restorationResult?.timings?.workerInitMs) ? restorationResult.timings.workerInitMs : Number.NaN;
-        diagnosticsPayload.timingSolveWaitMs = Number.isFinite(restorationResult?.timings?.solveWaitMs) ? restorationResult.timings.solveWaitMs : Number.NaN;
-        diagnosticsPayload.timingSolveMs = Number.isFinite(restorationResult?.timings?.solveMs) ? restorationResult.timings.solveMs : Number.NaN;
-        diagnosticsPayload.timingPostMs = Number.isFinite(restorationResult?.timings?.postMs) ? restorationResult.timings.postMs : Number.NaN;
+        diagnosticsPayload.timingPreMs = Number.isFinite(restorationResult?.timings?.preMs) ? restorationResult.timings.preMs : 0;
+        diagnosticsPayload.timingWorkerInitMs = Number.isFinite(restorationResult?.timings?.workerInitMs) ? restorationResult.timings.workerInitMs : 0;
+        diagnosticsPayload.timingSolveWaitMs = Number.isFinite(restorationResult?.timings?.solveWaitMs) ? restorationResult.timings.solveWaitMs : 0;
+        diagnosticsPayload.timingSolveMs = Number.isFinite(restorationResult?.timings?.solveMs) ? restorationResult.timings.solveMs : localSolveMs;
+        diagnosticsPayload.timingPostMs = Number.isFinite(restorationResult?.timings?.postMs) ? restorationResult.timings.postMs : 0;
         diagnosticsPayload.timingCCTSMMs = cctsmMs;
         diagnosticsPayload.timingDiagnosticMs = diagnosticMs;
         diagnosticsPayload.timingTotalMs = totalMs;
@@ -10021,7 +11383,7 @@ export class RobotVisualizer {
             vfiMinDistance: vfiDiagnostics.minDistance
         });
         this.lastIKSolveStatus = {
-            solver: 'mj_restore',
+            solver: solverMode,
             mode: 'humanoid_distance',
             converged,
             reason: converged ? 'converged' : 'hard_tol_not_reached',
@@ -12584,14 +13946,7 @@ export class RobotVisualizer {
                             extraVFIRows: this._getWaistXVFIRows(qFull, armStart, activeCount),
                             jointMaxSteps,
                             nullManipGrad: null,
-                            wvfiGuard: this._buildWVFILowerBoundGuard({
-                                q: qFull,
-                                armStart,
-                                activeCount,
-                                mode: 'absolute',
-                                activeLimits: hardLimits,
-                                includeWaist
-                            })
+                            wvfiGuard: null
                         });
                         if (!res || !res.dq || res.stats?.wvfiGuardAccepted === false) return null;
                         // Use QP convergence, not maxViolationAfter, as the feasibility signal.
@@ -12641,7 +13996,7 @@ export class RobotVisualizer {
                         return this._computeModeCCTSM(qFull, armStart, activeCount, 'absolute', vfiConstraints);
                     },
                     jogDir: eCmd,
-                    wMinOverride: this._getWVFILowerBound(includeWaist)
+                    wMinOverride: 0
                 });
                 if (certResult && certResult.qActive) {
                     const qNext = [...q];
@@ -12716,29 +14071,11 @@ export class RobotVisualizer {
                 damping,
                 extraVFIRows: this._getWaistXVFIRows(q, armStart, activeCount),
                 jointMaxSteps,
-                nullManipGrad: this._computeProtectedManipulabilityGradient({
-                    q,
-                    armStart,
-                    activeCount,
-                    mode: 'absolute',
-                    Jcmd,
-                    Jinvariant,
-                    activeLimits: hardLimits,
-                    metric: resolveHumanoidJogVFIDefaultSecondaryMetric('absolute'),
-                    protectCommandRows: shouldProtectCommandRowsForHumanoidVFISecondary('absolute')
-                }),
-                wvfiGuard: this._buildWVFILowerBoundGuard({
-                    q,
-                    armStart,
-                    activeCount,
-                    mode: 'absolute',
-                    activeLimits: hardLimits,
-                    includeWaist
-                })
+                nullManipGrad: null,
+                wvfiGuard: null
             });
             if (!stepResult) { stopReason = 'solver_fail'; break; }
             const stats = stepResult.stats;
-            if (stats?.wvfiGuardAccepted === false) { stopReason = 'wvfi_lower_bound'; break; }
             if (!Array.isArray(stepResult.dq)) { stopReason = 'solver_fail'; break; }
             if (stats && certFallbackReason) {
                 if (certFallbackReason === 'cmd_regression') {
@@ -12932,15 +14269,15 @@ export class RobotVisualizer {
             return result;
         };
         if (this._isHumanoidMJRestorePreWSolverEnabled()) {
-            return settleAsyncResult(this._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstMJRestorePreW(
-                dqAbsoluteTargetArray,
-                currentQ,
+            return this._enqueueHumanoidJogMJRestorePreWRequest({
+                dqAbsoluteTargetArray: Array.isArray(dqAbsoluteTargetArray) ? dqAbsoluteTargetArray.slice() : [],
+                currentQ: Array.isArray(currentQ) ? currentQ.slice() : [],
                 enableJointLimitAvoidance,
                 includeWaist,
                 keepBodyZVertical,
-                fixedRelativeTargetArray,
+                fixedRelativeTargetArray: Array.isArray(fixedRelativeTargetArray) ? fixedRelativeTargetArray.slice() : null,
                 translationAxisGuard
-            ), 'mj_restore_pre_w');
+            });
         }
         if (this._isHumanoidMJRestoreSolverEnabled()) {
             return settleAsyncResult(this._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstMJRestore(
@@ -13535,27 +14872,11 @@ export class RobotVisualizer {
                 maxStep,
                 damping,
                 extraVFIRows: this._getWaistXVFIRows(q, armStart, activeCount),
-                nullManipGrad: this._computeProtectedManipulabilityGradient({
-                    q,
-                    armStart,
-                    activeCount,
-                    mode: 'relative',
-                    Jcmd,
-                    Jinvariant,
-                    activeLimits: hardLimits
-                }),
-                wvfiGuard: this._buildWVFILowerBoundGuard({
-                    q,
-                    armStart,
-                    activeCount,
-                    mode: 'relative',
-                    activeLimits: hardLimits,
-                    includeWaist
-                })
+                nullManipGrad: null,
+                wvfiGuard: null
             });
             if (!stepResult) { stopReason = 'solver_fail'; break; }
             const stats = stepResult.stats;
-            if (stats?.wvfiGuardAccepted === false) { stopReason = 'wvfi_lower_bound'; break; }
             if (!Array.isArray(stepResult.dq)) { stopReason = 'solver_fail'; break; }
             if (stats) lastStats = stats;
             lastCmdNorm = cmdNorm;
@@ -13688,6 +15009,789 @@ export class RobotVisualizer {
         return true;
     }
 
+    async _updateHumanoidJointsFromRelativePoseTargetAbsoluteFirstMJRestore(
+        dqRelativeTargetArray,
+        currentQ,
+        enableJointLimitAvoidance = true,
+        includeWaist = false,
+        internalOptions = null,
+        translationAxisGuard = null
+    ) {
+        const failureSolverMode = (
+            typeof internalOptions?.solverMode === 'string'
+                ? normalizeHumanoidJogSolverMode(internalOptions.solverMode)
+                : 'mj_restore'
+        ) === 'mj_restore_pre_w'
+            ? 'mj_restore_pre_w'
+            : 'mj_restore';
+        if (!this.humanoidModel || !window.humanoidQ || !Array.isArray(currentQ) || currentQ.length === 0) {
+            return this._setIKFailureStatus({
+                solver: failureSolverMode,
+                mode: 'humanoid_relative',
+                reason: 'invalid_state',
+                message: '人形状态未初始化。'
+            });
+        }
+        const DQ = window.DQModule?.DQWrapper;
+        if (!DQ) {
+            return this._setIKFailureStatus({
+                solver: failureSolverMode,
+                mode: 'humanoid_relative',
+                reason: 'dq_unavailable',
+                message: 'DQ 模块未加载。'
+            });
+        }
+
+        const taskDescriptor = buildHumanoidJogMJTaskDescriptor({
+            controlMode: includeWaist ? 'relative-fullbody' : 'relative',
+            commandTarget: Array.isArray(dqRelativeTargetArray) ? dqRelativeTargetArray.slice() : null
+        });
+        if (taskDescriptor.valid !== true || taskDescriptor.modeTag !== 'relative-target') {
+            return this._setIKFailureStatus({
+                solver: failureSolverMode,
+                mode: 'humanoid_relative',
+                reason: 'mode_adapter_failed',
+                message: 'relative-target 任务适配失败。'
+            });
+        }
+
+        const { armStart, activeCount } = this._getHumanoidActiveSliceInfo(includeWaist);
+        if (activeCount <= 0) {
+            return this._setIKFailureStatus({
+                solver: failureSolverMode,
+                mode: 'humanoid_relative',
+                reason: 'no_active_joints',
+                message: '当前模式下没有可用活动关节。'
+            });
+        }
+
+        const absCurrentArray = this._getHumanoidAbsolutePose(currentQ);
+        const relCurrentArray = this._getHumanoidRelativePose(currentQ);
+        if (!absCurrentArray || !relCurrentArray) {
+            return this._setIKFailureStatus({
+                solver: failureSolverMode,
+                mode: 'humanoid_relative',
+                reason: 'fk_unavailable',
+                message: '当前人形位姿计算失败。'
+            });
+        }
+
+        const cfg = this.vfiConfig || {};
+        const jointLimits = this._getHumanoidJointLimits();
+        const hardLimits = jointLimits ? jointLimits.slice(armStart, armStart + activeCount) : null;
+        const manipActiveLimits = enableJointLimitAvoidance ? hardLimits : null;
+        const qInitialFull = currentQ.slice();
+        const qInitialActive = this._sliceHumanoidActiveJoints(qInitialFull, armStart, activeCount);
+        const mjRestoreProfile = resolveHumanoidJogMJRestoreProfile({
+            includeWaist,
+            fallbackReason: null,
+            config: cfg
+        });
+        const maxStep = Number.isFinite(cfg.mjRestoreMaxStep)
+            ? cfg.mjRestoreMaxStep
+            : (Number.isFinite(cfg.maxStep) ? cfg.maxStep : 0.05);
+        const jointMaxSteps = buildHumanoidJogManifoldStepBounds({
+            maxStep,
+            includeWaist,
+            keepBodyZVertical: false,
+            waistCount: includeWaist ? this.humanoidWaistLength : 0,
+            activeCount,
+            waistStepFraction: Number.isFinite(cfg.manifoldWaistStepFraction)
+                ? cfg.manifoldWaistStepFraction
+                : 1.0
+        });
+        const lowerBounds = hardLimits
+            ? hardLimits.map((limit) => limit?.lower ?? -Math.PI)
+            : new Array(activeCount).fill(-Math.PI);
+        const upperBounds = hardLimits
+            ? hardLimits.map((limit) => limit?.upper ?? Math.PI)
+            : new Array(activeCount).fill(Math.PI);
+        const hardCmdTol = Number.isFinite(cfg.hardCommandTolPose) ? cfg.hardCommandTolPose : 1e-6;
+        const hardInvariantTol = Number.isFinite(cfg.hardInvariantTol) ? cfg.hardInvariantTol : 5e-5;
+        const inequalityTol = Number.isFinite(cfg.mjRestoreHardTolerance) ? Math.max(0, cfg.mjRestoreHardTolerance) : 1e-8;
+        const equalityTol = Math.min(hardCmdTol, hardInvariantTol);
+        const damping = mjRestoreProfile.damping;
+        const referenceStiffness = mjRestoreProfile.referenceStiffness;
+        const referenceDamping = mjRestoreProfile.referenceDamping;
+        const minScale = Number.isFinite(cfg.mjRestoreLineSearchMinScale) ? Math.max(1e-8, cfg.mjRestoreLineSearchMinScale) : 1e-6;
+        const reductionFactor = Number.isFinite(cfg.mjRestoreLineSearchReductionFactor) ? cfg.mjRestoreLineSearchReductionFactor : 0.5;
+        const restoreMaxIterations = mjRestoreProfile.maxIterations;
+        const polishActivationResidual = mjRestoreProfile.polishActivationResidual;
+        const polishMaxIterations = mjRestoreProfile.polishMaxIterations;
+        const polishDamping = mjRestoreProfile.polishDamping;
+        const nowMs = () => (typeof performance !== 'undefined' && typeof performance.now === 'function')
+            ? performance.now()
+            : Date.now();
+        const mjTimingStartMs = nowMs();
+        const isPreWSolver = failureSolverMode === 'mj_restore_pre_w';
+        const preferWorker = internalOptions?.preferWorker === true;
+        const requestedJogMetric = typeof internalOptions?.jogMetricOverride === 'string'
+            ? normalizeHumanoidJogManifoldJogMetric(internalOptions.jogMetricOverride)
+            : 'none';
+        const resolvedJogMetric = resolveHumanoidJogManifoldJogMetric(requestedJogMetric, {
+            hierarchicalVfiBlend: this._getHumanoidHierarchicalVfiBlend()
+        });
+        const jogMetricDiagnostic = resolvedJogMetric.diagnosticMetric || resolvedJogMetric.metric;
+        const jogMetricDirection = internalOptions?.metricDirection === 'decrease' ? 'decrease' : 'increase';
+        const relativeTargetError = Array.isArray(dqRelativeTargetArray)
+            ? this._computePoseErrorNorm(this._signedPoseError(relCurrentArray, dqRelativeTargetArray))
+            : Number.POSITIVE_INFINITY;
+        const isMetricOnlyJogRequest = (
+            resolvedJogMetric.shouldSkip !== true &&
+            translationAxisGuard === null &&
+            relativeTargetError <= 1e-12
+        );
+        const mjEnableNullspaceRefine = shouldEnableHumanoidJogMJNullspaceRefine({
+            enabled: cfg.mjRestoreEnableNullspaceRefine === true,
+            metric: resolvedJogMetric.requestedMetric || resolvedJogMetric.metric
+        });
+        const nullspaceRestoreMaxIterations = Number.isFinite(cfg.mjRestoreNullspaceRestoreMaxIter)
+            ? Math.max(1, Math.floor(cfg.mjRestoreNullspaceRestoreMaxIter))
+            : 24;
+        const mjNullspaceStepSize = Number.isFinite(cfg.mjRestoreNullspaceStepSize)
+            ? Math.max(0, cfg.mjRestoreNullspaceStepSize)
+            : (Number.isFinite(cfg.manifoldNullspaceStepSize) ? Math.max(0, cfg.manifoldNullspaceStepSize) : 0.01);
+        const useProjectionOnlyMetricJog = shouldUseHumanoidJogMJProjectionOnlyMetricStep({
+            isMetricOnlyJogRequest,
+            requestedMetric: jogMetricDiagnostic,
+            stageMetric: resolvedJogMetric.metric
+        });
+        const mjProjectionOnlyStepSize = useProjectionOnlyMetricJog
+            ? Math.min(
+                mjNullspaceStepSize,
+                Number.isFinite(cfg.mjRestoreMetricProjectionStepSize)
+                    ? Math.max(1e-6, cfg.mjRestoreMetricProjectionStepSize)
+                    : 0.002
+            )
+            : mjNullspaceStepSize;
+        const mjProjectionOnlyPasses = useProjectionOnlyMetricJog
+            ? (Number.isFinite(cfg.mjRestoreMetricProjectionPasses)
+                ? Math.max(1, Math.floor(cfg.mjRestoreMetricProjectionPasses))
+                : 16)
+            : 1;
+        const workerAvailable = preferWorker === true &&
+            isMetricOnlyJogRequest &&
+            this._canUseHumanoidJogMJRestoreWorker();
+        const mjWorkerSecondaryMetricRequest = buildHumanoidJogMJWorkerSecondaryMetricRequest({
+            metric: resolvedJogMetric.metric,
+            metricMode: 'relative',
+            preferWorker,
+            workerAvailable,
+            nullspaceRefineEnabled: mjEnableNullspaceRefine === true,
+            stepSize: mjNullspaceStepSize,
+            restoreMaxIterations: nullspaceRestoreMaxIterations,
+            waistActiveCount: armStart === 0 ? Math.min(this.humanoidWaistLength, activeCount) : 0,
+            hierarchicalVfiBlend: this._getHumanoidHierarchicalVfiBlend()
+        });
+        const metricToleranceProfile = resolveHumanoidJogMJMetricTolerances({
+            isMetricOnlyJogRequest,
+            isHierarchicalVFIJogMetric: resolvedJogMetric.metric === 'w_abs_hier_vfi' || resolvedJogMetric.metric === 'w_abs_vfi',
+            hardTolerance: Math.min(hardCmdTol, hardInvariantTol),
+            metricButtonCommandTolerance: Number.isFinite(cfg.mjRestoreMetricButtonCommandTolerance)
+                ? Math.max(0, cfg.mjRestoreMetricButtonCommandTolerance)
+                : 1e-3,
+            metricButtonInvariantTolerance: Number.isFinite(cfg.mjRestoreMetricButtonInvariantTolerance)
+                ? Math.max(0, cfg.mjRestoreMetricButtonInvariantTolerance)
+                : 1e-4,
+            activeLimitRetreatCommandTolerance: Number.isFinite(cfg.mjRestoreActiveLimitRetreatCommandTolerance)
+                ? cfg.mjRestoreActiveLimitRetreatCommandTolerance
+                : 5e-3,
+            activeLimitRetreatInvariantTolerance: Number.isFinite(cfg.mjRestoreActiveLimitRetreatInvariantTolerance)
+                ? cfg.mjRestoreActiveLimitRetreatInvariantTolerance
+                : 1e-3
+        });
+        const metricRefinementTolerance = metricToleranceProfile.metricRefinementTolerance;
+
+        const extractActiveColumns = (rows) => (Array.isArray(rows) ? rows : []).map((row) => {
+            const out = new Array(activeCount).fill(0);
+            if (!Array.isArray(row)) return out;
+            for (let i = 0; i < activeCount; i++) out[i] = row[armStart + i] || 0;
+            return out;
+        });
+
+        const evaluateProblem = (qActiveEval, options = {}) => {
+            const qFull = this._writeHumanoidActiveJoints(qInitialFull, qActiveEval, armStart, activeCount);
+            const absPose = this._getHumanoidAbsolutePose(qFull);
+            const relPose = this._getHumanoidRelativePose(qFull);
+            const JabsFull = this._getHumanoidAbsolutePoseJacobian(qFull);
+            const JrelFull = this._getHumanoidRelativePoseJacobian(qFull);
+            if (!absPose || !relPose || !JabsFull || !JrelFull) return null;
+
+            const absJacobian = extractActiveColumns(JabsFull);
+            const relJacobian = extractActiveColumns(JrelFull);
+            const absTwistJacobian = computeTwistJacobian(absJacobian, absPose);
+            const relTwistJacobian = computeTwistJacobian(relJacobian, relPose);
+            if (!absTwistJacobian || !relTwistJacobian) return null;
+            const computeManipData = typeof options.computeManipData === 'boolean'
+                ? options.computeManipData
+                : (mjEnableNullspaceRefine && resolvedJogMetric.shouldSkip !== true);
+            const vfiConstraints = computeManipData
+                ? this._buildManipulabilityVFIConstraints(qFull, armStart, activeCount, manipActiveLimits)
+                : null;
+            const cctsm = computeManipData
+                ? this._computeModeCCTSM(qFull, armStart, activeCount, 'relative', vfiConstraints)
+                : null;
+            const wvfiGradient = computeManipData
+                ? this._computeProtectedManipulabilityGradient({
+                    q: qFull,
+                    armStart,
+                    activeCount,
+                    mode: 'relative',
+                    Jcmd: relTwistJacobian,
+                    Jinvariant: absTwistJacobian,
+                    activeLimits: manipActiveLimits,
+                    forceInvariantEquality: true
+                })
+                : null;
+
+            const problem = buildHumanoidJogMJProblem({
+                q: qActiveEval,
+                qCurrent: qInitialActive,
+                absoluteTarget: absCurrentArray,
+                relativeTarget: dqRelativeTargetArray,
+                absolutePose: () => absPose,
+                relativePose: () => relPose,
+                absoluteJacobian: () => absJacobian,
+                relativeJacobian: () => relJacobian,
+                includeBodyZ: false,
+                wvfiState: computeManipData
+                    ? () => ({
+                        value: cctsm?.w_vfi ?? Number.NaN,
+                        gradient: Array.isArray(wvfiGradient) ? wvfiGradient.slice() : new Array(activeCount).fill(0)
+                    })
+                    : null,
+                wvfiLowerBound: 0,
+                lowerBounds,
+                upperBounds,
+                stepBounds: jointMaxSteps,
+                waistXCorridor: this._buildHumanoidManifoldWaistXCorridor({
+                    qFull,
+                    qInitialFull,
+                    armStart,
+                    activeCount,
+                    includeWaist
+                }),
+                referenceModel: {
+                    absolute: {
+                        stiffness: referenceStiffness,
+                        damping: referenceDamping
+                    },
+                    relative: {
+                        stiffness: referenceStiffness,
+                        damping: referenceDamping
+                    },
+                    bodyZ: {
+                        stiffness: 0,
+                        damping: 0
+                    }
+                }
+            });
+            problem.metadata = {
+                qFull,
+                cctsm,
+                metricMode: 'relative',
+                Jcmd: relTwistJacobian,
+                protectedRows: absTwistJacobian
+            };
+            return problem;
+        };
+        const evaluateProblemVFIMinDistance = (problem) => {
+            const constraints = this._buildManipulabilityVFIConstraints(
+                Array.isArray(problem?.metadata?.qFull) ? problem.metadata.qFull : [],
+                armStart,
+                activeCount,
+                hardLimits
+            );
+            const summary = summarizeManipulabilityVFIConstraints(constraints);
+            if (Number.isFinite(summary.minDistance)) return summary.minDistance;
+            const activationThreshold = Number.isFinite(this.vfiConfig?.jointLimitManipulabilityActivationThreshold)
+                ? Math.max(0, this.vfiConfig.jointLimitManipulabilityActivationThreshold)
+                : 0.15;
+            return activationThreshold;
+        };
+
+        let restorationResult = null;
+        if (workerAvailable && mjWorkerSecondaryMetricRequest) {
+            const jointLimitActivationThreshold = Number.isFinite(cfg.jointLimitManipulabilityActivationThreshold)
+                ? Math.max(0, cfg.jointLimitManipulabilityActivationThreshold)
+                : 0.05;
+            try {
+                const wasmAttempt = await attemptHumanoidJogMJRestoreWasmWorker({
+                    workerClient: this._getHumanoidJogMJWorkerClient(),
+                    modelSpec: this.humanoidMJWorkerModelSpec,
+                    qInitial: qInitialActive,
+                    evaluateProblem,
+                    activeStart: armStart,
+                    activeCount,
+                    absoluteTarget: absCurrentArray,
+                    relativeTarget: dqRelativeTargetArray,
+                    keepBodyZVertical: false,
+                    bodyEqualityTolerance: 0,
+                    absoluteWeight: 1.0,
+                    relativeWeight: 1.0,
+                    bodyWeight: 0,
+                    lowerBounds,
+                    upperBounds,
+                    stepBounds: jointMaxSteps,
+                    wvfiLowerBound: 0,
+                    jointLimitActivationThreshold,
+                    referenceModel: {
+                        absolute: {
+                            stiffness: referenceStiffness,
+                            damping: referenceDamping
+                        },
+                        relative: {
+                            stiffness: referenceStiffness,
+                            damping: referenceDamping
+                        },
+                        bodyZ: {
+                            stiffness: 0,
+                            damping: 0
+                        }
+                    },
+                    maxIterations: restoreMaxIterations,
+                    damping,
+                    initialScale: 1,
+                    minScale,
+                    reductionFactor,
+                    equalityTolerance: equalityTol,
+                    inequalityTolerance: inequalityTol,
+                    secondaryMetricRequest: mjWorkerSecondaryMetricRequest
+                });
+                if (wasmAttempt) {
+                    restorationResult = buildHumanoidJogMJRestoreWasmEnvelope({
+                        attempt: wasmAttempt,
+                        qInitial: qInitialActive,
+                        evaluateProblem
+                    });
+                }
+            } catch (error) {
+                console.warn('MuJoCo 风格恢复 Worker(relative-target) 求解失败，回退本地路径:', error);
+            }
+        }
+        if (!restorationResult) {
+            restorationResult = restoreHumanoidJogMJ({
+                qInitial: qInitialActive,
+                evaluateProblem,
+                maxIterations: restoreMaxIterations,
+                damping,
+                referenceStiffness,
+                referenceDamping,
+                initialScale: 1,
+                minScale,
+                reductionFactor,
+                equalityTolerance: equalityTol,
+                inequalityTolerance: inequalityTol
+            });
+        }
+
+        let effectiveRestorationResult = restorationResult;
+        let mjPolishResult = null;
+        let mjPolishState = 'skipped';
+        if (shouldAttemptHumanoidJogMJPolish({
+            restorationResult,
+            activationResidual: polishActivationResidual
+        })) {
+            mjPolishResult = restoreHumanoidJogManifold({
+                qInitial: restorationResult.qApplied,
+                evaluateProblem,
+                maxIterations: polishMaxIterations,
+                damping: polishDamping,
+                referenceStiffness: 1,
+                referenceDamping: 0,
+                initialScale: 1,
+                minScale,
+                reductionFactor,
+                equalityTolerance: equalityTol,
+                inequalityTolerance: inequalityTol
+            });
+            const polishImproved = shouldApplyHumanoidJogMJPolish({
+                restorationResult,
+                polishResult: mjPolishResult
+            });
+            mjPolishState = mjPolishResult?.converged === true
+                ? 'converged'
+                : (polishImproved ? 'best_effort' : 'not_improved');
+            if (polishImproved) {
+                effectiveRestorationResult = {
+                    ...mjPolishResult,
+                    reason: mjPolishResult.converged === true ? 'polish_converged' : 'polish_best_effort',
+                    iterations: restorationResult.iterations + (Number.isFinite(mjPolishResult.iterations) ? mjPolishResult.iterations : 0),
+                    acceptedIterations: restorationResult.acceptedIterations + (Number.isFinite(mjPolishResult.acceptedIterations) ? mjPolishResult.acceptedIterations : 0)
+                };
+            }
+        }
+
+        let effectiveResult = effectiveRestorationResult;
+        let nullspaceResult = null;
+        let nullspaceRefineResult = null;
+        const restoredProblem = effectiveRestorationResult.currentProblem || evaluateProblem(effectiveRestorationResult.qApplied, { computeManipData: true });
+        let jogMetricState = effectiveRestorationResult?.converged === true ? 'skipped(none)' : 'skipped(waiting_for_restore)';
+        let jogMetricBefore = Number.NaN;
+        let jogMetricAfter = Number.NaN;
+        let jogMetricApplied = false;
+        const jogMetricAxis = '';
+        const workerMetricAttempt = effectiveRestorationResult?.secondaryMetricAttempt ?? null;
+        const retryRejectedWorkerMetricLocally = shouldRetryHumanoidJogMJLocalRefineAfterWorkerMetricAttempt({
+            metric: resolvedJogMetric.metric,
+            isMetricOnlyJogRequest,
+            workerMetricAttempt
+        });
+        if (effectiveRestorationResult.converged &&
+            restoredProblem &&
+            workerMetricAttempt &&
+            workerMetricAttempt.metric === resolvedJogMetric.metric &&
+            retryRejectedWorkerMetricLocally !== true) {
+            jogMetricState = workerMetricAttempt.state || 'unknown';
+            jogMetricBefore = workerMetricAttempt.before;
+            jogMetricAfter = workerMetricAttempt.after;
+            jogMetricApplied = workerMetricAttempt.applied === true;
+        } else if (effectiveRestorationResult.converged && restoredProblem && mjEnableNullspaceRefine) {
+            if (!resolvedJogMetric.shouldSkip) {
+                if (resolvedJogMetric.family === 'hierarchical') {
+                    const primaryMetric = resolvedJogMetric.metric === 'w_abs_hier_vfi'
+                        ? 'w_abs_arm_vfi'
+                        : 'w_abs_arm';
+                    const primaryAttempt = await this._attemptHumanoidJogManifoldMetricRefinement({
+                        baseProblem: restoredProblem,
+                        baseQActive: effectiveRestorationResult.qApplied,
+                        metric: primaryMetric,
+                        direction: jogMetricDirection,
+                        axis: '',
+                        evaluateProblem,
+                        armStart,
+                        activeCount,
+                        activeLimits: hardLimits,
+                        lowerBounds,
+                        upperBounds,
+                        stepBounds: jointMaxSteps,
+                        wvfiMin: 0,
+                        restoreMaxIterations: nullspaceRestoreMaxIterations,
+                        damping,
+                        minScale,
+                        reductionFactor,
+                        equalityTolerance: metricRefinementTolerance,
+                        inequalityTolerance: metricRefinementTolerance,
+                        stepSize: shouldUseHumanoidJogMJProjectionOnlyMetricStep({
+                            isMetricOnlyJogRequest,
+                            requestedMetric: jogMetricDiagnostic,
+                            stageMetric: primaryMetric
+                        }) ? mjProjectionOnlyStepSize : mjNullspaceStepSize,
+                        preferWVFIFallbackOnClip: resolvedJogMetric.metric === 'w_abs_hier_vfi' || resolvedJogMetric.metric === 'w_abs_vfi',
+                        directionFallbackMetric: resolvedJogMetric.metric === 'w_abs_hier_vfi' ? 'w_abs_hier_vfi' : '',
+                        preferActiveLimitRetreat: resolvedJogMetric.metric === 'w_abs_hier_vfi' || resolvedJogMetric.metric === 'w_abs_vfi',
+                        projectionOnly: shouldUseHumanoidJogMJProjectionOnlyMetricStep({
+                            isMetricOnlyJogRequest,
+                            requestedMetric: jogMetricDiagnostic,
+                            stageMetric: primaryMetric
+                        }),
+                        projectionPasses: shouldUseHumanoidJogMJProjectionOnlyMetricStep({
+                            isMetricOnlyJogRequest,
+                            requestedMetric: jogMetricDiagnostic,
+                            stageMetric: primaryMetric
+                        }) ? mjProjectionOnlyPasses : 1,
+                        restoreFn: restoreHumanoidJogMJ,
+                        restoreConfig: {
+                            referenceStiffness,
+                            referenceDamping
+                        }
+                    });
+                    jogMetricBefore = this._evaluateHumanoidJogManifoldMetricValue(
+                        resolvedJogMetric.metric,
+                        restoredProblem?.metadata?.cctsm,
+                        ''
+                    );
+                    jogMetricAfter = jogMetricBefore;
+                    jogMetricState = primaryAttempt.state;
+                    if (primaryAttempt.applied === true) {
+                        nullspaceResult = primaryAttempt.nullspaceResult;
+                        nullspaceRefineResult = primaryAttempt.refineResult;
+                        effectiveResult = primaryAttempt.refineResult;
+                        const primaryProblem = primaryAttempt.finalProblem || (primaryAttempt.refineResult?.currentProblem ?? null);
+                        const secondaryAttempt = await this._attemptHumanoidJogManifoldMetricRefinement({
+                            baseProblem: primaryProblem,
+                            baseQActive: primaryAttempt.refineResult?.qApplied ?? effectiveRestorationResult.qApplied,
+                            metric: resolvedJogMetric.metric,
+                            direction: jogMetricDirection,
+                            axis: '',
+                            evaluateProblem,
+                            armStart,
+                            activeCount,
+                            activeLimits: hardLimits,
+                            lowerBounds,
+                            upperBounds,
+                            stepBounds: jointMaxSteps,
+                            wvfiMin: 0,
+                            restoreMaxIterations: nullspaceRestoreMaxIterations,
+                            damping,
+                            minScale,
+                            reductionFactor,
+                            equalityTolerance: metricRefinementTolerance,
+                            inequalityTolerance: metricRefinementTolerance,
+                            stepSize: shouldUseHumanoidJogMJProjectionOnlyMetricStep({
+                                isMetricOnlyJogRequest,
+                                requestedMetric: jogMetricDiagnostic,
+                                stageMetric: resolvedJogMetric.metric
+                            }) ? mjProjectionOnlyStepSize : mjNullspaceStepSize,
+                            preferWVFIFallbackOnClip: resolvedJogMetric.metric === 'w_abs_hier_vfi' || resolvedJogMetric.metric === 'w_abs_vfi',
+                            preferActiveLimitRetreat: resolvedJogMetric.metric === 'w_abs_hier_vfi' || resolvedJogMetric.metric === 'w_abs_vfi',
+                            projectionOnly: shouldUseHumanoidJogMJProjectionOnlyMetricStep({
+                                isMetricOnlyJogRequest,
+                                requestedMetric: jogMetricDiagnostic,
+                                stageMetric: resolvedJogMetric.metric
+                            }),
+                            projectionPasses: shouldUseHumanoidJogMJProjectionOnlyMetricStep({
+                                isMetricOnlyJogRequest,
+                                requestedMetric: jogMetricDiagnostic,
+                                stageMetric: resolvedJogMetric.metric
+                            }) ? mjProjectionOnlyPasses : 1,
+                            restoreFn: restoreHumanoidJogMJ,
+                            restoreConfig: {
+                                referenceStiffness,
+                                referenceDamping
+                            }
+                        });
+                        const armGuard = evaluateHumanoidJogManifoldNonDegradation({
+                            before: this._evaluateHumanoidJogManifoldMetricValue(primaryMetric, primaryProblem?.metadata?.cctsm, ''),
+                            after: this._evaluateHumanoidJogManifoldMetricValue(primaryMetric, secondaryAttempt.finalProblem?.metadata?.cctsm, ''),
+                            direction: jogMetricDirection
+                        });
+                        const vfiDistanceGuard = resolvedJogMetric.metric === 'w_abs_hier_vfi'
+                            ? evaluateHumanoidJogManifoldNonDegradation({
+                                before: evaluateProblemVFIMinDistance(primaryProblem),
+                                after: evaluateProblemVFIMinDistance(secondaryAttempt.finalProblem),
+                                direction: 'increase'
+                            })
+                            : { applied: true, reason: 'protected' };
+                        jogMetricAfter = this._evaluateHumanoidJogManifoldMetricValue(
+                            resolvedJogMetric.metric,
+                            (secondaryAttempt.applied === true && armGuard.applied === true && vfiDistanceGuard.applied === true
+                                ? secondaryAttempt.finalProblem?.metadata?.cctsm
+                                : primaryProblem?.metadata?.cctsm),
+                            ''
+                        );
+                        jogMetricApplied = true;
+                        if (secondaryAttempt.applied === true && armGuard.applied === true && vfiDistanceGuard.applied === true) {
+                            jogMetricState = 'active';
+                            nullspaceResult = secondaryAttempt.nullspaceResult;
+                            nullspaceRefineResult = secondaryAttempt.refineResult;
+                            effectiveResult = secondaryAttempt.refineResult;
+                        } else {
+                            jogMetricState = secondaryAttempt.applied !== true
+                                ? `active(primary_only; secondary=${secondaryAttempt.state})`
+                                : (armGuard.applied !== true
+                                    ? 'active(primary_only; secondary=arm_guard)'
+                                    : 'active(primary_only; secondary=vfi_guard)');
+                        }
+                    }
+                } else {
+                    const metricAttempt = await this._attemptHumanoidJogManifoldMetricRefinement({
+                        baseProblem: restoredProblem,
+                        baseQActive: effectiveRestorationResult.qApplied,
+                        metric: resolvedJogMetric.metric,
+                        direction: jogMetricDirection,
+                        axis: '',
+                        evaluateProblem,
+                        armStart,
+                        activeCount,
+                        activeLimits: hardLimits,
+                        lowerBounds,
+                        upperBounds,
+                        stepBounds: jointMaxSteps,
+                        wvfiMin: 0,
+                        restoreMaxIterations: nullspaceRestoreMaxIterations,
+                        damping,
+                        minScale,
+                        reductionFactor,
+                        equalityTolerance: metricRefinementTolerance,
+                        inequalityTolerance: metricRefinementTolerance,
+                        stepSize: useProjectionOnlyMetricJog ? mjProjectionOnlyStepSize : mjNullspaceStepSize,
+                        preferWVFIFallbackOnClip: resolvedJogMetric.metric === 'w_abs_hier_vfi' || resolvedJogMetric.metric === 'w_abs_vfi',
+                        preferActiveLimitRetreat: resolvedJogMetric.metric === 'w_abs_hier_vfi' || resolvedJogMetric.metric === 'w_abs_vfi',
+                        projectionOnly: useProjectionOnlyMetricJog,
+                        projectionPasses: mjProjectionOnlyPasses,
+                        restoreFn: restoreHumanoidJogMJ,
+                        restoreConfig: {
+                            referenceStiffness,
+                            referenceDamping
+                        }
+                    });
+                    jogMetricState = metricAttempt.state;
+                    jogMetricBefore = metricAttempt.before;
+                    jogMetricAfter = metricAttempt.after;
+                    jogMetricApplied = metricAttempt.applied === true;
+                    nullspaceResult = metricAttempt.nullspaceResult;
+                    nullspaceRefineResult = metricAttempt.refineResult;
+                    if (metricAttempt.applied === true && metricAttempt.refineResult) {
+                        effectiveResult = metricAttempt.refineResult;
+                    }
+                }
+            } else {
+                jogMetricBefore = this._evaluateHumanoidJogManifoldMetricValue(
+                    resolvedJogMetric.metric,
+                    restoredProblem?.metadata?.cctsm,
+                    ''
+                );
+                jogMetricAfter = jogMetricBefore;
+                jogMetricState = 'skipped(none)';
+            }
+        } else if (effectiveRestorationResult.converged && restoredProblem && !mjEnableNullspaceRefine) {
+            jogMetricBefore = this._evaluateHumanoidJogManifoldMetricValue(
+                resolvedJogMetric.metric,
+                restoredProblem?.metadata?.cctsm,
+                ''
+            );
+            jogMetricAfter = jogMetricBefore;
+            jogMetricState = resolvedJogMetric.shouldSkip ? 'skipped(none)' : 'skipped(disabled_for_mj_restore)';
+        }
+
+        const qCandidateActive = Array.isArray(effectiveResult?.qApplied) ? effectiveResult.qApplied.slice() : [];
+        const qCandidate = this._writeHumanoidActiveJoints(qInitialFull, qCandidateActive, armStart, activeCount);
+        this._clampHumanoidActiveJoints(qCandidate, armStart, hardLimits);
+        const finalProblem = effectiveResult?.currentProblem || evaluateProblem(qCandidateActive, { computeManipData: true });
+        const finalCommandResidual = finalProblem?.equalities?.blocks?.relative?.residual ?? [];
+        const finalInvariantResidual = finalProblem?.equalities?.blocks?.absolute?.residual ?? [];
+        const finalCmdNorm = Math.sqrt(finalCommandResidual.reduce((sum, value) => sum + (Number(value) || 0) * (Number(value) || 0), 0));
+        const finalInvariantNorm = Math.sqrt(finalInvariantResidual.reduce((sum, value) => sum + (Number(value) || 0) * (Number(value) || 0), 0));
+        const finalInequalityViolation = Math.max(
+            finalProblem?.inequalities?.wvfiFloor?.violation ?? 0,
+            finalProblem?.inequalities?.waistXCorridor?.violation ?? 0
+        );
+
+        let converged = effectiveResult?.converged === true &&
+            finalCmdNorm <= metricToleranceProfile.acceptanceCommandTolerance &&
+            finalInvariantNorm <= metricToleranceProfile.acceptanceRelativeTolerance &&
+            finalInequalityViolation <= inequalityTol;
+        const relEnd = converged ? this._getHumanoidRelativePose(qCandidate) : null;
+        const translationGuardResult = this._evaluateHumanoidTranslationAxisGuard(relCurrentArray, relEnd, translationAxisGuard);
+        if (translationGuardResult?.violated) {
+            converged = false;
+        }
+
+        const qApplied = converged ? qCandidate : qInitialFull.slice();
+        if (!converged) {
+            this._notifyHumanoidJogUnreachable('无法到达该位置');
+        }
+
+        const cctsmStartMs = nowMs();
+        const localSolveMs = cctsmStartMs - mjTimingStartMs;
+        const vfiConstraintsForDiagnostics = this._buildManipulabilityVFIConstraints(qApplied, armStart, activeCount, manipActiveLimits);
+        const vfiDiagnostics = summarizeManipulabilityVFIConstraints(vfiConstraintsForDiagnostics);
+        const cctsmResult = this._computeModeCCTSM(
+            qApplied,
+            armStart,
+            activeCount,
+            'relative',
+            vfiConstraintsForDiagnostics
+        );
+        const cctsmMs = nowMs() - cctsmStartMs;
+        const diagnosticBuildStartMs = nowMs();
+        const diagnosticsPayload = buildHumanoidJogMJDiagnostics({
+            solverMode: isPreWSolver ? 'mj_restore_pre_w' : 'mj_restore',
+            modeTag: taskDescriptor.modeTag,
+            includeWaist,
+            keepBodyZVertical: false,
+            restorationResult,
+            polishState: mjPolishState,
+            polishReason: mjPolishResult?.reason ?? '',
+            polishResidualNorm: mjPolishResult?.currentResidualNorm,
+            nullspaceResult: computeHumanoidJogMJNullspaceRefine({
+                enabled: mjEnableNullspaceRefine,
+                restorationConverged: effectiveResult?.converged === true,
+                metricAttempt: {
+                    applied: jogMetricApplied,
+                    state: jogMetricState,
+                    before: jogMetricBefore,
+                    after: jogMetricAfter,
+                    axisLabel: jogMetricAxis,
+                    nullspaceResult,
+                    refineResult: nullspaceRefineResult,
+                    finalProblem
+                }
+            }),
+            referenceModel: finalProblem?.referenceModel ?? null,
+            jogMetric: jogMetricDiagnostic,
+            jogMetricState,
+            jogMetricBefore,
+            jogMetricAfter,
+            jogMetricApplied,
+            jogMetricAxis,
+            preWState: typeof internalOptions?.preWState === 'string' ? internalOptions.preWState : '',
+            preWMetric: typeof internalOptions?.preWMetric === 'string' ? internalOptions.preWMetric : '',
+            preWStart: typeof internalOptions?.preWStart === 'string' ? internalOptions.preWStart : '',
+            hierarchicalVfiBlend: this._getHumanoidHierarchicalVfiBlend(),
+            relativeResidualNorm: finalInvariantNorm,
+            bodyResidualNorm: Number.NaN,
+            vfiJointLimitCount: vfiDiagnostics.jointLimitCount,
+            vfiExtraCount: vfiDiagnostics.extraCount,
+            vfiTotalCount: vfiDiagnostics.totalCount,
+            vfiMinDistance: vfiDiagnostics.minDistance,
+            ...this._extractHumanoidWVFIConstraintDiagnostics(finalProblem?.inequalities?.wvfiFloor),
+            ...this._extractHumanoidWaistXCorridorDiagnostics(finalProblem?.inequalities?.waistXCorridor)
+        });
+        const diagnosticLabel = [
+            `restore=${restorationResult.reason}`,
+            `polish=${mjPolishState}${mjPolishResult?.reason ? `(${mjPolishResult.reason})` : ''}`,
+            `nullspace=${nullspaceResult?.reason ?? 'skipped'}`,
+            nullspaceRefineResult ? `nullspace_restore=${nullspaceRefineResult.reason}` : null,
+            `jog_metric=${jogMetricDiagnostic}`,
+            `jog_metric_opt=${jogMetricState}`,
+            diagnosticsPayload.referenceSummary ? diagnosticsPayload.referenceSummary : null,
+            `inv=${this._formatDiagNumber(finalInvariantNorm)}`,
+            translationGuardResult?.violated
+                ? `axis_guard=${translationGuardResult.reason}(proj=${translationGuardResult.projectedProgress.toExponential(2)},orth=${translationGuardResult.orthogonalDrift.toExponential(2)})`
+                : null
+        ].filter(Boolean).join('; ');
+        const diagnosticMs = nowMs() - diagnosticBuildStartMs;
+        const totalMs = nowMs() - mjTimingStartMs;
+        diagnosticsPayload.timingPreMs = Number.isFinite(restorationResult?.timings?.preMs) ? restorationResult.timings.preMs : 0;
+        diagnosticsPayload.timingWorkerInitMs = Number.isFinite(restorationResult?.timings?.workerInitMs) ? restorationResult.timings.workerInitMs : 0;
+        diagnosticsPayload.timingSolveWaitMs = Number.isFinite(restorationResult?.timings?.solveWaitMs) ? restorationResult.timings.solveWaitMs : 0;
+        diagnosticsPayload.timingSolveMs = Number.isFinite(restorationResult?.timings?.solveMs) ? restorationResult.timings.solveMs : localSolveMs;
+        diagnosticsPayload.timingPostMs = Number.isFinite(restorationResult?.timings?.postMs) ? restorationResult.timings.postMs : 0;
+        diagnosticsPayload.timingCCTSMMs = cctsmMs;
+        diagnosticsPayload.timingDiagnosticMs = diagnosticMs;
+        diagnosticsPayload.timingTotalMs = totalMs;
+
+        this._publishHumanoidJogDiagnostics({
+            ...diagnosticsPayload,
+            active: true,
+            message: converged ? 'MuJoCo 风格恢复 单步更新完成。' : '无法到达该位置（目标未达成）。',
+            iterations: restorationResult.iterations,
+            activeJoints: activeCount,
+            commandError: finalCmdNorm,
+            invariantError: finalInvariantNorm,
+            stepNorm: converged ? this._computeHumanoidActiveJointDistance(qApplied, qInitialFull, armStart, activeCount) : 0,
+            diagnosticLabel,
+            includeWaist,
+            jointLimitAvoidance: enableJointLimitAvoidance,
+            cctsmW: cctsmResult?.w ?? Number.NaN,
+            cctsmWvfi: cctsmResult?.w_vfi ?? Number.NaN,
+            cctsmWAbs: cctsmResult?.w_abs ?? Number.NaN,
+            cctsmWAbsHier: cctsmResult?.w_abs_hier ?? Number.NaN,
+            cctsmWAbsHierVfi: cctsmResult?.w_abs_hier_vfi ?? Number.NaN,
+            cctsmWAbsArm: cctsmResult?.w_abs_arm ?? Number.NaN,
+            cctsmWAbsArmVfi: cctsmResult?.w_abs_arm_vfi ?? Number.NaN,
+            cctsmWAbsVfi: cctsmResult?.w_abs_vfi ?? Number.NaN,
+            cctsmWCmd: cctsmResult?.w_cmd ?? Number.NaN,
+            vfiJointLimitCount: vfiDiagnostics.jointLimitCount,
+            vfiExtraCount: vfiDiagnostics.extraCount,
+            vfiTotalCount: vfiDiagnostics.totalCount,
+            vfiMinDistance: vfiDiagnostics.minDistance
+        });
+        this.lastIKSolveStatus = {
+            solver: isPreWSolver ? 'mj_restore_pre_w' : 'mj_restore',
+            mode: 'humanoid_relative',
+            converged,
+            reason: converged ? 'converged' : 'hard_tol_not_reached',
+            message: converged ? 'MuJoCo 风格恢复 单步更新完成。' : '无法到达该位置（目标未达成）。',
+            finalResidual: finalCmdNorm,
+            invariantResidual: finalInvariantNorm
+        };
+        this._applyHumanoidJointSolution(qApplied);
+        return true;
+    }
+
     updateHumanoidJointsFromRelativePoseTargetAbsoluteFirst(
         dqRelativeTargetArray,
         currentQ,
@@ -13695,7 +15799,76 @@ export class RobotVisualizer {
         includeWaist = false,
         translationAxisGuard = null
     ) {
-        if (this._isHumanoidMJRestoreSolverEnabled()) {
+        if (this._isHumanoidMJRestoreSolverEnabled() || this._isHumanoidMJRestorePreWSolverEnabled()) {
+            const selectedSolverMode = this._getHumanoidJogSolverMode();
+            const isPreWSolver = selectedSolverMode === 'mj_restore_pre_w';
+            if (supportsHumanoidJogMJRestoreMode('relative-target')) {
+                if (isPreWSolver) {
+                    return (async () => {
+                        const q0 = Array.isArray(currentQ) ? currentQ.slice() : [];
+                        const dqAbsoluteProtectedTargetArray = this._getHumanoidAbsolutePose(q0);
+                        const fixedRelativeProtectedTargetArray = this._getHumanoidRelativePose(q0);
+                        if (!dqAbsoluteProtectedTargetArray || !fixedRelativeProtectedTargetArray) {
+                            return this._setIKFailureStatus({
+                                solver: 'mj_restore_pre_w',
+                                mode: 'humanoid_relative',
+                                reason: 'fk_unavailable',
+                                message: '当前人形位姿计算失败。'
+                            });
+                        }
+                        const jogMetric = resolveHumanoidJogMJPreWMetric(this._getHumanoidManifoldJogSecondaryMetric());
+                        const metricDirection = getHumanoidJogMJPreWDirection();
+                        let preWResult = null;
+                        try {
+                            preWResult = await this._runHumanoidMJRestorePreWStage({
+                                controlMode: includeWaist ? 'relative-fullbody' : 'relative',
+                                q0,
+                                dqAbsoluteProtectedTargetArray: dqAbsoluteProtectedTargetArray.slice(),
+                                fixedRelativeProtectedTargetArray: fixedRelativeProtectedTargetArray.slice(),
+                                enableJointLimitAvoidance,
+                                includeWaist,
+                                keepBodyZVertical: false,
+                                jogMetric,
+                                metricDirection
+                            });
+                        } catch (error) {
+                            preWResult = {
+                                thrown: true,
+                                error
+                            };
+                        }
+                        const preWOutcome = mapHumanoidJogMJPreWOutcome(preWResult);
+                        const qStage2 = (
+                            preWOutcome.qPreEligible === true &&
+                            Array.isArray(preWResult?.qApplied) &&
+                            preWResult.qApplied.length > 0
+                        )
+                            ? preWResult.qApplied.slice()
+                            : q0.slice();
+                        return this._updateHumanoidJointsFromRelativePoseTargetAbsoluteFirstMJRestore(
+                            dqRelativeTargetArray,
+                            qStage2,
+                            enableJointLimitAvoidance,
+                            includeWaist,
+                            {
+                                solverMode: 'mj_restore_pre_w',
+                                preWState: preWOutcome.state,
+                                preWMetric: jogMetric,
+                                preWStart: preWOutcome.qPreEligible === true ? 'q_pre' : 'q0'
+                            },
+                            translationAxisGuard
+                        );
+                    })();
+                }
+                return this._updateHumanoidJointsFromRelativePoseTargetAbsoluteFirstMJRestore(
+                    dqRelativeTargetArray,
+                    currentQ,
+                    enableJointLimitAvoidance,
+                    includeWaist,
+                    null,
+                    translationAxisGuard
+                );
+            }
             const fallbackMessage = 'MuJoCo 风格恢复 当前仅支持 absolute-target，其它模式已回退到 new qpJ。';
             const ok = this._updateHumanoidJointsFromRelativePoseTargetAbsoluteFirstVFI(
                 dqRelativeTargetArray,
@@ -13707,18 +15880,28 @@ export class RobotVisualizer {
             const payload = this.lastHumanoidJogDiagnostics
                 ? {
                     ...this.lastHumanoidJogDiagnostics,
-                    solverMode: 'mj_restore',
+                    solverMode: isPreWSolver ? 'mj_restore_pre_w' : 'mj_restore',
                     modeTag: 'relative-target',
                     message: fallbackMessage,
                     nextMode: getHumanoidJogSolverDisplayName('vfi'),
-                    diagnosticLabel: 'fallback_to_new_qpJ'
+                    diagnosticLabel: 'fallback_to_new_qpJ',
+                    ...(isPreWSolver ? {
+                        preWState: 'disabled_for_mode',
+                        preWMetric: resolveHumanoidJogMJPreWMetric(this._getHumanoidManifoldJogSecondaryMetric()),
+                        preWStart: 'q0'
+                    } : {})
                 }
                 : {
-                    solverMode: 'mj_restore',
+                    solverMode: isPreWSolver ? 'mj_restore_pre_w' : 'mj_restore',
                     modeTag: 'relative-target',
                     active: true,
                     message: fallbackMessage,
-                    nextMode: getHumanoidJogSolverDisplayName('vfi')
+                    nextMode: getHumanoidJogSolverDisplayName('vfi'),
+                    ...(isPreWSolver ? {
+                        preWState: 'disabled_for_mode',
+                        preWMetric: resolveHumanoidJogMJPreWMetric(this._getHumanoidManifoldJogSecondaryMetric()),
+                        preWStart: 'q0'
+                    } : {})
                 };
             this._publishHumanoidJogDiagnostics(payload);
             return ok;
@@ -15031,28 +17214,11 @@ export class RobotVisualizer {
                 invariantBandGainOverride: distanceInvariantBandGain,
                 invariantSoftWeightOverride: distanceInvariantSoftWeight,
                 extraVFIRows: this._getWaistXVFIRows(q, armStart, activeCount),
-                nullManipGrad: this._computeProtectedManipulabilityGradient({
-                    q,
-                    armStart,
-                    activeCount,
-                    mode: 'distance',
-                    Jcmd: [extractActiveColumns(Jd2Row)],
-                    Jinvariant,
-                    activeLimits: hardLimits,
-                    forceInvariantEquality: distanceUseInvariantEquality
-                }),
-                wvfiGuard: this._buildWVFILowerBoundGuard({
-                    q,
-                    armStart,
-                    activeCount,
-                    mode: 'distance',
-                    activeLimits: hardLimits,
-                    includeWaist
-                })
+                nullManipGrad: null,
+                wvfiGuard: null
             });
             if (!stepResult) { stopReason = 'solver_fail'; break; }
             const stats = stepResult.stats;
-            if (stats?.wvfiGuardAccepted === false) { stopReason = 'wvfi_lower_bound'; break; }
             if (!Array.isArray(stepResult.dq)) { stopReason = 'solver_fail'; break; }
             if (stats) lastStats = stats;
             if (stats?.qpConverged === false) {
@@ -15186,13 +17352,72 @@ export class RobotVisualizer {
     }
 
     updateHumanoidJointsFromRelativeDistanceDelta(deltaDistance, currentQ, enableJointLimitAvoidance = true, includeWaist = false) {
-        if (this._isHumanoidMJRestoreSolverEnabled()) {
+        if (this._isHumanoidMJRestoreSolverEnabled() || this._isHumanoidMJRestorePreWSolverEnabled()) {
+            const selectedSolverMode = this._getHumanoidJogSolverMode();
+            const isPreWSolver = selectedSolverMode === 'mj_restore_pre_w';
             if (supportsHumanoidJogMJRestoreMode('distance-target')) {
+                if (isPreWSolver) {
+                    return (async () => {
+                        const q0 = Array.isArray(currentQ) ? currentQ.slice() : [];
+                        const dqAbsoluteProtectedTargetArray = this._getHumanoidAbsolutePose(q0);
+                        const fixedRelativeProtectedTargetArray = this._getHumanoidRelativePose(q0);
+                        if (!dqAbsoluteProtectedTargetArray || !fixedRelativeProtectedTargetArray) {
+                            return this._setIKFailureStatus({
+                                solver: 'mj_restore_pre_w',
+                                mode: 'humanoid_distance',
+                                reason: 'fk_unavailable',
+                                message: '当前人形位姿计算失败。'
+                            });
+                        }
+                        const jogMetric = resolveHumanoidJogMJPreWMetric(this._getHumanoidManifoldJogSecondaryMetric());
+                        const metricDirection = getHumanoidJogMJPreWDirection();
+                        let preWResult = null;
+                        try {
+                            preWResult = await this._runHumanoidMJRestorePreWStage({
+                                controlMode: includeWaist ? 'distance-fullbody' : 'distance',
+                                q0,
+                                dqAbsoluteProtectedTargetArray: dqAbsoluteProtectedTargetArray.slice(),
+                                fixedRelativeProtectedTargetArray: fixedRelativeProtectedTargetArray.slice(),
+                                enableJointLimitAvoidance,
+                                includeWaist,
+                                keepBodyZVertical: false,
+                                jogMetric,
+                                metricDirection
+                            });
+                        } catch (error) {
+                            preWResult = {
+                                thrown: true,
+                                error
+                            };
+                        }
+                        const preWOutcome = mapHumanoidJogMJPreWOutcome(preWResult);
+                        const qStage2 = (
+                            preWOutcome.qPreEligible === true &&
+                            Array.isArray(preWResult?.qApplied) &&
+                            preWResult.qApplied.length > 0
+                        )
+                            ? preWResult.qApplied.slice()
+                            : q0.slice();
+                        return this._updateHumanoidJointsFromRelativeDistanceDeltaMJRestore(
+                            deltaDistance,
+                            qStage2,
+                            enableJointLimitAvoidance,
+                            includeWaist,
+                            {
+                                solverMode: 'mj_restore_pre_w',
+                                preWState: preWOutcome.state,
+                                preWMetric: jogMetric,
+                                preWStart: preWOutcome.qPreEligible === true ? 'q_pre' : 'q0'
+                            }
+                        );
+                    })();
+                }
                 return this._updateHumanoidJointsFromRelativeDistanceDeltaMJRestore(
                     deltaDistance,
                     currentQ,
                     enableJointLimitAvoidance,
-                    includeWaist
+                    includeWaist,
+                    null
                 );
             }
             const fallbackMessage = 'MuJoCo 风格恢复 当前仅支持 absolute-target，其它模式已回退到 new qpJ。';
@@ -15205,18 +17430,28 @@ export class RobotVisualizer {
             const payload = this.lastHumanoidJogDiagnostics
                 ? {
                     ...this.lastHumanoidJogDiagnostics,
-                    solverMode: 'mj_restore',
+                    solverMode: isPreWSolver ? 'mj_restore_pre_w' : 'mj_restore',
                     modeTag: 'distance-target',
                     message: fallbackMessage,
                     nextMode: getHumanoidJogSolverDisplayName('vfi'),
-                    diagnosticLabel: 'fallback_to_new_qpJ'
+                    diagnosticLabel: 'fallback_to_new_qpJ',
+                    ...(isPreWSolver ? {
+                        preWState: 'disabled_for_mode',
+                        preWMetric: resolveHumanoidJogMJPreWMetric(this._getHumanoidManifoldJogSecondaryMetric()),
+                        preWStart: 'q0'
+                    } : {})
                 }
                 : {
-                    solverMode: 'mj_restore',
+                    solverMode: isPreWSolver ? 'mj_restore_pre_w' : 'mj_restore',
                     modeTag: 'distance-target',
                     active: true,
                     message: fallbackMessage,
-                    nextMode: getHumanoidJogSolverDisplayName('vfi')
+                    nextMode: getHumanoidJogSolverDisplayName('vfi'),
+                    ...(isPreWSolver ? {
+                        preWState: 'disabled_for_mode',
+                        preWMetric: resolveHumanoidJogMJPreWMetric(this._getHumanoidManifoldJogSecondaryMetric()),
+                        preWStart: 'q0'
+                    } : {})
                 };
             this._publishHumanoidJogDiagnostics(payload);
             return ok;
@@ -15992,6 +18227,13 @@ export class RobotVisualizer {
 
         return indices;
     }
+
+    _humanoidSingleArmPlusWaistCoordinatedIndices() {
+        const { count } = this._humanoidWBCIndices();
+        const indices = [];
+        for (let i = 0; i < count; i++) indices.push(i);
+        return indices;
+    }
     
     /**
      * 获取单臂位姿雅可比（仅该臂关节列非零）
@@ -16217,6 +18459,729 @@ export class RobotVisualizer {
         return true;
     }
 
+    updateHumanoidSingleArmPlusWaistPoseTarget(dqTargetArray, currentQ, armIndex) {
+        if (!this.humanoidModel || !window.humanoidQ || !Array.isArray(currentQ) || currentQ.length === 0) return false;
+        const DQ = window.DQModule?.DQWrapper;
+        if (!DQ) return false;
+
+        const activeIndices = this._humanoidSingleArmPlusWaistCoordinatedIndices();
+        if (activeIndices.length <= 0) return false;
+
+        const commandPoseGetter = armIndex === 1
+            ? (q) => this._getHumanoidPose1(q)
+            : (q) => this._getHumanoidPose2(q);
+        const invariantPoseGetter = armIndex === 1
+            ? (q) => this._getHumanoidPose2(q)
+            : (q) => this._getHumanoidPose1(q);
+        const commandJacobianGetter = armIndex === 1
+            ? (q) => this._getHumanoidPose1Jacobian(q)
+            : (q) => this._getHumanoidPose2Jacobian(q);
+        const invariantJacobianGetter = armIndex === 1
+            ? (q) => this._getHumanoidPose2Jacobian(q)
+            : (q) => this._getHumanoidPose1Jacobian(q);
+        const invariantTargetArray = invariantPoseGetter(currentQ);
+        if (!Array.isArray(invariantTargetArray) || invariantTargetArray.length === 0) return false;
+
+        const jointLimits = this._getHumanoidJointLimits();
+        const hardLimits = jointLimits ? activeIndices.map((jointIndex) => jointLimits[jointIndex] ?? null) : null;
+        const epsilon = 1e-5;
+        const maxIterations = 80;
+        const damping = 0.01;
+        const maxJointStepPerIter = 0.08;
+        const kappaInvariant = 0.8;
+        const kappaCommand = 0.5;
+        const waistCount = this.humanoidWaistLength;
+        const leftStart = waistCount;
+        const rightStart = waistCount + this.humanoidLeftArmLength;
+        const oppositeArmStart = armIndex === 1 ? rightStart : leftStart;
+        const oppositeArmEnd = armIndex === 1
+            ? rightStart + this.humanoidRightArmLength
+            : leftStart + this.humanoidLeftArmLength;
+        const W = activeIndices.map((jointIndex) => {
+            if (jointIndex < waistCount) return 1.5;
+            if (jointIndex >= oppositeArmStart && jointIndex < oppositeArmEnd) return 3.0;
+            return 1.0;
+        });
+
+        const signedPoseError = (target, current) => {
+            let dot = 0;
+            for (let i = 0; i < 8; i++) dot += (target[i] || 0) * (current[i] || 0);
+            const sign = dot < 0 ? -1 : 1;
+            const err = [];
+            for (let i = 0; i < 8; i++) {
+                err.push((target[i] || 0) - sign * (current[i] || 0));
+            }
+            return err;
+        };
+
+        let q = currentQ.slice();
+        for (let iter = 0; iter < maxIterations; iter++) {
+            const commandPose = commandPoseGetter(q);
+            const invariantPose = invariantPoseGetter(q);
+            const commandJFull = commandJacobianGetter(q);
+            const invariantJFull = invariantJacobianGetter(q);
+            if (!commandPose || !invariantPose || !commandJFull || !invariantJFull) return false;
+
+            const commandErr = signedPoseError(dqTargetArray, commandPose);
+            const invariantErr = signedPoseError(invariantTargetArray, invariantPose);
+            const commandNorm = this._computePoseErrorNorm(commandErr);
+            const invariantNorm = this._computePoseErrorNorm(invariantErr);
+            if (commandNorm <= epsilon && invariantNorm <= epsilon) break;
+
+            const Jcommand = this._selectHumanoidJacobianColumns(commandJFull, 0, activeIndices.length, activeIndices);
+            const Jinvariant = this._selectHumanoidJacobianColumns(invariantJFull, 0, activeIndices.length, activeIndices);
+            const JinvariantPinv = this._weightedDampedPseudoInverse(Jinvariant, W, damping);
+            if (!JinvariantPinv) return false;
+            const P1 = this._computeNullspaceProjection(JinvariantPinv, Jinvariant, activeIndices.length);
+            const JcommandBar = this._matMul(Jcommand, P1);
+            const JcommandBarPinv = this._weightedDampedPseudoInverse(JcommandBar, W, damping);
+            if (!JcommandBarPinv) return false;
+
+            const deltaJoints = new Array(activeIndices.length).fill(0);
+            for (let i = 0; i < activeIndices.length; i++) {
+                for (let j = 0; j < invariantErr.length; j++) {
+                    deltaJoints[i] += (JinvariantPinv[i][j] || 0) * kappaInvariant * invariantErr[j];
+                }
+            }
+            const deltaCommandTemp = new Array(activeIndices.length).fill(0);
+            for (let i = 0; i < activeIndices.length; i++) {
+                for (let j = 0; j < commandErr.length; j++) {
+                    deltaCommandTemp[i] += (JcommandBarPinv[i][j] || 0) * kappaCommand * commandErr[j];
+                }
+            }
+            for (let i = 0; i < activeIndices.length; i++) {
+                let projected = 0;
+                for (let j = 0; j < activeIndices.length; j++) {
+                    projected += (P1[i][j] || 0) * deltaCommandTemp[j];
+                }
+                deltaJoints[i] += projected;
+            }
+            for (let i = 0; i < activeIndices.length; i++) {
+                deltaJoints[i] = Math.max(-maxJointStepPerIter, Math.min(maxJointStepPerIter, deltaJoints[i]));
+            }
+            for (let i = 0; i < activeIndices.length; i++) {
+                q[activeIndices[i]] += deltaJoints[i];
+            }
+            if (hardLimits) {
+                this._clampHumanoidIndexedJoints(q, activeIndices, hardLimits);
+            }
+        }
+
+        for (let i = 0; i < window.humanoidQ.length && i < q.length; i++) {
+            window.humanoidQ[i] = q[i];
+        }
+        if (window.clampJointAngles && window.customRobotConfig && this.humanoidURDF) {
+            const names = this.humanoidJointNames || [];
+            const clamped = window.clampJointAngles(q, names, this.humanoidURDF, window.customRobotConfig);
+            for (let i = 0; i < window.humanoidQ.length && i < clamped.length; i++) {
+                window.humanoidQ[i] = clamped[i];
+            }
+        }
+        this.setHumanoidJoints(window.humanoidQ);
+        if (window.updateGlobalVariables) window.updateGlobalVariables();
+        if (window.updateRobotPose) window.updateRobotPose();
+        return true;
+    }
+
+    _updateHumanoidCustomPoseTargetMJRestore({
+        dqTargetArray,
+        currentQ,
+        solverMode = 'mj_restore',
+        statusMode = 'humanoid_custom_pose',
+        modeTag = 'custom-target',
+        includeWaist = false,
+        armStart = 0,
+        activeCount = 0,
+        activeIndices = null,
+        hardLimits = null,
+        poseGetter = null,
+        jacobianGetter = null,
+        invariantTargetArray = null,
+        invariantPoseGetter = null,
+        invariantJacobianGetter = null,
+        invariantWeight = 1,
+        keepBodyZVertical = false,
+        bodyEqualityTolerance = 0,
+        bodyConstraintGetter = null,
+        internalOptions = null
+    } = {}) {
+        if (!this.humanoidModel || !window.humanoidQ || !Array.isArray(currentQ) || currentQ.length === 0) {
+            return this._setIKFailureStatus({
+                solver: solverMode,
+                mode: statusMode,
+                reason: 'invalid_state',
+                message: '人形状态未初始化。'
+            });
+        }
+        if (!Array.isArray(dqTargetArray) || dqTargetArray.length === 0 || typeof poseGetter !== 'function' || typeof jacobianGetter !== 'function') {
+            return this._setIKFailureStatus({
+                solver: solverMode,
+                mode: statusMode,
+                reason: 'command_builder_failed',
+                message: `${modeTag} 任务构建失败。`
+            });
+        }
+        const usingIndexedSelection = Array.isArray(activeIndices) && activeIndices.length > 0;
+        const effectiveActiveCount = usingIndexedSelection ? activeIndices.length : activeCount;
+        if (effectiveActiveCount <= 0) {
+            return this._setIKFailureStatus({
+                solver: solverMode,
+                mode: statusMode,
+                reason: 'no_active_joints',
+                message: '当前模式下没有可用活动关节。'
+            });
+        }
+
+        const cfg = this.vfiConfig || {};
+        const qInitialFull = currentQ.slice();
+        const qInitialActive = usingIndexedSelection
+            ? this._sliceHumanoidIndexedJoints(qInitialFull, activeIndices)
+            : this._sliceHumanoidActiveJoints(qInitialFull, armStart, activeCount);
+        const mjRestoreProfile = resolveHumanoidJogMJRestoreProfile({
+            includeWaist,
+            fallbackReason: null,
+            config: cfg
+        });
+        const maxStep = Number.isFinite(cfg.mjRestoreMaxStep)
+            ? cfg.mjRestoreMaxStep
+            : (Number.isFinite(cfg.maxStep) ? cfg.maxStep : 0.05);
+        const jointMaxSteps = buildHumanoidJogManifoldStepBounds({
+            maxStep,
+            includeWaist,
+            keepBodyZVertical,
+            waistCount: includeWaist ? this.humanoidWaistLength : 0,
+            activeCount: effectiveActiveCount,
+            waistStepFraction: Number.isFinite(cfg.manifoldWaistStepFraction)
+                ? cfg.manifoldWaistStepFraction
+                : 1.0
+        });
+        const lowerBounds = hardLimits
+            ? hardLimits.map((limit) => limit?.lower ?? -Math.PI)
+            : new Array(effectiveActiveCount).fill(-Math.PI);
+        const upperBounds = hardLimits
+            ? hardLimits.map((limit) => limit?.upper ?? Math.PI)
+            : new Array(effectiveActiveCount).fill(Math.PI);
+        const hardCmdTol = Number.isFinite(cfg.hardCommandTolPose) ? cfg.hardCommandTolPose : 1e-6;
+        const hardInvariantTol = Number.isFinite(cfg.hardInvariantTol) ? cfg.hardInvariantTol : 5e-5;
+        const inequalityTol = Number.isFinite(cfg.mjRestoreHardTolerance) ? Math.max(0, cfg.mjRestoreHardTolerance) : 1e-8;
+        const equalityTol = Math.min(hardCmdTol, hardInvariantTol);
+        const damping = mjRestoreProfile.damping;
+        const referenceStiffness = mjRestoreProfile.referenceStiffness;
+        const referenceDamping = mjRestoreProfile.referenceDamping;
+        const minScale = Number.isFinite(cfg.mjRestoreLineSearchMinScale) ? Math.max(1e-8, cfg.mjRestoreLineSearchMinScale) : 1e-6;
+        const reductionFactor = Number.isFinite(cfg.mjRestoreLineSearchReductionFactor) ? cfg.mjRestoreLineSearchReductionFactor : 0.5;
+        const restoreMaxIterations = mjRestoreProfile.maxIterations;
+        const polishActivationResidual = mjRestoreProfile.polishActivationResidual;
+        const polishMaxIterations = mjRestoreProfile.polishMaxIterations;
+        const polishDamping = mjRestoreProfile.polishDamping;
+        const nowMs = () => (typeof performance !== 'undefined' && typeof performance.now === 'function')
+            ? performance.now()
+            : Date.now();
+        const mjTimingStartMs = nowMs();
+
+        const evaluateProblem = (qActiveEval) => {
+            const qFull = usingIndexedSelection
+                ? this._writeHumanoidIndexedJoints(qInitialFull, qActiveEval, activeIndices)
+                : this._writeHumanoidActiveJoints(qInitialFull, qActiveEval, armStart, activeCount);
+            const pose = poseGetter(qFull);
+            const Jfull = jacobianGetter(qFull);
+            if (!pose || !Jfull) return null;
+            const commandJacobian = this._selectHumanoidJacobianColumns(
+                Jfull,
+                armStart,
+                activeCount,
+                activeIndices
+            ).slice(0, dqTargetArray.length);
+
+            let invariantPose = [];
+            let invariantJacobian = [];
+            if (Array.isArray(invariantTargetArray) && invariantTargetArray.length > 0) {
+                if (typeof invariantPoseGetter !== 'function' || typeof invariantJacobianGetter !== 'function') return null;
+                invariantPose = invariantPoseGetter(qFull);
+                const invariantJfull = invariantJacobianGetter(qFull);
+                if (!invariantPose || !invariantJfull) return null;
+                invariantJacobian = this._selectHumanoidJacobianColumns(
+                    invariantJfull,
+                    armStart,
+                    activeCount,
+                    activeIndices
+                ).slice(0, invariantTargetArray.length);
+            }
+
+            const bodyConstraint = keepBodyZVertical && typeof bodyConstraintGetter === 'function'
+                ? bodyConstraintGetter(qFull)
+                : null;
+            const problem = buildHumanoidJogMJProblem({
+                q: qActiveEval,
+                qCurrent: qInitialActive,
+                absoluteTarget: dqTargetArray,
+                relativeTarget: Array.isArray(invariantTargetArray) ? invariantTargetArray : [],
+                absolutePose: () => pose,
+                relativePose: () => invariantPose,
+                absoluteJacobian: () => commandJacobian,
+                relativeJacobian: () => invariantJacobian,
+                includeBodyZ: keepBodyZVertical,
+                bodyZConstraint: keepBodyZVertical
+                    ? () => ({
+                        residual: bodyConstraint?.residual ?? bodyConstraint?.error ?? [],
+                        jacobian: bodyConstraint?.jacobian ?? bodyConstraint?.Jrows ?? []
+                    })
+                    : null,
+                bodyEqualityTolerance,
+                absoluteWeight: 1,
+                relativeWeight: invariantWeight,
+                bodyWeight: 1,
+                wvfiLowerBound: 0,
+                lowerBounds,
+                upperBounds,
+                stepBounds: jointMaxSteps,
+                waistXCorridor: this._buildHumanoidManifoldWaistXCorridor({
+                    qFull,
+                    qInitialFull,
+                    armStart,
+                    activeCount,
+                    includeWaist,
+                    activeIndices
+                }),
+                referenceModel: {
+                    absolute: {
+                        stiffness: referenceStiffness,
+                        damping: referenceDamping
+                    },
+                    relative: {
+                        stiffness: Array.isArray(invariantTargetArray) && invariantTargetArray.length > 0 ? referenceStiffness : 0,
+                        damping: Array.isArray(invariantTargetArray) && invariantTargetArray.length > 0 ? referenceDamping : 0
+                    },
+                    bodyZ: {
+                        stiffness: keepBodyZVertical ? 0.6 : 0,
+                        damping: keepBodyZVertical ? 0.45 : 0
+                    }
+                }
+            });
+            problem.metadata = { qFull };
+            return problem;
+        };
+
+        const restorationResult = restoreHumanoidJogMJ({
+            qInitial: qInitialActive,
+            evaluateProblem,
+            maxIterations: restoreMaxIterations,
+            damping,
+            referenceStiffness,
+            referenceDamping,
+            initialScale: 1,
+            minScale,
+            reductionFactor,
+            equalityTolerance: equalityTol,
+            inequalityTolerance: inequalityTol
+        });
+
+        let effectiveRestorationResult = restorationResult;
+        let mjPolishResult = null;
+        let mjPolishState = 'skipped';
+        if (shouldAttemptHumanoidJogMJPolish({
+            restorationResult,
+            activationResidual: polishActivationResidual
+        })) {
+            mjPolishResult = restoreHumanoidJogManifold({
+                qInitial: restorationResult.qApplied,
+                evaluateProblem,
+                maxIterations: polishMaxIterations,
+                damping: polishDamping,
+                referenceStiffness: 1,
+                referenceDamping: 0,
+                initialScale: 1,
+                minScale,
+                reductionFactor,
+                equalityTolerance: equalityTol,
+                inequalityTolerance: inequalityTol
+            });
+            const polishImproved = shouldApplyHumanoidJogMJPolish({
+                restorationResult,
+                polishResult: mjPolishResult
+            });
+            mjPolishState = mjPolishResult?.converged === true
+                ? 'converged'
+                : (polishImproved ? 'best_effort' : 'not_improved');
+            if (polishImproved) {
+                effectiveRestorationResult = {
+                    ...mjPolishResult,
+                    reason: mjPolishResult.converged === true ? 'polish_converged' : 'polish_best_effort',
+                    iterations: restorationResult.iterations + (Number.isFinite(mjPolishResult.iterations) ? mjPolishResult.iterations : 0),
+                    acceptedIterations: restorationResult.acceptedIterations + (Number.isFinite(mjPolishResult.acceptedIterations) ? mjPolishResult.acceptedIterations : 0)
+                };
+            }
+        }
+
+        const qCandidateActive = Array.isArray(effectiveRestorationResult?.qApplied) ? effectiveRestorationResult.qApplied.slice() : [];
+        const qCandidate = usingIndexedSelection
+            ? this._writeHumanoidIndexedJoints(qInitialFull, qCandidateActive, activeIndices)
+            : this._writeHumanoidActiveJoints(qInitialFull, qCandidateActive, armStart, activeCount);
+        if (usingIndexedSelection) {
+            this._clampHumanoidIndexedJoints(qCandidate, activeIndices, hardLimits);
+        } else {
+            this._clampHumanoidActiveJoints(qCandidate, armStart, hardLimits);
+        }
+        const qCandidateClampedActive = usingIndexedSelection
+            ? this._sliceHumanoidIndexedJoints(qCandidate, activeIndices)
+            : this._sliceHumanoidActiveJoints(qCandidate, armStart, activeCount);
+        const finalProblem = effectiveRestorationResult?.currentProblem || evaluateProblem(qCandidateClampedActive);
+        const finalCommandResidual = finalProblem?.equalities?.blocks?.absolute?.residual ?? [];
+        const finalRelativeResidual = finalProblem?.equalities?.blocks?.relative?.residual ?? [];
+        const finalBodyResidual = keepBodyZVertical ? (finalProblem?.equalities?.blocks?.bodyZ?.residual ?? []) : [];
+        const finalCmdNorm = Math.sqrt(finalCommandResidual.reduce((sum, value) => sum + (Number(value) || 0) * (Number(value) || 0), 0));
+        const finalInvariantResidual = [...finalRelativeResidual, ...finalBodyResidual];
+        const finalInvariantNorm = Math.sqrt(finalInvariantResidual.reduce((sum, value) => sum + (Number(value) || 0) * (Number(value) || 0), 0));
+        const finalInequalityViolation = Math.max(
+            finalProblem?.inequalities?.wvfiFloor?.violation ?? 0,
+            finalProblem?.inequalities?.waistXCorridor?.violation ?? 0
+        );
+        const converged = effectiveRestorationResult?.converged === true &&
+            finalCmdNorm <= hardCmdTol &&
+            finalInvariantNorm <= hardInvariantTol &&
+            finalInequalityViolation <= inequalityTol;
+        const qApplied = converged ? qCandidate : qInitialFull.slice();
+        if (!converged) {
+            this._notifyHumanoidJogUnreachable('无法到达该位置');
+        }
+
+        const cctsmStartMs = nowMs();
+        const localSolveMs = cctsmStartMs - mjTimingStartMs;
+        const vfiConstraintsForDiagnostics = this._buildManipulabilityVFIConstraints(
+            qApplied,
+            armStart,
+            activeCount,
+            hardLimits,
+            activeIndices
+        );
+        const vfiDiagnostics = summarizeManipulabilityVFIConstraints(vfiConstraintsForDiagnostics);
+        const cctsmMs = nowMs() - cctsmStartMs;
+        const diagnosticBuildStartMs = nowMs();
+        const diagnosticsPayload = buildHumanoidJogMJDiagnostics({
+            solverMode,
+            modeTag,
+            includeWaist,
+            keepBodyZVertical,
+            restorationResult,
+            polishState: mjPolishState,
+            polishReason: mjPolishResult?.reason ?? '',
+            polishResidualNorm: mjPolishResult?.currentResidualNorm,
+            nullspaceResult: computeHumanoidJogMJNullspaceRefine({
+                enabled: false,
+                restorationConverged: effectiveRestorationResult?.converged === true,
+                metricAttempt: null
+            }),
+            referenceModel: finalProblem?.referenceModel ?? null,
+            jogMetric: 'none',
+            jogMetricState: effectiveRestorationResult?.converged === true ? 'skipped(none)' : 'skipped(waiting_for_restore)',
+            jogMetricBefore: Number.NaN,
+            jogMetricAfter: Number.NaN,
+            jogMetricApplied: false,
+            jogMetricAxis: '',
+            preWState: typeof internalOptions?.preWState === 'string' ? internalOptions.preWState : '',
+            preWMetric: typeof internalOptions?.preWMetric === 'string' ? internalOptions.preWMetric : '',
+            preWStart: typeof internalOptions?.preWStart === 'string' ? internalOptions.preWStart : '',
+            hierarchicalVfiBlend: this._getHumanoidHierarchicalVfiBlend(),
+            relativeResidualNorm: finalInvariantNorm,
+            bodyResidualNorm: keepBodyZVertical ? finalInvariantNorm : Number.NaN,
+            vfiJointLimitCount: vfiDiagnostics.jointLimitCount,
+            vfiExtraCount: vfiDiagnostics.extraCount,
+            vfiTotalCount: vfiDiagnostics.totalCount,
+            vfiMinDistance: vfiDiagnostics.minDistance,
+            ...this._extractHumanoidWVFIConstraintDiagnostics(finalProblem?.inequalities?.wvfiFloor),
+            ...this._extractHumanoidWaistXCorridorDiagnostics(finalProblem?.inequalities?.waistXCorridor)
+        });
+        const diagnosticLabel = [
+            `restore=${restorationResult.reason}`,
+            `polish=${mjPolishState}${mjPolishResult?.reason ? `(${mjPolishResult.reason})` : ''}`,
+            'nullspace=skipped',
+            'jog_metric=none',
+            `jog_metric_opt=${effectiveRestorationResult?.converged === true ? 'skipped(none)' : 'skipped(waiting_for_restore)'}`,
+            diagnosticsPayload.referenceSummary ? diagnosticsPayload.referenceSummary : null,
+            keepBodyZVertical ? `body=${this._formatDiagNumber(finalInvariantNorm)}` : null
+        ].filter(Boolean).join('; ');
+        const diagnosticMs = nowMs() - diagnosticBuildStartMs;
+        const totalMs = nowMs() - mjTimingStartMs;
+        diagnosticsPayload.timingPreMs = Number.isFinite(restorationResult?.timings?.preMs) ? restorationResult.timings.preMs : 0;
+        diagnosticsPayload.timingWorkerInitMs = Number.isFinite(restorationResult?.timings?.workerInitMs) ? restorationResult.timings.workerInitMs : 0;
+        diagnosticsPayload.timingSolveWaitMs = Number.isFinite(restorationResult?.timings?.solveWaitMs) ? restorationResult.timings.solveWaitMs : 0;
+        diagnosticsPayload.timingSolveMs = Number.isFinite(restorationResult?.timings?.solveMs) ? restorationResult.timings.solveMs : localSolveMs;
+        diagnosticsPayload.timingPostMs = Number.isFinite(restorationResult?.timings?.postMs) ? restorationResult.timings.postMs : 0;
+        diagnosticsPayload.timingCCTSMMs = cctsmMs;
+        diagnosticsPayload.timingDiagnosticMs = diagnosticMs;
+        diagnosticsPayload.timingTotalMs = totalMs;
+
+        this._publishHumanoidJogDiagnostics({
+            ...diagnosticsPayload,
+            active: true,
+            message: converged ? 'MuJoCo 风格恢复 单步更新完成。' : '无法到达该位置（目标未达成）。',
+            iterations: restorationResult.iterations,
+            activeJoints: effectiveActiveCount,
+            commandError: finalCmdNorm,
+            invariantError: finalInvariantNorm,
+            stepNorm: converged
+                ? (usingIndexedSelection
+                    ? this._computeHumanoidIndexedJointDistance(qApplied, qInitialFull, activeIndices)
+                    : this._computeHumanoidActiveJointDistance(qApplied, qInitialFull, armStart, activeCount))
+                : 0,
+            diagnosticLabel,
+            includeWaist,
+            jointLimitAvoidance: hardLimits !== null,
+            cctsmW: Number.NaN,
+            cctsmWvfi: Number.NaN,
+            cctsmWAbs: Number.NaN,
+            cctsmWAbsHier: Number.NaN,
+            cctsmWAbsHierVfi: Number.NaN,
+            cctsmWAbsArm: Number.NaN,
+            cctsmWAbsArmVfi: Number.NaN,
+            cctsmWAbsVfi: Number.NaN,
+            cctsmWCmd: Number.NaN,
+            vfiJointLimitCount: vfiDiagnostics.jointLimitCount,
+            vfiExtraCount: vfiDiagnostics.extraCount,
+            vfiTotalCount: vfiDiagnostics.totalCount,
+            vfiMinDistance: vfiDiagnostics.minDistance
+        });
+        this.lastIKSolveStatus = {
+            solver: solverMode,
+            mode: statusMode,
+            converged,
+            reason: converged ? 'converged' : 'hard_tol_not_reached',
+            message: converged ? 'MuJoCo 风格恢复 单步更新完成。' : '无法到达该位置（目标未达成）。',
+            finalResidual: finalCmdNorm,
+            invariantResidual: finalInvariantNorm
+        };
+        this._applyHumanoidJointSolution(qApplied);
+        return true;
+    }
+
+    async _updateHumanoidSingleArmPoseTargetMJRestore(dqTargetArray, currentQ, armIndex, includeWaist = false, keepBodyZVertical = false, internalOptions = null) {
+        const descriptor = buildHumanoidJogMJTaskDescriptor({
+            controlMode: armIndex === 1 ? 'robot1' : 'robot2',
+            commandTarget: Array.isArray(dqTargetArray) ? dqTargetArray.slice() : null
+        });
+        if (descriptor.valid !== true) {
+            return this._setIKFailureStatus({
+                solver: typeof internalOptions?.solverMode === 'string' ? normalizeHumanoidJogSolverMode(internalOptions.solverMode) : 'mj_restore',
+                mode: `humanoid_arm_${armIndex}`,
+                reason: 'mode_adapter_failed',
+                message: `${descriptor.diagnosticLabel || 'mode_adapter_failed'}`
+            });
+        }
+        const { start, count } = this._humanoidSingleArmIndices(armIndex);
+        const jointLimits = this._getHumanoidJointLimits();
+        const hardLimits = jointLimits ? jointLimits.slice(start, start + count) : null;
+        const solverMode = (
+            typeof internalOptions?.solverMode === 'string'
+                ? normalizeHumanoidJogSolverMode(internalOptions.solverMode)
+                : 'mj_restore'
+        ) === 'mj_restore_pre_w'
+            ? 'mj_restore_pre_w'
+            : 'mj_restore';
+        let qStage2 = Array.isArray(currentQ) ? currentQ.slice() : [];
+        let preWOutcome = {
+            state: 'disabled_for_mode',
+            qPreEligible: false
+        };
+        if (solverMode === 'mj_restore_pre_w') {
+            const preWMetric = resolveHumanoidJogMJPreWMetric(this._getHumanoidManifoldJogSecondaryMetric());
+            const preWResult = await this._runHumanoidMJRestoreSpecialModePreWStage({
+                q0: currentQ,
+                armStart: start,
+                activeCount: count,
+                hardLimits,
+                poseGetter: armIndex === 1
+                    ? (q) => this._getHumanoidPose1(q)
+                    : (q) => this._getHumanoidPose2(q),
+                jacobianGetter: (q) => this._getHumanoidSingleArmPoseJacobian(q, armIndex),
+                mode: armIndex === 1 ? 'robot1' : 'robot2',
+                preWMetric,
+                includeWaist,
+                keepBodyZVertical
+            });
+            preWOutcome = mapHumanoidJogMJPreWOutcome(preWResult);
+            if (preWOutcome.qPreEligible === true && Array.isArray(preWResult?.qApplied) && preWResult.qApplied.length > 0) {
+                qStage2 = preWResult.qApplied.slice();
+            }
+        }
+        return this._updateHumanoidCustomPoseTargetMJRestore({
+            dqTargetArray,
+            currentQ: qStage2,
+            solverMode,
+            statusMode: `humanoid_arm_${armIndex}`,
+            modeTag: descriptor.modeTag,
+            includeWaist,
+            armStart: start,
+            activeCount: count,
+            hardLimits,
+            poseGetter: armIndex === 1
+                ? (q) => this._getHumanoidPose1(q)
+                : (q) => this._getHumanoidPose2(q),
+            jacobianGetter: (q) => this._getHumanoidSingleArmPoseJacobian(q, armIndex),
+            keepBodyZVertical,
+            bodyEqualityTolerance: Number.isFinite(this.vfiConfig?.mjRestoreBodyTolerance)
+                ? this.vfiConfig.mjRestoreBodyTolerance
+                : 5e-5,
+            bodyConstraintGetter: keepBodyZVertical
+                ? (q) => this._getHumanoidBodyVerticalState(q, start, count)
+                : null,
+            internalOptions: solverMode === 'mj_restore_pre_w'
+                ? {
+                    solverMode,
+                    preWState: preWOutcome.state,
+                    preWMetric: resolveHumanoidJogMJPreWMetric(this._getHumanoidManifoldJogSecondaryMetric()),
+                    preWStart: preWOutcome.qPreEligible === true ? 'q_pre' : 'q0'
+                }
+                : internalOptions
+        });
+    }
+
+    async _updateHumanoidSingleArmPlusWaistPoseTargetMJRestore(dqTargetArray, currentQ, armIndex, internalOptions = null) {
+        const controlMode = armIndex === 1 ? 'robot1-waist' : 'robot2-waist';
+        const descriptor = buildHumanoidJogMJTaskDescriptor({
+            controlMode,
+            commandTarget: Array.isArray(dqTargetArray) ? dqTargetArray.slice() : null
+        });
+        if (descriptor.valid !== true) {
+            return this._setIKFailureStatus({
+                solver: typeof internalOptions?.solverMode === 'string' ? normalizeHumanoidJogSolverMode(internalOptions.solverMode) : 'mj_restore',
+                mode: `humanoid_arm_${armIndex}_waist`,
+                reason: 'mode_adapter_failed',
+                message: `${descriptor.diagnosticLabel || 'mode_adapter_failed'}`
+            });
+        }
+
+        const activeIndices = this._humanoidSingleArmPlusWaistCoordinatedIndices();
+        const jointLimits = this._getHumanoidJointLimits();
+        const hardLimits = jointLimits ? activeIndices.map((jointIndex) => jointLimits[jointIndex] ?? null) : null;
+        const solverMode = (
+            typeof internalOptions?.solverMode === 'string'
+                ? normalizeHumanoidJogSolverMode(internalOptions.solverMode)
+                : 'mj_restore'
+        ) === 'mj_restore_pre_w'
+            ? 'mj_restore_pre_w'
+            : 'mj_restore';
+        const commandPoseGetter = armIndex === 1
+            ? (q) => this._getHumanoidPose1(q)
+            : (q) => this._getHumanoidPose2(q);
+        const invariantPoseGetter = armIndex === 1
+            ? (q) => this._getHumanoidPose2(q)
+            : (q) => this._getHumanoidPose1(q);
+        const commandJacobianGetter = armIndex === 1
+            ? (q) => this._getHumanoidPose1Jacobian(q)
+            : (q) => this._getHumanoidPose2Jacobian(q);
+        const invariantJacobianGetter = armIndex === 1
+            ? (q) => this._getHumanoidPose2Jacobian(q)
+            : (q) => this._getHumanoidPose1Jacobian(q);
+        const invariantTargetArray = invariantPoseGetter(currentQ);
+
+        return this._updateHumanoidCustomPoseTargetMJRestore({
+            dqTargetArray,
+            currentQ: Array.isArray(currentQ) ? currentQ.slice() : [],
+            solverMode,
+            statusMode: `humanoid_arm_${armIndex}_waist`,
+            modeTag: descriptor.modeTag,
+            includeWaist: true,
+            armStart: 0,
+            activeCount: activeIndices.length,
+            activeIndices,
+            hardLimits,
+            poseGetter: commandPoseGetter,
+            jacobianGetter: commandJacobianGetter,
+            invariantTargetArray,
+            invariantPoseGetter,
+            invariantJacobianGetter,
+            invariantWeight: 1,
+            keepBodyZVertical: false,
+            internalOptions: solverMode === 'mj_restore_pre_w'
+                ? {
+                    solverMode,
+                    preWState: 'disabled_for_mode',
+                    preWMetric: resolveHumanoidJogMJPreWMetric(this._getHumanoidManifoldJogSecondaryMetric()),
+                    preWStart: 'q0'
+                }
+                : internalOptions
+        });
+    }
+
+    async _updateHumanoidWaistPoseTargetMJRestore(dqTargetArray, currentQ, internalOptions = null) {
+        const descriptor = buildHumanoidJogMJTaskDescriptor({
+            controlMode: 'waist-body-link-xz',
+            commandTarget: Array.isArray(dqTargetArray) ? dqTargetArray.slice() : null
+        });
+        if (descriptor.valid !== true) {
+            return this._setIKFailureStatus({
+                solver: typeof internalOptions?.solverMode === 'string' ? normalizeHumanoidJogSolverMode(internalOptions.solverMode) : 'mj_restore',
+                mode: 'humanoid_waist',
+                reason: 'mode_adapter_failed',
+                message: `${descriptor.diagnosticLabel || 'mode_adapter_failed'}`
+            });
+        }
+        if (typeof this.humanoidModel?.fkmEffector !== 'function' || typeof this.humanoidModel?.poseJacobianEffector !== 'function') {
+            return this._setIKFailureStatus({
+                solver: typeof internalOptions?.solverMode === 'string' ? normalizeHumanoidJogSolverMode(internalOptions.solverMode) : 'mj_restore',
+                mode: 'humanoid_waist',
+                reason: 'command_builder_failed',
+                message: '腰部 body_link 接口不可用。'
+            });
+        }
+        const { start, count } = this._humanoidWaistIndices();
+        const jointLimits = this._getHumanoidJointLimits();
+        const hardLimits = jointLimits ? jointLimits.slice(start, start + count) : null;
+        const solverMode = (
+            typeof internalOptions?.solverMode === 'string'
+                ? normalizeHumanoidJogSolverMode(internalOptions.solverMode)
+                : 'mj_restore'
+        ) === 'mj_restore_pre_w'
+            ? 'mj_restore_pre_w'
+            : 'mj_restore';
+        let qStage2 = Array.isArray(currentQ) ? currentQ.slice() : [];
+        let preWOutcome = {
+            state: 'disabled_for_mode',
+            qPreEligible: false
+        };
+        if (solverMode === 'mj_restore_pre_w') {
+            const preWMetric = resolveHumanoidJogMJPreWMetric(this._getHumanoidManifoldJogSecondaryMetric());
+            const preWResult = await this._runHumanoidMJRestoreSpecialModePreWStage({
+                q0: currentQ,
+                armStart: start,
+                activeCount: count,
+                hardLimits,
+                poseGetter: (q) => this.humanoidModel.fkmEffector(q, 0),
+                jacobianGetter: (q) => this.humanoidModel.poseJacobianEffector(q, 0),
+                mode: 'waist-body-link-xz',
+                preWMetric,
+                includeWaist: true,
+                keepBodyZVertical: false
+            });
+            preWOutcome = mapHumanoidJogMJPreWOutcome(preWResult);
+            if (preWOutcome.qPreEligible === true && Array.isArray(preWResult?.qApplied) && preWResult.qApplied.length > 0) {
+                qStage2 = preWResult.qApplied.slice();
+            }
+        }
+        return this._updateHumanoidCustomPoseTargetMJRestore({
+            dqTargetArray,
+            currentQ: qStage2,
+            solverMode,
+            statusMode: 'humanoid_waist',
+            modeTag: descriptor.modeTag,
+            includeWaist: true,
+            armStart: start,
+            activeCount: count,
+            hardLimits,
+            poseGetter: (q) => this.humanoidModel.fkmEffector(q, 0),
+            jacobianGetter: (q) => this.humanoidModel.poseJacobianEffector(q, 0),
+            keepBodyZVertical: false,
+            internalOptions: solverMode === 'mj_restore_pre_w'
+                ? {
+                    solverMode,
+                    preWState: preWOutcome.state,
+                    preWMetric: resolveHumanoidJogMJPreWMetric(this._getHumanoidManifoldJogSecondaryMetric()),
+                    preWStart: preWOutcome.qPreEligible === true ? 'q_pre' : 'q0'
+                }
+                : internalOptions
+        });
+    }
+
     /**
      * 人形机器人腰部 body_link 平移控制（仅支持 X/Z）
      * @param {string} axis - 'x' | 'z'
@@ -16243,8 +19208,16 @@ export class RobotVisualizer {
             const dqDelta = DQ.translation(delta.x, delta.y, delta.z);
             const worldMode = this.isWorldTranslationMode?.() ?? true;
             const dqTarget = worldMode ? DQ.multiply(dqDelta, dqCurrent) : DQ.multiply(dqCurrent, dqDelta);
+            const targetArray = DQ.toArray(dqTarget);
+            if (this._isHumanoidMJRestoreSolverEnabled() || this._isHumanoidMJRestorePreWSolverEnabled()) {
+                const selectedSolverMode = this._getHumanoidJogSolverMode();
+                const internalOptions = selectedSolverMode === 'mj_restore_pre_w'
+                    ? { solverMode: 'mj_restore_pre_w' }
+                    : null;
+                return this._updateHumanoidWaistPoseTargetMJRestore(targetArray, window.humanoidQ, internalOptions);
+            }
 
-            this.updateHumanoidWaistPoseTarget(DQ.toArray(dqTarget), window.humanoidQ);
+            this.updateHumanoidWaistPoseTarget(targetArray, window.humanoidQ);
         } catch (e) {
             console.error('移动腰部 body_link 失败:', e);
         }
@@ -16275,8 +19248,16 @@ export class RobotVisualizer {
             
             const worldMode = this.isWorldTranslationMode?.() ?? true;
             const dqTarget = worldMode ? DQ.multiply(dqDelta, dqCurrent) : DQ.multiply(dqCurrent, dqDelta);
-            
-            this.updateHumanoidSingleArmPoseTarget(DQ.toArray(dqTarget), window.humanoidQ, 1);
+            const targetArray = DQ.toArray(dqTarget);
+            if (this._isHumanoidMJRestoreSolverEnabled() || this._isHumanoidMJRestorePreWSolverEnabled()) {
+                const selectedSolverMode = this._getHumanoidJogSolverMode();
+                const internalOptions = selectedSolverMode === 'mj_restore_pre_w'
+                    ? { solverMode: 'mj_restore_pre_w' }
+                    : null;
+                return this._updateHumanoidSingleArmPoseTargetMJRestore(targetArray, window.humanoidQ, 1, false, false, internalOptions);
+            }
+
+            this.updateHumanoidSingleArmPoseTarget(targetArray, window.humanoidQ, 1);
         } catch (e) {
             console.error('移动左臂失败:', e);
         }
@@ -16307,8 +19288,16 @@ export class RobotVisualizer {
             
             const worldMode = this.isWorldTranslationMode?.() ?? true;
             const dqTarget = worldMode ? DQ.multiply(dqDelta, dqCurrent) : DQ.multiply(dqCurrent, dqDelta);
-            
-            this.updateHumanoidSingleArmPoseTarget(DQ.toArray(dqTarget), window.humanoidQ, 2);
+            const targetArray = DQ.toArray(dqTarget);
+            if (this._isHumanoidMJRestoreSolverEnabled() || this._isHumanoidMJRestorePreWSolverEnabled()) {
+                const selectedSolverMode = this._getHumanoidJogSolverMode();
+                const internalOptions = selectedSolverMode === 'mj_restore_pre_w'
+                    ? { solverMode: 'mj_restore_pre_w' }
+                    : null;
+                return this._updateHumanoidSingleArmPoseTargetMJRestore(targetArray, window.humanoidQ, 2, false, false, internalOptions);
+            }
+
+            this.updateHumanoidSingleArmPoseTarget(targetArray, window.humanoidQ, 2);
         } catch (e) {
             console.error('移动右臂失败:', e);
         }
@@ -16339,7 +19328,16 @@ export class RobotVisualizer {
             else return;
             
             const dqTarget = this.combineDQWithTeachOrder(rotationDQ, dqCurrent, false);
-            this.updateHumanoidSingleArmPoseTarget(DQ.toArray(dqTarget), window.humanoidQ, 1);
+            const targetArray = DQ.toArray(dqTarget);
+            if (this._isHumanoidMJRestoreSolverEnabled() || this._isHumanoidMJRestorePreWSolverEnabled()) {
+                const selectedSolverMode = this._getHumanoidJogSolverMode();
+                const internalOptions = selectedSolverMode === 'mj_restore_pre_w'
+                    ? { solverMode: 'mj_restore_pre_w' }
+                    : null;
+                return this._updateHumanoidSingleArmPoseTargetMJRestore(targetArray, window.humanoidQ, 1, false, false, internalOptions);
+            }
+
+            this.updateHumanoidSingleArmPoseTarget(targetArray, window.humanoidQ, 1);
         } catch (e) {
             console.error('旋转左臂失败:', e);
         }
@@ -16370,9 +19368,150 @@ export class RobotVisualizer {
             else return;
             
             const dqTarget = this.combineDQWithTeachOrder(rotationDQ, dqCurrent, false);
-            this.updateHumanoidSingleArmPoseTarget(DQ.toArray(dqTarget), window.humanoidQ, 2);
+            const targetArray = DQ.toArray(dqTarget);
+            if (this._isHumanoidMJRestoreSolverEnabled() || this._isHumanoidMJRestorePreWSolverEnabled()) {
+                const selectedSolverMode = this._getHumanoidJogSolverMode();
+                const internalOptions = selectedSolverMode === 'mj_restore_pre_w'
+                    ? { solverMode: 'mj_restore_pre_w' }
+                    : null;
+                return this._updateHumanoidSingleArmPoseTargetMJRestore(targetArray, window.humanoidQ, 2, false, false, internalOptions);
+            }
+
+            this.updateHumanoidSingleArmPoseTarget(targetArray, window.humanoidQ, 2);
         } catch (e) {
             console.error('旋转右臂失败:', e);
+        }
+    }
+
+    moveHumanoidLeftArmWithWaistAlongAxis(axis, direction) {
+        if (!this.humanoidMode || !window.humanoidQ?.length) return;
+        const DQ = window.DQModule?.DQWrapper;
+        if (!DQ) return;
+
+        try {
+            const stepSize = this.getTeachTranslationStep();
+            const directionSign = direction === 'positive' ? 1 : -1;
+            const currentPose = this._getHumanoidPose1(window.humanoidQ);
+            if (!currentPose) return;
+
+            const dqCurrent = DQ.createFromArray(currentPose);
+            const rotationArray = DQ.getRotation(dqCurrent);
+            const rotationQuat = new THREE.Quaternion(rotationArray[1], rotationArray[2], rotationArray[3], rotationArray[0]);
+            const delta = this.getTranslationDirection(axis, rotationQuat).multiplyScalar(stepSize * directionSign);
+            const dqDelta = DQ.translation(delta.x, delta.y, delta.z);
+            const worldMode = this.isWorldTranslationMode?.() ?? true;
+            const dqTarget = worldMode ? DQ.multiply(dqDelta, dqCurrent) : DQ.multiply(dqCurrent, dqDelta);
+            const targetArray = DQ.toArray(dqTarget);
+            if (this._isHumanoidMJRestoreSolverEnabled() || this._isHumanoidMJRestorePreWSolverEnabled()) {
+                const selectedSolverMode = this._getHumanoidJogSolverMode();
+                const internalOptions = selectedSolverMode === 'mj_restore_pre_w'
+                    ? { solverMode: 'mj_restore_pre_w' }
+                    : null;
+                return this._updateHumanoidSingleArmPlusWaistPoseTargetMJRestore(targetArray, window.humanoidQ, 1, internalOptions);
+            }
+            this.updateHumanoidSingleArmPlusWaistPoseTarget(targetArray, window.humanoidQ, 1);
+        } catch (e) {
+            console.error('移动左臂+腰部失败:', e);
+        }
+    }
+
+    moveHumanoidRightArmWithWaistAlongAxis(axis, direction) {
+        if (!this.humanoidMode || !window.humanoidQ?.length) return;
+        const DQ = window.DQModule?.DQWrapper;
+        if (!DQ) return;
+
+        try {
+            const stepSize = this.getTeachTranslationStep();
+            const directionSign = direction === 'positive' ? 1 : -1;
+            const currentPose = this._getHumanoidPose2(window.humanoidQ);
+            if (!currentPose) return;
+
+            const dqCurrent = DQ.createFromArray(currentPose);
+            const rotationArray = DQ.getRotation(dqCurrent);
+            const rotationQuat = new THREE.Quaternion(rotationArray[1], rotationArray[2], rotationArray[3], rotationArray[0]);
+            const delta = this.getTranslationDirection(axis, rotationQuat).multiplyScalar(stepSize * directionSign);
+            const dqDelta = DQ.translation(delta.x, delta.y, delta.z);
+            const worldMode = this.isWorldTranslationMode?.() ?? true;
+            const dqTarget = worldMode ? DQ.multiply(dqDelta, dqCurrent) : DQ.multiply(dqCurrent, dqDelta);
+            const targetArray = DQ.toArray(dqTarget);
+            if (this._isHumanoidMJRestoreSolverEnabled() || this._isHumanoidMJRestorePreWSolverEnabled()) {
+                const selectedSolverMode = this._getHumanoidJogSolverMode();
+                const internalOptions = selectedSolverMode === 'mj_restore_pre_w'
+                    ? { solverMode: 'mj_restore_pre_w' }
+                    : null;
+                return this._updateHumanoidSingleArmPlusWaistPoseTargetMJRestore(targetArray, window.humanoidQ, 2, internalOptions);
+            }
+            this.updateHumanoidSingleArmPlusWaistPoseTarget(targetArray, window.humanoidQ, 2);
+        } catch (e) {
+            console.error('移动右臂+腰部失败:', e);
+        }
+    }
+
+    rotateHumanoidLeftArmWithWaistAroundAxis(axis, direction) {
+        if (!this.humanoidMode || !window.humanoidQ?.length) return;
+        const DQ = window.DQModule?.DQWrapper;
+        if (!DQ) return;
+
+        try {
+            const angle = this.getTeachRotationAngle();
+            const directionSign = direction === 'positive' ? 1 : -1;
+            const rotationAngle = angle * directionSign;
+            const currentPose = this._getHumanoidPose1(window.humanoidQ);
+            if (!currentPose) return;
+
+            const dqCurrent = DQ.createFromArray(currentPose);
+            let rotationDQ;
+            if (axis === 'rx') rotationDQ = DQ.rotation(rotationAngle, 1, 0, 0);
+            else if (axis === 'ry') rotationDQ = DQ.rotation(rotationAngle, 0, 1, 0);
+            else if (axis === 'rz') rotationDQ = DQ.rotation(rotationAngle, 0, 0, 1);
+            else return;
+
+            const dqTarget = this.combineDQWithTeachOrder(rotationDQ, dqCurrent, false);
+            const targetArray = DQ.toArray(dqTarget);
+            if (this._isHumanoidMJRestoreSolverEnabled() || this._isHumanoidMJRestorePreWSolverEnabled()) {
+                const selectedSolverMode = this._getHumanoidJogSolverMode();
+                const internalOptions = selectedSolverMode === 'mj_restore_pre_w'
+                    ? { solverMode: 'mj_restore_pre_w' }
+                    : null;
+                return this._updateHumanoidSingleArmPlusWaistPoseTargetMJRestore(targetArray, window.humanoidQ, 1, internalOptions);
+            }
+            this.updateHumanoidSingleArmPlusWaistPoseTarget(targetArray, window.humanoidQ, 1);
+        } catch (e) {
+            console.error('旋转左臂+腰部失败:', e);
+        }
+    }
+
+    rotateHumanoidRightArmWithWaistAroundAxis(axis, direction) {
+        if (!this.humanoidMode || !window.humanoidQ?.length) return;
+        const DQ = window.DQModule?.DQWrapper;
+        if (!DQ) return;
+
+        try {
+            const angle = this.getTeachRotationAngle();
+            const directionSign = direction === 'positive' ? 1 : -1;
+            const rotationAngle = angle * directionSign;
+            const currentPose = this._getHumanoidPose2(window.humanoidQ);
+            if (!currentPose) return;
+
+            const dqCurrent = DQ.createFromArray(currentPose);
+            let rotationDQ;
+            if (axis === 'rx') rotationDQ = DQ.rotation(rotationAngle, 1, 0, 0);
+            else if (axis === 'ry') rotationDQ = DQ.rotation(rotationAngle, 0, 1, 0);
+            else if (axis === 'rz') rotationDQ = DQ.rotation(rotationAngle, 0, 0, 1);
+            else return;
+
+            const dqTarget = this.combineDQWithTeachOrder(rotationDQ, dqCurrent, false);
+            const targetArray = DQ.toArray(dqTarget);
+            if (this._isHumanoidMJRestoreSolverEnabled() || this._isHumanoidMJRestorePreWSolverEnabled()) {
+                const selectedSolverMode = this._getHumanoidJogSolverMode();
+                const internalOptions = selectedSolverMode === 'mj_restore_pre_w'
+                    ? { solverMode: 'mj_restore_pre_w' }
+                    : null;
+                return this._updateHumanoidSingleArmPlusWaistPoseTargetMJRestore(targetArray, window.humanoidQ, 2, internalOptions);
+            }
+            this.updateHumanoidSingleArmPlusWaistPoseTarget(targetArray, window.humanoidQ, 2);
+        } catch (e) {
+            console.error('旋转右臂+腰部失败:', e);
         }
     }
     

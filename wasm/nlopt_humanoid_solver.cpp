@@ -12,6 +12,7 @@
 #include <Eigen/Dense>
 #include <dqrobotics/DQ.h>
 #include <dqrobotics/robot_modeling/DQ_HumanoidURDF.h>
+#include <dqrobotics/robot_modeling/DQ_Kinematics.h>
 
 #if NLOPT_AVAILABLE
 #include <nlopt.hpp>
@@ -21,8 +22,11 @@ namespace {
 
 using DQ_robotics::DQ;
 using DQ_robotics::DQ_HumanoidURDF;
+using DQ_robotics::DQ_Kinematics;
 using DQ_robotics::conj;
 using DQ_robotics::hamiplus8;
+using DQ_robotics::rotation;
+using DQ_robotics::translation;
 using Eigen::MatrixXd;
 using Eigen::SelfAdjointEigenSolver;
 using Eigen::VectorXd;
@@ -112,12 +116,22 @@ bool validateRequest(
     }
     if (!isFiniteValue(request.wvfi_min) ||
         !isFiniteValue(request.weight_absolute) ||
-        !isFiniteValue(request.weight_relative) ||
         !isFiniteValue(request.weight_delta) ||
+        !isFiniteValue(request.weight_wvfi_reward) ||
+        !isFiniteValue(request.relative_equality_tolerance) ||
+        !isFiniteValue(request.weight_relative_penalty) ||
+        !isFiniteValue(request.body_vertical_tolerance) ||
+        !isFiniteValue(request.weight_body_vertical_penalty) ||
         !isFiniteValue(request.joint_limit_activation_threshold) ||
+        !isFiniteValue(request.repair_damping) ||
         !isFiniteValue(request.xtol_rel) ||
         !isFiniteValue(request.ftol_rel)) {
         reason = "all scalar solver parameters must be finite";
+        return false;
+    }
+    if (!(std::isfinite(request.waist_x_min) || std::isinf(request.waist_x_min)) ||
+        !(std::isfinite(request.waist_x_max) || std::isinf(request.waist_x_max))) {
+        reason = "waist_x_min and waist_x_max must be finite or infinite";
         return false;
     }
     if (request.wvfi_min < 0.0) {
@@ -125,13 +139,27 @@ bool validateRequest(
         return false;
     }
     if (request.weight_absolute < 0.0 ||
-        request.weight_relative < 0.0 ||
-        request.weight_delta < 0.0) {
+        request.weight_delta < 0.0 ||
+        request.weight_wvfi_reward < 0.0 ||
+        request.weight_relative_penalty < 0.0 ||
+        request.weight_body_vertical_penalty < 0.0) {
         reason = "solver weights must be non-negative";
+        return false;
+    }
+    if (request.relative_equality_tolerance < 0.0 || request.body_vertical_tolerance < 0.0) {
+        reason = "constraint tolerances must be non-negative";
+        return false;
+    }
+    if (request.enforce_waist_x_corridor && request.waist_x_min > request.waist_x_max) {
+        reason = "waist_x_min must be less than or equal to waist_x_max";
         return false;
     }
     if (request.joint_limit_activation_threshold < 0.0) {
         reason = "joint_limit_activation_threshold must be non-negative";
+        return false;
+    }
+    if (request.repair_max_iter < 0 || request.repair_damping < 0.0) {
+        reason = "repair_max_iter and repair_damping must be non-negative";
         return false;
     }
     if (request.max_eval <= 0) {
@@ -275,6 +303,32 @@ MatrixXd computeTwistJacobian(
     return twist_jacobian;
 }
 
+MatrixXd computeRotationMatrixFromPose(const DQ& pose) {
+    const DQ rot = rotation(pose);
+    const double w = rot.q(0);
+    const double x = rot.q(1);
+    const double y = rot.q(2);
+    const double z = rot.q(3);
+
+    MatrixXd mat(3, 3);
+    mat(0, 0) = 1 - 2 * (y * y + z * z);
+    mat(0, 1) = 2 * (x * y - w * z);
+    mat(0, 2) = 2 * (x * z + w * y);
+    mat(1, 0) = 2 * (x * y + w * z);
+    mat(1, 1) = 1 - 2 * (x * x + z * z);
+    mat(1, 2) = 2 * (y * z - w * x);
+    mat(2, 0) = 2 * (x * z - w * y);
+    mat(2, 1) = 2 * (y * z + w * x);
+    mat(2, 2) = 1 - 2 * (x * x + y * y);
+    return mat;
+}
+
+double computeWaistXPosition(const DQ_HumanoidURDF& robot, const VectorXd& q_full) {
+    const DQ waist_pose = robot.fkm(q_full, 0);
+    const DQ waist_translation = translation(waist_pose);
+    return waist_translation.q(1);
+}
+
 double nonNegativeDeterminant(const MatrixXd& matrix) {
     if (matrix.rows() == 0 || matrix.cols() == 0) {
         return 0.0;
@@ -333,10 +387,17 @@ struct Evaluation {
     VectorXd relative_error;
     MatrixXd absolute_pose_jacobian_active;
     MatrixXd relative_pose_jacobian_active;
+    VectorXd body_vertical_error;
+    MatrixXd body_vertical_direction_jacobian_active;
+    VectorXd body_vertical_gradient_active;
+    VectorXd waist_x_gradient_active;
     double absolute_sign = 1.0;
     double relative_sign = 1.0;
     double absolute_residual = std::numeric_limits<double>::infinity();
     double relative_residual = std::numeric_limits<double>::infinity();
+    double body_vertical_mismatch_squared = 0.0;
+    double body_vertical_residual = 0.0;
+    double waist_x_position = 0.0;
     double cost = std::numeric_limits<double>::infinity();
     double wvfi = 0.0;
 };
@@ -383,8 +444,14 @@ Evaluation evaluateConfiguration(
     const VectorXd delta = evaluation.q_full - context.q0_full;
     evaluation.cost =
         context.request.weight_absolute * evaluation.absolute_error.squaredNorm() +
-        context.request.weight_relative * evaluation.relative_error.squaredNorm() +
         context.request.weight_delta * delta.squaredNorm();
+    if (context.request.weight_wvfi_reward > 0.0) {
+        evaluation.cost -= context.request.weight_wvfi_reward * evaluation.wvfi;
+    }
+    if (context.request.enforce_relative_pose_constraint) {
+        evaluation.cost +=
+            context.request.weight_relative_penalty * evaluation.relative_error.squaredNorm();
+    }
 
     const MatrixXd absolute_pose_jacobian_full =
         context.robot.absolutePoseJacobianDualArm(evaluation.q_full);
@@ -422,6 +489,101 @@ Evaluation evaluateConfiguration(
     const MatrixXd gram = full_twist_jacobian * attenuation * full_twist_jacobian.transpose();
     evaluation.wvfi = std::sqrt(std::max(0.0, nonNegativeDeterminant(gram)));
 
+    evaluation.body_vertical_gradient_active = VectorXd::Zero(
+        static_cast<Eigen::Index>(context.request.active_indices.size())
+    );
+    evaluation.waist_x_gradient_active = VectorXd::Zero(
+        static_cast<Eigen::Index>(context.request.active_indices.size())
+    );
+    evaluation.body_vertical_error = VectorXd::Zero(4);
+    evaluation.body_vertical_direction_jacobian_active = MatrixXd::Zero(
+        4,
+        static_cast<Eigen::Index>(context.request.active_indices.size())
+    );
+    if (context.request.keep_body_z_vertical) {
+        const DQ line_direction(0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0);
+        const DQ waist_pose = context.robot.fkm(evaluation.q_full, 0);
+        const MatrixXd waist_pose_jacobian_full = context.robot.pose_jacobian(evaluation.q_full, 0);
+        const MatrixXd line_jacobian_full =
+            DQ_Kinematics::line_jacobian(waist_pose_jacobian_full, waist_pose, line_direction);
+        evaluation.body_vertical_direction_jacobian_active = sliceActiveColumns(
+            line_jacobian_full,
+            context.request.active_indices
+        );
+        const MatrixXd rot_mat = computeRotationMatrixFromPose(waist_pose);
+        const double diff0 = 0.0;
+        const double diff1 = -rot_mat(0, 2);
+        const double diff2 = -rot_mat(1, 2);
+        const double diff3 = 1.0 - rot_mat(2, 2);
+        evaluation.body_vertical_error << diff0, diff1, diff2, diff3;
+        evaluation.body_vertical_mismatch_squared =
+            diff0 * diff0 + diff1 * diff1 + diff2 * diff2 + diff3 * diff3;
+        evaluation.body_vertical_residual =
+            std::sqrt(std::max(0.0, evaluation.body_vertical_mismatch_squared));
+        evaluation.cost +=
+            context.request.weight_body_vertical_penalty * evaluation.body_vertical_mismatch_squared;
+
+        for (Eigen::Index j = 0; j < evaluation.body_vertical_direction_jacobian_active.cols(); ++j) {
+            evaluation.body_vertical_gradient_active(j) =
+                -2.0 * (
+                    diff0 * evaluation.body_vertical_direction_jacobian_active(0, j) +
+                    diff1 * evaluation.body_vertical_direction_jacobian_active(1, j) +
+                    diff2 * evaluation.body_vertical_direction_jacobian_active(2, j) +
+                    diff3 * evaluation.body_vertical_direction_jacobian_active(3, j)
+                );
+        }
+    }
+
+    if (context.request.enforce_waist_x_corridor) {
+        evaluation.waist_x_position = computeWaistXPosition(context.robot, evaluation.q_full);
+        for (std::size_t i = 0; i < x.size(); ++i) {
+            const double xi = x[i];
+            const double lower = context.effective_lower_bounds[i];
+            const double upper = context.effective_upper_bounds[i];
+            const double base_step = kConstraintGradientStep * std::max(1.0, std::abs(xi));
+            const double backward_room = std::max(0.0, xi - lower);
+            const double forward_room = std::max(0.0, upper - xi);
+            const double backward_step = std::min(base_step, backward_room);
+            const double forward_step = std::min(base_step, forward_room);
+            const Eigen::Index active_index = static_cast<Eigen::Index>(i);
+
+            if (forward_step > kBoundTolerance && backward_step > kBoundTolerance) {
+                std::vector<double> x_plus = x;
+                std::vector<double> x_minus = x;
+                x_plus[i] += forward_step;
+                x_minus[i] -= backward_step;
+                const double value_plus = computeWaistXPosition(
+                    context.robot,
+                    buildFullConfiguration(context.request, x_plus)
+                );
+                const double value_minus = computeWaistXPosition(
+                    context.robot,
+                    buildFullConfiguration(context.request, x_minus)
+                );
+                evaluation.waist_x_gradient_active(active_index) =
+                    (value_plus - value_minus) / (forward_step + backward_step);
+            } else if (forward_step > kBoundTolerance) {
+                std::vector<double> x_plus = x;
+                x_plus[i] += forward_step;
+                const double value_plus = computeWaistXPosition(
+                    context.robot,
+                    buildFullConfiguration(context.request, x_plus)
+                );
+                evaluation.waist_x_gradient_active(active_index) =
+                    (value_plus - evaluation.waist_x_position) / forward_step;
+            } else if (backward_step > kBoundTolerance) {
+                std::vector<double> x_minus = x;
+                x_minus[i] -= backward_step;
+                const double value_minus = computeWaistXPosition(
+                    context.robot,
+                    buildFullConfiguration(context.request, x_minus)
+                );
+                evaluation.waist_x_gradient_active(active_index) =
+                    (evaluation.waist_x_position - value_minus) / backward_step;
+            }
+        }
+    }
+
     return evaluation;
 }
 
@@ -434,6 +596,7 @@ void overwriteResultMetrics(
     result.final_cost = evaluation.cost;
     result.final_absolute_residual = evaluation.absolute_residual;
     result.final_relative_residual = evaluation.relative_residual;
+    result.final_body_vertical_residual = evaluation.body_vertical_residual;
     result.final_wvfi = evaluation.wvfi;
     result.q_next = toStdVector(evaluation.q_full);
 }
@@ -443,6 +606,213 @@ double finiteDifferenceConstraintValue(
     const std::vector<double>& x
 ) {
     return context.request.wvfi_min - evaluateConfiguration(context, x).wvfi;
+}
+
+VectorXd computeWVFIGradient(
+    const ProblemContext& context,
+    const std::vector<double>& x,
+    double current_wvfi
+) {
+    VectorXd gradient = VectorXd::Zero(static_cast<Eigen::Index>(x.size()));
+    for (std::size_t i = 0; i < x.size(); ++i) {
+        const double xi = x[i];
+        const double lower = context.effective_lower_bounds[i];
+        const double upper = context.effective_upper_bounds[i];
+        const double base_step = kConstraintGradientStep * std::max(1.0, std::abs(xi));
+        const double backward_room = std::max(0.0, xi - lower);
+        const double forward_room = std::max(0.0, upper - xi);
+        const double backward_step = std::min(base_step, backward_room);
+        const double forward_step = std::min(base_step, forward_room);
+
+        if (forward_step > kBoundTolerance && backward_step > kBoundTolerance) {
+            std::vector<double> x_plus = x;
+            std::vector<double> x_minus = x;
+            x_plus[i] += forward_step;
+            x_minus[i] -= backward_step;
+            const double w_plus = evaluateConfiguration(context, x_plus).wvfi;
+            const double w_minus = evaluateConfiguration(context, x_minus).wvfi;
+            gradient(static_cast<Eigen::Index>(i)) = (w_plus - w_minus) / (forward_step + backward_step);
+        } else if (forward_step > kBoundTolerance) {
+            std::vector<double> x_plus = x;
+            x_plus[i] += forward_step;
+            const double w_plus = evaluateConfiguration(context, x_plus).wvfi;
+            gradient(static_cast<Eigen::Index>(i)) = (w_plus - current_wvfi) / forward_step;
+        } else if (backward_step > kBoundTolerance) {
+            std::vector<double> x_minus = x;
+            x_minus[i] -= backward_step;
+            const double w_minus = evaluateConfiguration(context, x_minus).wvfi;
+            gradient(static_cast<Eigen::Index>(i)) = (current_wvfi - w_minus) / backward_step;
+        }
+    }
+    return gradient;
+}
+
+std::vector<double> clampToEffectiveBounds(
+    const std::vector<double>& x,
+    const ProblemContext& context
+) {
+    std::vector<double> clamped = x;
+    for (std::size_t i = 0; i < clamped.size(); ++i) {
+        clamped[i] = std::min(
+            context.effective_upper_bounds[i],
+            std::max(context.effective_lower_bounds[i], clamped[i])
+        );
+    }
+    return clamped;
+}
+
+double constraintRepairMetric(
+    const Evaluation& evaluation,
+    const ProblemContext& context
+) {
+    double metric = 0.0;
+    if (context.request.enforce_relative_pose_constraint) {
+        metric += evaluation.relative_error.squaredNorm();
+    }
+    if (context.request.keep_body_z_vertical) {
+        metric += evaluation.body_vertical_mismatch_squared;
+    }
+    return std::sqrt(std::max(0.0, metric));
+}
+
+bool isWaistXCorridorSatisfied(
+    const Evaluation& evaluation,
+    const ProblemContext& context,
+    double tolerance = 1e-10
+) {
+    if (!context.request.enforce_waist_x_corridor) return true;
+    if (std::isfinite(context.request.waist_x_min) &&
+        evaluation.waist_x_position < context.request.waist_x_min - tolerance) {
+        return false;
+    }
+    if (std::isfinite(context.request.waist_x_max) &&
+        evaluation.waist_x_position > context.request.waist_x_max + tolerance) {
+        return false;
+    }
+    return true;
+}
+
+struct RepairResult {
+    std::vector<double> x;
+    int iterations = 0;
+    bool converged = false;
+};
+
+RepairResult repairConstraintProjection(
+    const ProblemContext& context,
+    const std::vector<double>& x_initial
+) {
+    RepairResult result;
+    result.x = x_initial;
+
+    if ((!context.request.enforce_relative_pose_constraint && !context.request.keep_body_z_vertical) ||
+        context.request.repair_max_iter <= 0) {
+        result.converged = true;
+        return result;
+    }
+
+    const Eigen::Index active_count = static_cast<Eigen::Index>(context.request.active_indices.size());
+    for (int iter = 0; iter < context.request.repair_max_iter; ++iter) {
+        const Evaluation evaluation = evaluateConfiguration(context, result.x);
+        const bool relative_ok =
+            !context.request.enforce_relative_pose_constraint ||
+            evaluation.relative_residual <= context.request.relative_equality_tolerance;
+        const bool body_ok =
+            !context.request.keep_body_z_vertical ||
+            evaluation.body_vertical_residual <= context.request.body_vertical_tolerance;
+        if (relative_ok && body_ok && isWaistXCorridorSatisfied(evaluation, context)) {
+            result.converged = true;
+            return result;
+        }
+
+        const Eigen::Index relative_rows =
+            context.request.enforce_relative_pose_constraint
+                ? evaluation.relative_error.size()
+                : 0;
+        const Eigen::Index body_rows =
+            context.request.keep_body_z_vertical
+                ? evaluation.body_vertical_error.size()
+                : 0;
+        const Eigen::Index total_rows = relative_rows + body_rows;
+        if (total_rows <= 0) {
+            result.converged = true;
+            return result;
+        }
+
+        MatrixXd A = MatrixXd::Zero(total_rows, active_count);
+        VectorXd e = VectorXd::Zero(total_rows);
+        Eigen::Index row = 0;
+        if (relative_rows > 0) {
+            A.block(
+                row,
+                0,
+                relative_rows,
+                active_count
+            ) = -evaluation.relative_sign * evaluation.relative_pose_jacobian_active;
+            e.segment(row, relative_rows) = evaluation.relative_error;
+            row += relative_rows;
+        }
+        if (body_rows > 0) {
+            A.block(
+                row,
+                0,
+                body_rows,
+                active_count
+            ) = -evaluation.body_vertical_direction_jacobian_active;
+            e.segment(row, body_rows) = evaluation.body_vertical_error;
+        }
+
+        const MatrixXd normal =
+            A.transpose() * A +
+            context.request.repair_damping * MatrixXd::Identity(active_count, active_count);
+        const VectorXd rhs = -A.transpose() * e;
+        const VectorXd dx = normal.ldlt().solve(rhs);
+        if (!dx.allFinite() || dx.norm() <= 1e-12) {
+            result.iterations = iter + 1;
+            return result;
+        }
+
+        const double current_metric = constraintRepairMetric(evaluation, context);
+        bool accepted = false;
+        std::vector<double> best_x = result.x;
+        double best_metric = current_metric;
+
+        for (double scale : {1.0, 0.5, 0.25, 0.125, 0.0625}) {
+            std::vector<double> x_candidate = result.x;
+            for (Eigen::Index j = 0; j < active_count; ++j) {
+                x_candidate[static_cast<std::size_t>(j)] += scale * dx(j);
+            }
+            x_candidate = clampToEffectiveBounds(x_candidate, context);
+            const Evaluation candidate = evaluateConfiguration(context, x_candidate);
+            if (candidate.wvfi + 1e-10 < context.request.wvfi_min) {
+                continue;
+            }
+            if (!isWaistXCorridorSatisfied(candidate, context)) {
+                continue;
+            }
+            const double candidate_metric = constraintRepairMetric(candidate, context);
+            if (candidate_metric + 1e-12 < best_metric) {
+                best_metric = candidate_metric;
+                best_x = std::move(x_candidate);
+                accepted = true;
+            }
+        }
+
+        result.iterations = iter + 1;
+        if (!accepted) {
+            return result;
+        }
+        result.x = std::move(best_x);
+    }
+
+    const Evaluation final_evaluation = evaluateConfiguration(context, result.x);
+    result.converged =
+        (!context.request.enforce_relative_pose_constraint ||
+            final_evaluation.relative_residual <= context.request.relative_equality_tolerance) &&
+        (!context.request.keep_body_z_vertical ||
+            final_evaluation.body_vertical_residual <= context.request.body_vertical_tolerance) &&
+        isWaistXCorridorSatisfied(final_evaluation, context);
+    return result;
 }
 
 #if NLOPT_AVAILABLE
@@ -458,16 +828,28 @@ double objectiveCallback(
         std::fill(grad.begin(), grad.end(), 0.0);
         const VectorXd q_active = toEigenVector(x);
         const VectorXd q0_active = toEigenVector(context->x0_active);
-        const VectorXd gradient =
+        VectorXd gradient =
             -2.0 * context->request.weight_absolute *
                 evaluation.absolute_sign *
                 evaluation.absolute_pose_jacobian_active.transpose() *
                 evaluation.absolute_error
-            -2.0 * context->request.weight_relative *
+            +2.0 * context->request.weight_delta * (q_active - q0_active);
+        if (context->request.enforce_relative_pose_constraint) {
+            gradient +=
+                -2.0 * context->request.weight_relative_penalty *
                 evaluation.relative_sign *
                 evaluation.relative_pose_jacobian_active.transpose() *
-                evaluation.relative_error
-            +2.0 * context->request.weight_delta * (q_active - q0_active);
+                evaluation.relative_error;
+        }
+        if (context->request.keep_body_z_vertical) {
+            gradient +=
+                context->request.weight_body_vertical_penalty *
+                evaluation.body_vertical_gradient_active;
+        }
+        if (context->request.weight_wvfi_reward > 0.0) {
+            gradient -= context->request.weight_wvfi_reward *
+                computeWVFIGradient(*context, x, evaluation.wvfi);
+        }
         for (std::size_t i = 0; i < grad.size(); ++i) {
             grad[i] = gradient(static_cast<Eigen::Index>(i));
         }
@@ -520,6 +902,93 @@ double wvfiConstraintCallback(
     }
 
     return value;
+}
+
+void relativePoseEqualityConstraintCallback(
+    unsigned m,
+    double* result,
+    unsigned n,
+    const double* x_raw,
+    double* grad,
+    void* data
+) {
+    const auto* context = static_cast<const ProblemContext*>(data);
+    std::vector<double> x(x_raw, x_raw + n);
+    const Evaluation evaluation = evaluateConfiguration(*context, x);
+
+    for (unsigned i = 0; i < m; ++i) {
+        result[i] = i < static_cast<unsigned>(evaluation.relative_error.size())
+            ? evaluation.relative_error(static_cast<Eigen::Index>(i))
+            : 0.0;
+    }
+
+    if (grad != nullptr) {
+        for (unsigned i = 0; i < m; ++i) {
+            for (unsigned j = 0; j < n; ++j) {
+                const double value =
+                    (i < static_cast<unsigned>(evaluation.relative_pose_jacobian_active.rows()) &&
+                     j < static_cast<unsigned>(evaluation.relative_pose_jacobian_active.cols()))
+                        ? (-evaluation.relative_sign *
+                            evaluation.relative_pose_jacobian_active(
+                                static_cast<Eigen::Index>(i),
+                                static_cast<Eigen::Index>(j)
+                            ))
+                        : 0.0;
+                grad[i * n + j] = value;
+            }
+        }
+    }
+}
+
+double bodyVerticalConstraintCallback(
+    const std::vector<double>& x,
+    std::vector<double>& grad,
+    void* data
+) {
+    const auto* context = static_cast<const ProblemContext*>(data);
+    const Evaluation evaluation = evaluateConfiguration(*context, x);
+    if (!grad.empty()) {
+        for (std::size_t i = 0; i < grad.size(); ++i) {
+            grad[i] = i < static_cast<std::size_t>(evaluation.body_vertical_gradient_active.size())
+                ? evaluation.body_vertical_gradient_active(static_cast<Eigen::Index>(i))
+                : 0.0;
+        }
+    }
+    return evaluation.body_vertical_mismatch_squared - context->request.body_vertical_tolerance;
+}
+
+double waistXUpperConstraintCallback(
+    const std::vector<double>& x,
+    std::vector<double>& grad,
+    void* data
+) {
+    const auto* context = static_cast<const ProblemContext*>(data);
+    const Evaluation evaluation = evaluateConfiguration(*context, x);
+    if (!grad.empty()) {
+        for (std::size_t i = 0; i < grad.size(); ++i) {
+            grad[i] = i < static_cast<std::size_t>(evaluation.waist_x_gradient_active.size())
+                ? evaluation.waist_x_gradient_active(static_cast<Eigen::Index>(i))
+                : 0.0;
+        }
+    }
+    return evaluation.waist_x_position - context->request.waist_x_max;
+}
+
+double waistXLowerConstraintCallback(
+    const std::vector<double>& x,
+    std::vector<double>& grad,
+    void* data
+) {
+    const auto* context = static_cast<const ProblemContext*>(data);
+    const Evaluation evaluation = evaluateConfiguration(*context, x);
+    if (!grad.empty()) {
+        for (std::size_t i = 0; i < grad.size(); ++i) {
+            grad[i] = i < static_cast<std::size_t>(evaluation.waist_x_gradient_active.size())
+                ? -evaluation.waist_x_gradient_active(static_cast<Eigen::Index>(i))
+                : 0.0;
+        }
+    }
+    return context->request.waist_x_min - evaluation.waist_x_position;
 }
 
 std::string resultToReason(nlopt::result result_code) {
@@ -612,6 +1081,22 @@ HumanoidAbsoluteNloptResult solveHumanoidAbsoluteTargetNlopt(
                 1e-8
             );
         }
+        if (request.enforce_waist_x_corridor) {
+            if (std::isfinite(request.waist_x_max)) {
+                optimizer.add_inequality_constraint(
+                    waistXUpperConstraintCallback,
+                    &context,
+                    1e-10
+                );
+            }
+            if (std::isfinite(request.waist_x_min)) {
+                optimizer.add_inequality_constraint(
+                    waistXLowerConstraintCallback,
+                    &context,
+                    1e-10
+                );
+            }
+        }
 
         double final_cost = std::numeric_limits<double>::quiet_NaN();
         const nlopt::result nlopt_result = optimizer.optimize(x, final_cost);
@@ -619,6 +1104,14 @@ HumanoidAbsoluteNloptResult solveHumanoidAbsoluteTargetNlopt(
         result.iterations = optimizer.get_numevals();
         result.converged = isConvergedResult(nlopt_result);
         result.reason = resultToReason(nlopt_result);
+        const RepairResult repair = repairConstraintProjection(context, x);
+        x = repair.x;
+        result.repair_iterations = repair.iterations;
+        result.repair_converged = repair.converged;
+        if ((request.enforce_relative_pose_constraint || request.keep_body_z_vertical) &&
+            !repair.converged) {
+            result.converged = false;
+        }
         overwriteResultMetrics(context, x, result);
         return result;
     } catch (const std::exception& exception) {

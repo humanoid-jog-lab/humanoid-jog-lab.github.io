@@ -9,6 +9,7 @@ from sensor_msgs.msg import JointState
 
 from robot_control_msg.msg import Robotarmservomsg, Robotservomsg
 
+from .command_sync import build_humanoid_publish_order, resolve_arm_run_time
 from .constants import (
     DEFAULT_ARM_COMMAND_TOPIC,
     DEFAULT_INITIAL_Q,
@@ -155,6 +156,53 @@ class SailorROS2Interface(Node):
         self._waist_publisher.publish(message)
         return message
 
+    def publish_humanoid_command(
+        self,
+        q: Sequence[float],
+        *,
+        robot_power: bool = True,
+        arm_run_mode: int = 1,
+        arm_run_time: float = 0.0,
+        publish_waist: bool = True,
+        waist_run_mode: int = 0,
+        x: float = 0.0,
+        y: float = 0.0,
+        phi: float = 0.0,
+        mode_leg_select: int = 0,
+        waist_vel: float = 0.3,
+        waist_first: bool = True,
+    ) -> tuple[Robotarmservomsg, Robotservomsg | None]:
+        arm_message: Robotarmservomsg | None = None
+        waist_message: Robotservomsg | None = None
+
+        for target in build_humanoid_publish_order(
+            publish_waist=publish_waist,
+            waist_first=waist_first,
+        ):
+            if target == 'waist':
+                waist_message = self.publish_waist_command(
+                    q,
+                    run_mode=waist_run_mode,
+                    x=x,
+                    y=y,
+                    phi=phi,
+                    mode_leg_select=mode_leg_select,
+                    vel=waist_vel,
+                )
+                continue
+
+            arm_message = self.publish_arm_command(
+                q,
+                run_mode=arm_run_mode,
+                robot_power=robot_power,
+                run_time=arm_run_time,
+            )
+
+        if arm_message is None:
+            raise RuntimeError('Arm command was not published')
+
+        return arm_message, waist_message
+
     def solve_absolute_and_publish(
         self,
         solver: NullspaceSolverClient,
@@ -164,6 +212,7 @@ class SailorROS2Interface(Node):
         keep_body_z_vertical: bool = False,
         joint_limit_avoidance: bool = True,
         waist_vel: float = 0.3,
+        arm_run_time: float = 0.0,
     ) -> SolveResult:
         result = solver.solve_absolute(
             q=self.current_q,
@@ -174,8 +223,12 @@ class SailorROS2Interface(Node):
         )
         if result.apply_result:
             self.current_q = result.q[:]
-            self.publish_arm_command(result.q)
-            self.publish_waist_command(result.q, vel=waist_vel)
+            self.publish_humanoid_command(
+                result.q,
+                arm_run_time=arm_run_time,
+                publish_waist=True,
+                waist_vel=waist_vel,
+            )
         return result
 
     def execute_timed_trajectory(
@@ -195,13 +248,18 @@ class SailorROS2Interface(Node):
                 time.sleep(sleep_duration)
             q = trajectory.positions[index]
             self.current_q = [float(value) for value in q]
-            self.publish_arm_command(
+            resolved_arm_run_time = resolve_arm_run_time(
+                trajectory.sample_times,
+                index,
+                configured_run_time=arm_run_time,
+            )
+            self.publish_humanoid_command(
                 q,
                 robot_power=robot_power,
-                run_time=arm_run_time,
+                arm_run_time=resolved_arm_run_time,
+                publish_waist=publish_waist,
+                waist_vel=waist_vel,
             )
-            if publish_waist:
-                self.publish_waist_command(q, vel=waist_vel)
 
     def execute_timed_joint_state_trajectory(
         self,
@@ -228,6 +286,7 @@ class SailorROS2Interface(Node):
         keep_body_z_vertical: bool = False,
         joint_limit_avoidance: bool = True,
         waist_vel: float = 0.3,
+        arm_run_time: float = 0.0,
     ) -> SolveResult:
         result = solver.solve_relative(
             q=self.current_q,
@@ -238,8 +297,12 @@ class SailorROS2Interface(Node):
         )
         if result.apply_result:
             self.current_q = result.q[:]
-            self.publish_arm_command(result.q)
-            self.publish_waist_command(result.q, vel=waist_vel)
+            self.publish_humanoid_command(
+                result.q,
+                arm_run_time=arm_run_time,
+                publish_waist=True,
+                waist_vel=waist_vel,
+            )
         return result
 
     def _estimate_joint_state_velocity(self, trajectory, index: int) -> List[float]:

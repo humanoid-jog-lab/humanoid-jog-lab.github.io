@@ -16,15 +16,21 @@ import { setupGlobalDragAndDrop } from './drag-drop.js';
 import { setupScenePresetListeners } from './environment-panel.js';
 import { setupPlannedMotionListeners } from '../features/planned-motion.js';
 import { normalizeHumanoidJogSolverMode } from '../core/humanoid-jog-solver-presentation.js';
+import { getHumanoidTaskMetricOptionLabels } from '../core/humanoid-jog-task-metric-labels.js';
 
 function setupHumanoidJogSolverControls() {
     // 人形点动求解器切换（new qpJ / 零空间投影 / MuJoCo 风格恢复）
     const humanoidJogSolverSelect = document.getElementById('humanoid-jog-solver-select');
-    const humanoidVFIStepBackendSelect = document.getElementById('humanoid-vfi-step-backend-select');
-    const humanoidTaskEquivalentBranchingToggle = document.getElementById('humanoid-task-equivalent-branching-toggle');
+    const humanoidJogMetricSelect = document.getElementById('humanoid-manifold-jog-metric-select');
+    const humanoidWMetricIncreaseBtn = document.getElementById('humanoid-w-metric-increase-btn');
+    const humanoidTestDualArmLockToggle = document.getElementById('humanoid-test-dual-arm-lock-toggle');
+    const dualArmControlModeSelect = document.getElementById('dual-arm-control-mode-select');
     const HUMANOID_JOG_SOLVER_STORAGE_KEY = 'humanoid-jog-solver-mode';
-    const HUMANOID_VFI_STEP_BACKEND_STORAGE_KEY = 'humanoid-vfi-step-backend';
-    const HUMANOID_TASK_EQ_BRANCHING_STORAGE_KEY = 'humanoid-task-equivalent-branching';
+    const HUMANOID_JOG_METRIC_STORAGE_KEY = 'humanoid-manifold-jog-metric';
+    const HUMANOID_TEST_DUAL_ARM_LOCK_STORAGE_KEY = 'humanoid-test-dual-arm-lock-enabled';
+    const normalizeHumanoidJogMetric = (metricRaw) => {
+        return metricRaw === 'w_abs_hier_vfi' ? 'w_abs_hier_vfi' : 'w_abs_hier';
+    };
     const applyHumanoidJogSolverMode = (modeRaw) => {
         const mode = normalizeHumanoidJogSolverMode(modeRaw);
         if (humanoidJogSolverSelect) humanoidJogSolverSelect.value = mode;
@@ -38,73 +44,130 @@ function setupHumanoidJogSolverControls() {
             localStorage.setItem(HUMANOID_JOG_SOLVER_STORAGE_KEY, mode);
         } catch (_) {}
     };
-    const applyHumanoidVFIStepBackend = (backendRaw) => {
-        const backend = backendRaw === 'qp' ? 'qp' : 'projection';
-        if (humanoidVFIStepBackendSelect) humanoidVFIStepBackendSelect.value = backend;
+    const applyHumanoidJogMetric = (metricRaw) => {
+        const metric = normalizeHumanoidJogMetric(metricRaw);
+        if (humanoidJogMetricSelect) humanoidJogMetricSelect.value = metric;
         if (typeof window !== 'undefined') {
-            window.humanoidVFIStepBackend = backend;
+            window.humanoidManifoldJogSecondaryMetric = metric;
         }
-        if (appState.visualizer?.setHumanoidVFIStepBackend) {
-            appState.visualizer.setHumanoidVFIStepBackend(backend);
+        if (appState.visualizer?.setHumanoidManifoldJogSecondaryMetric) {
+            appState.visualizer.setHumanoidManifoldJogSecondaryMetric(metric);
         }
         try {
-            localStorage.setItem(HUMANOID_VFI_STEP_BACKEND_STORAGE_KEY, backend);
+            localStorage.setItem(HUMANOID_JOG_METRIC_STORAGE_KEY, metric);
         } catch (_) {}
     };
-    const applyHumanoidTaskEquivalentBranching = (enabledRaw) => {
+    const updateHumanoidJogMetricOptionLabels = (controlModeRaw = null) => {
+        if (!humanoidJogMetricSelect?.options) return;
+        const controlMode = controlModeRaw
+            ?? dualArmControlModeSelect?.value
+            ?? (typeof window !== 'undefined' ? window.currentDualArmControlMode : null)
+            ?? 'absolute';
+        const labels = getHumanoidTaskMetricOptionLabels(controlMode);
+        Array.from(humanoidJogMetricSelect.options).forEach((option) => {
+            if (Object.prototype.hasOwnProperty.call(labels, option.value)) {
+                option.textContent = labels[option.value];
+            }
+        });
+    };
+    const applyHumanoidTestDualArmLock = (enabledRaw) => {
         const enabled = Boolean(enabledRaw);
-        if (humanoidTaskEquivalentBranchingToggle) humanoidTaskEquivalentBranchingToggle.checked = enabled;
+        if (humanoidTestDualArmLockToggle) humanoidTestDualArmLockToggle.checked = enabled;
         if (typeof window !== 'undefined') {
-            window.humanoidVFITaskEquivalentBranching = enabled;
+            window.humanoidTestDualArmLockEnabled = enabled;
         }
-        if (appState.visualizer?.setHumanoidVFITaskEquivalentBranching) {
-            appState.visualizer.setHumanoidVFITaskEquivalentBranching(enabled);
+        if (appState.visualizer?.setHumanoidTestDualArmLockEnabled) {
+            appState.visualizer.setHumanoidTestDualArmLockEnabled(enabled);
         }
         try {
-            localStorage.setItem(HUMANOID_TASK_EQ_BRANCHING_STORAGE_KEY, enabled ? '1' : '0');
+            localStorage.setItem(HUMANOID_TEST_DUAL_ARM_LOCK_STORAGE_KEY, enabled ? '1' : '0');
         } catch (_) {}
     };
-    if (humanoidJogSolverSelect || humanoidVFIStepBackendSelect || humanoidTaskEquivalentBranchingToggle) {
+    const triggerHumanoidWMetricOptimization = (direction) => {
+        if (!appState.visualizer) return;
+        const metric = normalizeHumanoidJogMetric(
+            humanoidJogMetricSelect?.value
+                ?? (typeof window !== 'undefined' ? window.humanoidManifoldJogSecondaryMetric : null)
+        );
+        if (metric === 'w_abs_hier_vfi') {
+            appState.visualizer.optimizeHumanoidHierarchicalAbsoluteVFIManipulability?.(direction);
+            return;
+        }
+        appState.visualizer.optimizeHumanoidHierarchicalAbsoluteManipulability?.(direction);
+    };
+    const bindRepeatingMetricButton = (button, direction) => {
+        if (!button) return;
+        let intervalId = null;
+        const fire = () => triggerHumanoidWMetricOptimization(direction);
+        const stop = () => {
+            if (intervalId) {
+                clearInterval(intervalId);
+                intervalId = null;
+            }
+        };
+        button.addEventListener('mousedown', () => {
+            fire();
+            intervalId = setInterval(fire, 20);
+        });
+        button.addEventListener('mouseup', stop);
+        button.addEventListener('mouseleave', stop);
+    };
+    if (
+        humanoidJogSolverSelect ||
+        humanoidJogMetricSelect ||
+        humanoidTestDualArmLockToggle ||
+        humanoidWMetricIncreaseBtn
+    ) {
         const saved = (() => {
             try { return localStorage.getItem(HUMANOID_JOG_SOLVER_STORAGE_KEY); } catch (_) { return null; }
         })();
-        const savedStepBackend = (() => {
-            try { return localStorage.getItem(HUMANOID_VFI_STEP_BACKEND_STORAGE_KEY); } catch (_) { return null; }
+        const savedMetric = (() => {
+            try { return localStorage.getItem(HUMANOID_JOG_METRIC_STORAGE_KEY); } catch (_) { return null; }
         })();
-        const savedBranching = (() => {
-            try { return localStorage.getItem(HUMANOID_TASK_EQ_BRANCHING_STORAGE_KEY); } catch (_) { return null; }
+        const savedTestDualArmLock = (() => {
+            try { return localStorage.getItem(HUMANOID_TEST_DUAL_ARM_LOCK_STORAGE_KEY); } catch (_) { return null; }
         })();
-        applyHumanoidVFIStepBackend(savedStepBackend ?? (typeof window !== 'undefined' ? window.humanoidVFIStepBackend : null) ?? 'projection');
         applyHumanoidJogSolverMode(saved ?? humanoidJogSolverSelect.value ?? 'vfi');
+        applyHumanoidJogMetric(savedMetric ?? humanoidJogMetricSelect?.value ?? 'w_abs_hier');
+        updateHumanoidJogMetricOptionLabels();
+        applyHumanoidTestDualArmLock(
+            savedTestDualArmLock != null
+                ? savedTestDualArmLock === '1'
+                : ((typeof window !== 'undefined' && typeof window.humanoidTestDualArmLockEnabled === 'boolean')
+                    ? window.humanoidTestDualArmLockEnabled
+                    : false)
+        );
         humanoidJogSolverSelect.addEventListener('change', (e) => {
             applyHumanoidJogSolverMode(e.target?.value);
         });
-        if (humanoidVFIStepBackendSelect) {
-            humanoidVFIStepBackendSelect.addEventListener('change', (e) => {
-                applyHumanoidVFIStepBackend(e.target?.value);
+        if (humanoidJogMetricSelect) {
+            humanoidJogMetricSelect.addEventListener('change', (e) => {
+                applyHumanoidJogMetric(e.target?.value);
             });
         }
-        applyHumanoidTaskEquivalentBranching(
-            savedBranching != null
-                ? savedBranching === '1'
-                : ((typeof window !== 'undefined' && typeof window.humanoidVFITaskEquivalentBranching === 'boolean')
-                    ? window.humanoidVFITaskEquivalentBranching
-                    : false)
-        );
-        if (humanoidTaskEquivalentBranchingToggle) {
-            humanoidTaskEquivalentBranchingToggle.addEventListener('change', (e) => {
-                applyHumanoidTaskEquivalentBranching(Boolean(e.target?.checked));
+        if (dualArmControlModeSelect) {
+            dualArmControlModeSelect.addEventListener('change', (e) => {
+                updateHumanoidJogMetricOptionLabels(e.target?.value);
             });
         }
+        if (humanoidTestDualArmLockToggle) {
+            humanoidTestDualArmLockToggle.addEventListener('change', (e) => {
+                applyHumanoidTestDualArmLock(Boolean(e.target?.checked));
+            });
+        }
+        bindRepeatingMetricButton(humanoidWMetricIncreaseBtn, 'increase');
         if (typeof window !== 'undefined') {
             window.setHumanoidJogSolverMode = applyHumanoidJogSolverMode;
-            window.setHumanoidVFIStepBackend = applyHumanoidVFIStepBackend;
-            window.setHumanoidVFITaskEquivalentBranching = applyHumanoidTaskEquivalentBranching;
+            window.setHumanoidJogMetric = applyHumanoidJogMetric;
+            window.setHumanoidTestDualArmLockEnabled = applyHumanoidTestDualArmLock;
+            window.refreshHumanoidJogMetricOptionLabels = updateHumanoidJogMetricOptionLabels;
         }
     }
 
     return {
-        applyHumanoidJogSolverMode
+        applyHumanoidJogSolverMode,
+        applyHumanoidJogMetric,
+        applyHumanoidTestDualArmLock
     };
 }
 
@@ -422,6 +485,34 @@ function setupEventListeners() {
                 const controlModeSelect = document.getElementById('dual-arm-control-mode-select');
                 const controlMode = controlModeSelect ? controlModeSelect.value : 'absolute';
                 // 人形模式下左臂/右臂单臂示教
+                if (appState.visualizer.humanoidMode && controlMode === 'robot1-waist') {
+                    if (type === 'rotation') {
+                        appState.visualizer.rotateHumanoidLeftArmWithWaistAroundAxis(axis, direction);
+                        intervalId = setInterval(() => {
+                            appState.visualizer.rotateHumanoidLeftArmWithWaistAroundAxis(axis, direction);
+                        }, 20);
+                    } else {
+                        appState.visualizer.moveHumanoidLeftArmWithWaistAlongAxis(axis, direction);
+                        intervalId = setInterval(() => {
+                            appState.visualizer.moveHumanoidLeftArmWithWaistAlongAxis(axis, direction);
+                        }, 20);
+                    }
+                    return;
+                }
+                if (appState.visualizer.humanoidMode && controlMode === 'robot2-waist') {
+                    if (type === 'rotation') {
+                        appState.visualizer.rotateHumanoidRightArmWithWaistAroundAxis(axis, direction);
+                        intervalId = setInterval(() => {
+                            appState.visualizer.rotateHumanoidRightArmWithWaistAroundAxis(axis, direction);
+                        }, 20);
+                    } else {
+                        appState.visualizer.moveHumanoidRightArmWithWaistAlongAxis(axis, direction);
+                        intervalId = setInterval(() => {
+                            appState.visualizer.moveHumanoidRightArmWithWaistAlongAxis(axis, direction);
+                        }, 20);
+                    }
+                    return;
+                }
                 if (appState.visualizer.humanoidMode && controlMode === 'robot1') {
                     // 人形机器人左臂控制
                     if (type === 'rotation') {

@@ -19,6 +19,8 @@
 #include <dqrobotics/robots/FrankaEmikaPandaRobot.h>
 #include <dqrobotics/robots/KukaLw4Robot.h>
 #include <Eigen/Dense>
+#include "mj_restore_humanoid_solver.hpp"
+#include "nlopt_humanoid_solver.hpp"
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
@@ -92,6 +94,58 @@ val stdVectorToJsArray(const std::vector<double>& values) {
         jsArray.call<void>("push", v);
     }
     return jsArray;
+}
+
+std::vector<double> jsArrayToStdVectorDouble(const val& jsArray) {
+    if (jsArray.isUndefined() || jsArray.isNull()) {
+        return {};
+    }
+    const int length = jsArray["length"].as<int>();
+    std::vector<double> values(static_cast<std::size_t>(length), 0.0);
+    for (int i = 0; i < length; ++i) {
+        values[static_cast<std::size_t>(i)] = jsArray[i].as<double>();
+    }
+    return values;
+}
+
+std::vector<int> jsArrayToStdVectorInt(const val& jsArray) {
+    if (jsArray.isUndefined() || jsArray.isNull()) {
+        return {};
+    }
+    const int length = jsArray["length"].as<int>();
+    std::vector<int> values(static_cast<std::size_t>(length), 0);
+    for (int i = 0; i < length; ++i) {
+        values[static_cast<std::size_t>(i)] = jsArray[i].as<int>();
+    }
+    return values;
+}
+
+std::vector<std::vector<double>> jsArrayToNestedStdVectorDouble(const val& jsArray2d) {
+    if (jsArray2d.isUndefined() || jsArray2d.isNull()) {
+        return {};
+    }
+    const int rows = jsArray2d["length"].as<int>();
+    std::vector<std::vector<double>> values(static_cast<std::size_t>(rows));
+    for (int i = 0; i < rows; ++i) {
+        values[static_cast<std::size_t>(i)] = jsArrayToStdVectorDouble(jsArray2d[i]);
+    }
+    return values;
+}
+
+double getOptionalNumberField(const val& object, const char* key, double fallback) {
+    const val field = object[key];
+    if (field.isUndefined() || field.isNull()) {
+        return fallback;
+    }
+    return field.as<double>();
+}
+
+int getOptionalIntField(const val& object, const char* key, int fallback) {
+    const val field = object[key];
+    if (field.isUndefined() || field.isNull()) {
+        return fallback;
+    }
+    return field.as<int>();
 }
 
 class TOPPRA_Wrapper {
@@ -782,6 +836,263 @@ public:
         MatrixXd J = robot.absolutePoseJacobianDualArm(q);
         return matrixXdToJsArray(J);
     }
+
+    val solveAbsoluteTargetNlopt(const val& request_js) {
+        HumanoidAbsoluteNloptRequest request;
+        request.q0 = jsArrayToStdVectorDouble(request_js["q0"]);
+        request.absolute_target = jsArrayToStdVectorDouble(request_js["absoluteTarget"]);
+        request.relative_reference = jsArrayToStdVectorDouble(request_js["relativeReference"]);
+        request.active_indices = jsArrayToStdVectorInt(request_js["activeIndices"]);
+        request.lower_bounds = jsArrayToStdVectorDouble(request_js["lowerBounds"]);
+        request.upper_bounds = jsArrayToStdVectorDouble(request_js["upperBounds"]);
+        request.step_bounds = jsArrayToStdVectorDouble(request_js["stepBounds"]);
+        request.wvfi_min = getOptionalNumberField(request_js, "wvfiMin", request.wvfi_min);
+        request.weight_absolute = getOptionalNumberField(
+            request_js,
+            "weightAbsolute",
+            request.weight_absolute
+        );
+        request.weight_delta = getOptionalNumberField(
+            request_js,
+            "weightDelta",
+            request.weight_delta
+        );
+        request.weight_wvfi_reward = getOptionalNumberField(
+            request_js,
+            "weightWvfiReward",
+            request.weight_wvfi_reward
+        );
+        request.enforce_relative_pose_constraint =
+            request_js["enforceRelativePoseConstraint"].isUndefined()
+                ? request.enforce_relative_pose_constraint
+                : request_js["enforceRelativePoseConstraint"].as<bool>();
+        request.relative_equality_tolerance = getOptionalNumberField(
+            request_js,
+            "relativeEqualityTolerance",
+            request.relative_equality_tolerance
+        );
+        request.weight_relative_penalty = getOptionalNumberField(
+            request_js,
+            "weightRelativePenalty",
+            request.weight_relative_penalty
+        );
+        request.keep_body_z_vertical =
+            request_js["keepBodyZVertical"].isUndefined()
+                ? request.keep_body_z_vertical
+                : request_js["keepBodyZVertical"].as<bool>();
+        request.body_vertical_tolerance = getOptionalNumberField(
+            request_js,
+            "bodyVerticalTolerance",
+            request.body_vertical_tolerance
+        );
+        request.weight_body_vertical_penalty = getOptionalNumberField(
+            request_js,
+            "weightBodyVerticalPenalty",
+            request.weight_body_vertical_penalty
+        );
+        request.enforce_waist_x_corridor =
+            request_js["enforceWaistXCorridor"].isUndefined()
+                ? request.enforce_waist_x_corridor
+                : request_js["enforceWaistXCorridor"].as<bool>();
+        request.waist_x_min = getOptionalNumberField(
+            request_js,
+            "waistXMin",
+            request.waist_x_min
+        );
+        request.waist_x_max = getOptionalNumberField(
+            request_js,
+            "waistXMax",
+            request.waist_x_max
+        );
+        request.joint_limit_activation_threshold = getOptionalNumberField(
+            request_js,
+            "jointLimitActivationThreshold",
+            request.joint_limit_activation_threshold
+        );
+        request.repair_max_iter = getOptionalIntField(
+            request_js,
+            "repairMaxIter",
+            request.repair_max_iter
+        );
+        request.repair_damping = getOptionalNumberField(
+            request_js,
+            "repairDamping",
+            request.repair_damping
+        );
+        request.max_eval = getOptionalIntField(request_js, "maxEval", request.max_eval);
+        request.xtol_rel = getOptionalNumberField(request_js, "xtolRel", request.xtol_rel);
+        request.ftol_rel = getOptionalNumberField(request_js, "ftolRel", request.ftol_rel);
+
+        const HumanoidAbsoluteNloptResult result =
+            solveHumanoidAbsoluteTargetNlopt(robot, request);
+
+        val out = val::object();
+        out.set("converged", result.converged);
+        out.set("reason", result.reason);
+        out.set("iterations", result.iterations);
+        out.set("finalCost", result.final_cost);
+        out.set("finalAbsoluteResidual", result.final_absolute_residual);
+        out.set("finalRelativeResidual", result.final_relative_residual);
+        out.set("finalBodyVerticalResidual", result.final_body_vertical_residual);
+        out.set("repairIterations", result.repair_iterations);
+        out.set("repairConverged", result.repair_converged);
+        out.set("finalWvfi", result.final_wvfi);
+        out.set("qNext", stdVectorToJsArray(result.q_next));
+        return out;
+    }
+
+    val solveAbsoluteTargetMJRestore(const val& request_js) {
+        HumanoidAbsoluteMJRestoreRequest request;
+        request.q_current = jsArrayToStdVectorDouble(request_js["qCurrent"]);
+        request.active_start = getOptionalIntField(request_js, "activeStart", request.active_start);
+        request.active_count = getOptionalIntField(request_js, "activeCount", request.active_count);
+        request.absolute_target = jsArrayToStdVectorDouble(request_js["absoluteTarget"]);
+        request.relative_target = jsArrayToStdVectorDouble(request_js["relativeTarget"]);
+        request.keep_body_z_vertical =
+            request_js["keepBodyZVertical"].isUndefined()
+                ? request.keep_body_z_vertical
+                : request_js["keepBodyZVertical"].as<bool>();
+        request.body_equality_tolerance = getOptionalNumberField(
+            request_js,
+            "bodyEqualityTolerance",
+            request.body_equality_tolerance
+        );
+        request.absolute_weight = getOptionalNumberField(
+            request_js,
+            "absoluteWeight",
+            request.absolute_weight
+        );
+        request.relative_weight = getOptionalNumberField(
+            request_js,
+            "relativeWeight",
+            request.relative_weight
+        );
+        request.body_weight = getOptionalNumberField(
+            request_js,
+            "bodyWeight",
+            request.body_weight
+        );
+        request.lower_bounds = jsArrayToStdVectorDouble(request_js["lowerBounds"]);
+        request.upper_bounds = jsArrayToStdVectorDouble(request_js["upperBounds"]);
+        request.step_bounds = jsArrayToStdVectorDouble(request_js["stepBounds"]);
+        request.wvfi_lower_bound = getOptionalNumberField(
+            request_js,
+            "wvfiLowerBound",
+            request.wvfi_lower_bound
+        );
+        request.joint_limit_activation_threshold = getOptionalNumberField(
+            request_js,
+            "jointLimitActivationThreshold",
+            request.joint_limit_activation_threshold
+        );
+        const val waist_corridor_js = request_js["waistXCorridor"];
+        request.waist_x_corridor.enabled =
+            waist_corridor_js.isUndefined()
+                ? request.waist_x_corridor.enabled
+                : waist_corridor_js["enabled"].as<bool>();
+        request.waist_x_corridor.min = getOptionalNumberField(
+            waist_corridor_js,
+            "min",
+            request.waist_x_corridor.min
+        );
+        request.waist_x_corridor.max = getOptionalNumberField(
+            waist_corridor_js,
+            "max",
+            request.waist_x_corridor.max
+        );
+        request.waist_x_corridor.tolerance = getOptionalNumberField(
+            waist_corridor_js,
+            "tolerance",
+            request.waist_x_corridor.tolerance
+        );
+        request.waist_x_corridor.rows = jsArrayToNestedStdVectorDouble(waist_corridor_js["rows"]);
+        request.waist_x_corridor.rhs = jsArrayToStdVectorDouble(waist_corridor_js["rhs"]);
+
+        const val reference_model_js = request_js["referenceModel"];
+        const val absolute_reference_js = reference_model_js["absolute"];
+        const val relative_reference_js = reference_model_js["relative"];
+        const val body_reference_js = reference_model_js["bodyZ"];
+        request.absolute_reference.stiffness = getOptionalNumberField(
+            absolute_reference_js,
+            "stiffness",
+            request.absolute_reference.stiffness
+        );
+        request.absolute_reference.damping = getOptionalNumberField(
+            absolute_reference_js,
+            "damping",
+            request.absolute_reference.damping
+        );
+        request.relative_reference.stiffness = getOptionalNumberField(
+            relative_reference_js,
+            "stiffness",
+            request.relative_reference.stiffness
+        );
+        request.relative_reference.damping = getOptionalNumberField(
+            relative_reference_js,
+            "damping",
+            request.relative_reference.damping
+        );
+        request.body_reference.stiffness = getOptionalNumberField(
+            body_reference_js,
+            "stiffness",
+            request.body_reference.stiffness
+        );
+        request.body_reference.damping = getOptionalNumberField(
+            body_reference_js,
+            "damping",
+            request.body_reference.damping
+        );
+
+        request.max_iterations = getOptionalIntField(
+            request_js,
+            "maxIterations",
+            request.max_iterations
+        );
+        request.damping = getOptionalNumberField(request_js, "damping", request.damping);
+        request.initial_scale = getOptionalNumberField(
+            request_js,
+            "initialScale",
+            request.initial_scale
+        );
+        request.min_scale = getOptionalNumberField(
+            request_js,
+            "minScale",
+            request.min_scale
+        );
+        request.reduction_factor = getOptionalNumberField(
+            request_js,
+            "reductionFactor",
+            request.reduction_factor
+        );
+        request.equality_tolerance = getOptionalNumberField(
+            request_js,
+            "equalityTolerance",
+            request.equality_tolerance
+        );
+        request.inequality_tolerance = getOptionalNumberField(
+            request_js,
+            "inequalityTolerance",
+            request.inequality_tolerance
+        );
+
+        const HumanoidAbsoluteMJRestoreResult result =
+            solveHumanoidAbsoluteTargetMJRestore(robot, request);
+
+        val out = val::object();
+        out.set("converged", result.converged);
+        out.set("reason", result.reason);
+        out.set("iterations", result.iterations);
+        out.set("acceptedIterations", result.accepted_iterations);
+        out.set("lastAcceptedScale", result.last_accepted_scale);
+        out.set("commandResidualNorm", result.command_residual_norm);
+        out.set("relativeResidualNorm", result.relative_residual_norm);
+        out.set("bodyResidualNorm", result.body_residual_norm);
+        out.set("inequalityViolation", result.inequality_violation);
+        out.set("referenceResidual", stdVectorToJsArray(result.reference_residual));
+        out.set("constraintMotion", stdVectorToJsArray(result.constraint_motion));
+        out.set("qApplied", stdVectorToJsArray(result.q_applied));
+        return out;
+    }
 };
 
 // 差速底盘包装器（配置量 q=[x, y, yaw]，控制量 u=[w_r, w_l]）
@@ -1201,7 +1512,9 @@ EMSCRIPTEN_BINDINGS(dqrobotics_module) {
         .function("relativePoseDualArm", &HumanoidURDF_Wrapper::relativePoseDualArm)
         .function("absolutePoseDualArm", &HumanoidURDF_Wrapper::absolutePoseDualArm)
         .function("relativePoseJacobianDualArm", &HumanoidURDF_Wrapper::relativePoseJacobianDualArm)
-        .function("absolutePoseJacobianDualArm", &HumanoidURDF_Wrapper::absolutePoseJacobianDualArm);
+        .function("absolutePoseJacobianDualArm", &HumanoidURDF_Wrapper::absolutePoseJacobianDualArm)
+        .function("solveAbsoluteTargetNlopt", &HumanoidURDF_Wrapper::solveAbsoluteTargetNlopt)
+        .function("solveAbsoluteTargetMJRestore", &HumanoidURDF_Wrapper::solveAbsoluteTargetMJRestore);
 
     // 差速底盘
     class_<DifferentialDriveRobot_Wrapper>("DifferentialDriveRobot")

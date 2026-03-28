@@ -22,6 +22,45 @@ test('evaluateHumanoidJogCommandOutcome rejects large command mismatch without e
     assert.equal(outcome.converged, false);
 });
 
+test('evaluateHumanoidJogCommandOutcome keeps a single-step result when it makes clear progress even without 80% reduction', () => {
+    const outcome = evaluateHumanoidJogCommandOutcome({
+        stopReason: 'single_step',
+        initialCommandNorm: 0.1,
+        finalCommandNorm: 0.08,
+        finalInvariantNorm: 1e-5,
+        hardCommandTol: 1e-6,
+        hardInvariantTol: 5e-5,
+        practicalCommandTol: 1e-4,
+        practicalInvariantTol: 2.5e-4,
+        mismatchTol: 1e-3,
+        mismatchRequiredReduction: 0.8
+    });
+
+    assert.equal(outcome.reason, 'single_step');
+    assert.equal(outcome.applyResult, true);
+    assert.equal(outcome.converged, true);
+});
+
+test('evaluateHumanoidJogCommandOutcome rejects a single-step result when it makes almost no progress', () => {
+    const outcome = evaluateHumanoidJogCommandOutcome({
+        stopReason: 'single_step',
+        initialCommandNorm: 0.1,
+        finalCommandNorm: 0.0995,
+        finalInvariantNorm: 1e-5,
+        hardCommandTol: 1e-6,
+        hardInvariantTol: 5e-5,
+        practicalCommandTol: 1e-4,
+        practicalInvariantTol: 2.5e-4,
+        mismatchTol: 1e-3,
+        mismatchRequiredReduction: 0.8,
+        singleStepMismatchRequiredReduction: 0.05
+    });
+
+    assert.equal(outcome.reason, 'command_mismatch');
+    assert.equal(outcome.applyResult, false);
+    assert.equal(outcome.converged, false);
+});
+
 test('evaluateHumanoidJogCommandOutcome accepts practical convergence before hard convergence', () => {
     const outcome = evaluateHumanoidJogCommandOutcome({
         stopReason: 'max_iter',
@@ -95,4 +134,72 @@ test('resolveHumanoidJogCommandResult falls back to the initial joints on comman
     assert.equal(result.outcome.reason, 'command_mismatch');
     assert.deepEqual(result.qApplied, [4, 5, 6]);
     assert.equal(result.message, '无法到达该位置（目标未达成）。');
+});
+
+test('resolveHumanoidJogCommandResult keeps best-effort progress instead of rolling back to qInitial', () => {
+    const result = resolveHumanoidJogCommandResult({
+        stopReason: 'best_effort',
+        initialCommandNorm: 0.002,
+        finalCommandNorm: 0.001,
+        finalInvariantNorm: 0,
+        hardCommandTol: 1e-6,
+        hardInvariantTol: 5e-5,
+        practicalCommandTol: 1e-4,
+        practicalInvariantTol: 2.5e-4,
+        mismatchTol: 1e-12,
+        mismatchRequiredReduction: 0.8,
+        singleStepMismatchRequiredReduction: 0.05,
+        q: [1, 2, 3],
+        qInitial: [4, 5, 6],
+        messageMap: {
+            best_effort: '保留最后可行小步。'
+        }
+    });
+
+    assert.equal(result.outcome.reason, 'best_effort');
+    assert.equal(result.outcome.applyResult, true);
+    assert.equal(result.outcome.converged, false);
+    assert.deepEqual(result.qApplied, [1, 2, 3]);
+    assert.equal(result.message, '保留最后可行小步。');
+});
+
+test('evaluateHumanoidJogCommandOutcome keeps best-effort progress even when the reduction is smaller than the single-step mismatch threshold', () => {
+    const outcome = evaluateHumanoidJogCommandOutcome({
+        stopReason: 'best_effort',
+        initialCommandNorm: 0.0021,
+        finalCommandNorm: 0.0020,
+        finalInvariantNorm: 0,
+        hardCommandTol: 1e-14,
+        hardInvariantTol: 5e-5,
+        practicalCommandTol: 1e-4,
+        practicalInvariantTol: 2.5e-4,
+        mismatchTol: 1e-12,
+        mismatchRequiredReduction: 0.8,
+        singleStepMismatchRequiredReduction: 0.05
+    });
+
+    assert.equal(outcome.reason, 'best_effort');
+    assert.equal(outcome.applyResult, true);
+    assert.equal(outcome.converged, false);
+});
+
+test('evaluateHumanoidJogCommandOutcome can require hard convergence before applying a best-effort SQP result', () => {
+    const outcome = evaluateHumanoidJogCommandOutcome({
+        stopReason: 'best_effort',
+        initialCommandNorm: 0.0021,
+        finalCommandNorm: 9e-4,
+        finalInvariantNorm: 2e-8,
+        hardCommandTol: 1e-12,
+        hardInvariantTol: 1e-12,
+        practicalCommandTol: 1e-12,
+        practicalInvariantTol: 1e-12,
+        mismatchTol: 1e-12,
+        mismatchRequiredReduction: 0.8,
+        singleStepMismatchRequiredReduction: 0.05,
+        requireHardConvergenceToApply: true
+    });
+
+    assert.equal(outcome.reason, 'command_mismatch');
+    assert.equal(outcome.applyResult, false);
+    assert.equal(outcome.converged, false);
 });

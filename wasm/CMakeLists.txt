@@ -104,6 +104,7 @@ if(EMSCRIPTEN)
     # 创建 WASM 模块
     add_executable(dqrobotics
         bindings.cpp
+        mj_restore_humanoid_solver.cpp
         nlopt_humanoid_solver.cpp
         ${DQROBOTICS_SOURCES}
     )

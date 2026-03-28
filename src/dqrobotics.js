@@ -764,58 +764,20 @@ export class HumanoidDualArmAdapter {
         this.totalJointCount = humanoidModel.getDimConfigurationSpace?.() ?? 0;
     }
 
-    /** WASM 是否暴露了双臂位姿接口（新版本有，旧版本无）；无则用 JS 回退 */
+    /** WASM 是否完整暴露了 cooperative dual-arm 位姿与雅可比接口 */
     _hasDualArmWasm() {
-        return typeof this._humanoid.absolutePoseDualArm === 'function';
+        return (
+            typeof this._humanoid.absolutePoseDualArm === 'function' &&
+            typeof this._humanoid.relativePoseDualArm === 'function' &&
+            typeof this._humanoid.absolutePoseJacobianDualArm === 'function' &&
+            typeof this._humanoid.relativePoseJacobianDualArm === 'function'
+        );
     }
 
-    /** JS 回退：绝对位姿（中点平移 + 归一化平均旋转） */
-    _getAbsolutePoseJS(q) {
-        const p1 = this._humanoid.fkmEffector(q, 1);
-        const p2 = this._humanoid.fkmEffector(q, 2);
-        if (!p1 || !p2) return null;
-        const DQ = DQModule.DQWrapper;
-        const dq1 = DQ.createFromArray(p1);
-        const dq2 = DQ.createFromArray(p2);
-        const t1 = DQ.getTranslation(dq1);
-        const t2 = DQ.getTranslation(dq2);
-        const r1 = DQ.getRotation(dq1);
-        const r2 = DQ.getRotation(dq2);
-        const tMid = [0.5 * (t1[0] + t2[0]), 0.5 * (t1[1] + t2[1]), 0.5 * (t1[2] + t2[2]), 0.5 * (t1[3] + t2[3])];
-        let rw = 0.5 * (r1[0] + r2[0]), rx = 0.5 * (r1[1] + r2[1]), ry = 0.5 * (r1[2] + r2[2]), rz = 0.5 * (r1[3] + r2[3]);
-        const n = Math.sqrt(rw * rw + rx * rx + ry * ry + rz * rz) || 1;
-        rw /= n; rx /= n; ry /= n; rz /= n;
-        const rotDQ = DQ.createFromArray([rw, rx, ry, rz, 0, 0, 0, 0]);
-        const transDQ = DQ.translation(tMid[1], tMid[2], tMid[3]);
-        return DQ.toArray(DQ.multiply(transDQ, rotDQ));
-    }
-
-    /** JS 回退：相对位姿 conj(x2)*x1 用 inverse(x1)*x2 等价表示 */
-    _getRelativePoseJS(q) {
-        const p1 = this._humanoid.fkmEffector(q, 1);
-        const p2 = this._humanoid.fkmEffector(q, 2);
-        if (!p1 || !p2) return null;
-        const DQ = DQModule.DQWrapper;
-        const dq1 = DQ.createFromArray(p1);
-        const dq2 = DQ.createFromArray(p2);
-        const inv1 = DQ.inverse(dq1);
-        return DQ.toArray(DQ.multiply(dq2, inv1));
-    }
-
-    /** JS 回退：数值微分雅可比 */
-    _getJacobianJS(q, getPose, eps = 1e-7) {
-        const n = q.length;
-        const J = [];
-        for (let i = 0; i < 8; i++) J.push(new Array(n).fill(0));
-        for (let j = 0; j < n; j++) {
-            const qp = q.slice(); qp[j] += eps;
-            const qm = q.slice(); qm[j] -= eps;
-            const rp = getPose(qp);
-            const rm = getPose(qm);
-            if (!rp || !rm) return null;
-            for (let i = 0; i < 8; i++) J[i][j] = (rp[i] - rm[i]) / (2 * eps);
+    _requireDualArmWasm() {
+        if (!this._hasDualArmWasm()) {
+            throw new Error('cooperative dual-arm WASM API unavailable');
         }
-        return J;
     }
 
     /**
@@ -824,8 +786,8 @@ export class HumanoidDualArmAdapter {
      * @returns {number[]} DQ 8 元素
      */
     getRelativePose(jointAngles) {
-        if (this._hasDualArmWasm()) return this._humanoid.relativePoseDualArm(jointAngles);
-        return this._getRelativePoseJS(jointAngles);
+        this._requireDualArmWasm();
+        return this._humanoid.relativePoseDualArm(jointAngles);
     }
 
     /**
@@ -834,8 +796,8 @@ export class HumanoidDualArmAdapter {
      * @returns {number[]} DQ 8 元素
      */
     getAbsolutePose(jointAngles) {
-        if (this._hasDualArmWasm()) return this._humanoid.absolutePoseDualArm(jointAngles);
-        return this._getAbsolutePoseJS(jointAngles);
+        this._requireDualArmWasm();
+        return this._humanoid.absolutePoseDualArm(jointAngles);
     }
 
     /**
@@ -844,8 +806,8 @@ export class HumanoidDualArmAdapter {
      * @returns {number[][]}
      */
     getRelativePoseJacobian(jointAngles) {
-        if (this._hasDualArmWasm()) return this._humanoid.relativePoseJacobianDualArm(jointAngles);
-        return this._getJacobianJS(jointAngles, (q) => this.getRelativePose(q));
+        this._requireDualArmWasm();
+        return this._humanoid.relativePoseJacobianDualArm(jointAngles);
     }
 
     /**
@@ -854,8 +816,8 @@ export class HumanoidDualArmAdapter {
      * @returns {number[][]}
      */
     getAbsolutePoseJacobian(jointAngles) {
-        if (this._hasDualArmWasm()) return this._humanoid.absolutePoseJacobianDualArm(jointAngles);
-        return this._getJacobianJS(jointAngles, (q) => this.getAbsolutePose(q));
+        this._requireDualArmWasm();
+        return this._humanoid.absolutePoseJacobianDualArm(jointAngles);
     }
 
     /** 左臂末端位姿（effector 1） */

@@ -1,18 +1,19 @@
 const SUPPORTED_HUMANOID_JOG_MJ_PRE_W_CONTROL_MODES = new Set([
     'absolute',
     'decoupled',
-    'decoupled-upright'
+    'decoupled-upright',
+    'relative',
+    'relative-fullbody',
+    'distance',
+    'distance-fullbody',
+    'robot1',
+    'robot2',
+    'waist-body-link-xz'
 ]);
 
 const SUPPORTED_HUMANOID_JOG_MJ_PRE_W_METRICS = new Set([
     'w_abs_hier',
     'w_abs_hier_vfi'
-]);
-
-const SUPPORTED_HUMANOID_JOG_MJ_PRE_W_SKIPPED_STATES = new Set([
-    'skipped(no_progress)',
-    'skipped(no_gradient)',
-    'skipped(projection_only_no_progress)'
 ]);
 
 function normalizeHumanoidJogMJPreWState(state) {
@@ -37,6 +38,20 @@ export function getHumanoidJogMJPreWDirection() {
 }
 
 export function mapHumanoidJogMJPreWOutcome(metricResult = null) {
+    if (metricResult === true) {
+        return {
+            state: 'skipped(none)',
+            qPreEligible: false
+        };
+    }
+
+    if (metricResult === false) {
+        return {
+            state: 'skipped(no_progress)',
+            qPreEligible: false
+        };
+    }
+
     if (!metricResult || typeof metricResult !== 'object') {
         return {
             state: 'failed(invalid_metric_result)',
@@ -53,6 +68,14 @@ export function mapHumanoidJogMJPreWOutcome(metricResult = null) {
 
     const state = normalizeHumanoidJogMJPreWState(metricResult.state);
     if (!state) {
+        if (Array.isArray(metricResult.qApplied) || metricResult.converged === true) {
+            return {
+                state: isHumanoidJogMJPreWOutcomeWithAcceptedCandidate(metricResult)
+                    ? 'applied'
+                    : 'skipped(none)',
+                qPreEligible: isHumanoidJogMJPreWOutcomeWithAcceptedCandidate(metricResult)
+            };
+        }
         return {
             state: 'failed(invalid_metric_result)',
             qPreEligible: false
@@ -80,7 +103,7 @@ export function mapHumanoidJogMJPreWOutcome(metricResult = null) {
         };
     }
 
-    if (SUPPORTED_HUMANOID_JOG_MJ_PRE_W_SKIPPED_STATES.has(state)) {
+    if (state.startsWith('skipped(')) {
         return {
             state,
             qPreEligible: false
