@@ -1,0 +1,4720 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+
+import { RobotVisualizer } from '../visualizer.js';
+import { buildHumanoidJogMJDiagnostics } from './humanoid-jog-mj-diagnostics.js';
+import {
+    computeAngularJacobian,
+    computeCombinedCCTSM,
+    computeTwistJacobian
+} from './cctsm.js';
+
+test('RobotVisualizer sets manifoldNullspaceStepSize default to 0.1', () => {
+    const visualizer = new RobotVisualizer(null);
+    assert.equal(visualizer.vfiConfig.manifoldNullspaceStepSize, 0.1);
+});
+
+test('RobotVisualizer sets manifoldWVFIButtonStepSize default to 0.1', () => {
+    const visualizer = new RobotVisualizer(null);
+    assert.equal(visualizer.vfiConfig.manifoldWVFIButtonStepSize, 0.1);
+});
+
+test('RobotVisualizer sets manifold reference restoration defaults', () => {
+    const visualizer = new RobotVisualizer(null);
+    assert.equal(visualizer.vfiConfig.manifoldReferenceStiffness, 1.0);
+    assert.equal(visualizer.vfiConfig.manifoldReferenceDamping, 0.35);
+});
+
+test('RobotVisualizer sets hierarchical VFI blend default to 1', () => {
+    const visualizer = new RobotVisualizer(null);
+    assert.equal(visualizer.vfiConfig.manifoldHierarchicalVfiBlend, 1);
+});
+
+test('RobotVisualizer sets joint-limit manipulability activation threshold default to 0.15 rad', () => {
+    const visualizer = new RobotVisualizer(null);
+    assert.equal(visualizer.vfiConfig.jointLimitManipulabilityActivationThreshold, 0.15);
+    assert.equal(visualizer.vfiConfig.manifoldActiveLimitRetreatHoldFraction, 0.5);
+    assert.equal(visualizer.vfiConfig.manifoldActiveLimitRetreatHoldDistance, 1e-3);
+    assert.equal(visualizer.vfiConfig.manifoldActiveLimitRetreatTargetFraction, 0.2);
+});
+
+test('RobotVisualizer can enable temporary dual-arm test lock limits for ljoint2 and rjoint2', () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.humanoidJointNames = ['waist0', 'ljoint1', 'ljoint2', 'rjoint1', 'rjoint2'];
+    visualizer.humanoidURDF = {
+        joints: {
+            waist0: { limit: { lower: -1, upper: 1 } },
+            ljoint1: { limit: { lower: -1, upper: 1 } },
+            ljoint2: { limit: { lower: -1, upper: 1 } },
+            rjoint1: { limit: { lower: -1, upper: 1 } },
+            rjoint2: { limit: { lower: -1, upper: 1 } }
+        }
+    };
+
+    visualizer.setHumanoidTestDualArmLockEnabled(true);
+    const limits = visualizer._getHumanoidJointLimits();
+
+    assert.deepEqual(limits[2], { lower: -0.1, upper: 0.2 });
+    assert.deepEqual(limits[4], { lower: -0.2, upper: 0.1 });
+});
+
+test('RobotVisualizer sets manifoldJogSecondaryMetric default to none', () => {
+    const visualizer = new RobotVisualizer(null);
+    assert.equal(visualizer.vfiConfig.manifoldJogSecondaryMetric, 'none');
+});
+
+test('RobotVisualizer sets mj_restore body-z defaults for upright absolute control', () => {
+    const visualizer = new RobotVisualizer(null);
+    assert.equal(visualizer.vfiConfig.mjRestoreBodyTolerance, 5e-5);
+    assert.equal(visualizer.vfiConfig.mjRestoreHardTolerance, 1e-8);
+    assert.equal(visualizer.vfiConfig.mjRestorePracticalCommandTolPose, 5e-4);
+    assert.equal(visualizer.vfiConfig.mjRestoreMetricButtonCommandTolerance, 1e-3);
+    assert.equal(visualizer.vfiConfig.mjRestoreMetricButtonInvariantTolerance, 1e-4);
+    assert.equal(visualizer.vfiConfig.mjRestoreActiveLimitRetreatCommandTolerance, 1e-2);
+    assert.equal(visualizer.vfiConfig.mjRestoreActiveLimitRetreatInvariantTolerance, 2e-3);
+    assert.equal(visualizer.vfiConfig.mjRestoreRelativeWeight, 1.0);
+    assert.equal(visualizer.vfiConfig.mjRestoreBodyVerticalWeight, 4.0);
+    assert.equal(visualizer.vfiConfig.mjRestoreBodyReferenceStiffness, 0.6);
+    assert.equal(visualizer.vfiConfig.mjRestoreBodyReferenceDamping, 0.45);
+});
+
+test('RobotVisualizer sets plain new qpJ pose convergence tolerances to practical defaults', () => {
+    const visualizer = new RobotVisualizer(null);
+    assert.equal(visualizer.vfiConfig.hardCommandTolPose, 1e-6);
+    assert.equal(visualizer.vfiConfig.practicalCommandTolPose, 1e-4);
+    assert.equal(visualizer.vfiConfig.practicalViolationTol, 1e-7);
+    assert.equal(visualizer.vfiConfig.qpFeasibleAcceptanceTol, 1e-6);
+});
+
+test('RobotVisualizer sets lightweight mj_restore_pre_w profile defaults', () => {
+    const visualizer = new RobotVisualizer(null);
+    assert.equal(visualizer.vfiConfig.mjRestorePreWMetricIterations, 3);
+    assert.equal(visualizer.vfiConfig.mjRestorePreWRestoreIterations, 1);
+});
+
+test('RobotVisualizer sets mj_restore arm-only fallback profile defaults', () => {
+    const visualizer = new RobotVisualizer(null);
+    assert.equal(visualizer.vfiConfig.mjRestoreMaxStep, 0.05);
+    assert.equal(visualizer.vfiConfig.mjRestoreNullspaceStepSize, 0.01);
+    assert.equal(visualizer.vfiConfig.mjRestoreMetricProjectionStepSize, 0.01);
+    assert.equal(visualizer.vfiConfig.mjRestoreMetricProjectionPasses, 4);
+    assert.equal(visualizer.vfiConfig.mjRestoreWaistMotionRegularization, 6);
+    assert.equal(visualizer.vfiConfig.mjRestoreArmOnlyFallbackMaxIter, 12);
+    assert.equal(visualizer.vfiConfig.mjRestoreArmOnlyFallbackReferenceDamping, 0.2);
+    assert.equal(visualizer.vfiConfig.mjRestoreArmOnlyFallbackPolishActivationResidual, 5e-4);
+    assert.equal(visualizer.vfiConfig.mjRestoreArmOnlyFallbackPolishDamping, 1e-7);
+});
+
+test('RobotVisualizer exposes optimizeHumanoidAbsoluteManipulability for w_abs buttons', () => {
+    const visualizer = new RobotVisualizer(null);
+    assert.equal(typeof visualizer.optimizeHumanoidAbsoluteManipulability, 'function');
+});
+
+test('RobotVisualizer exposes optimizeHumanoidAbsoluteVFIManipulability for w_abs_vfi buttons', () => {
+    const visualizer = new RobotVisualizer(null);
+    assert.equal(typeof visualizer.optimizeHumanoidAbsoluteVFIManipulability, 'function');
+});
+
+test('RobotVisualizer exposes optimizeHumanoidAbsoluteArmManipulability for w_abs_arm buttons', () => {
+    const visualizer = new RobotVisualizer(null);
+    assert.equal(typeof visualizer.optimizeHumanoidAbsoluteArmManipulability, 'function');
+});
+
+test('RobotVisualizer exposes optimizeHumanoidHierarchicalAbsoluteManipulability for hierarchical w_abs buttons', () => {
+    const visualizer = new RobotVisualizer(null);
+    assert.equal(typeof visualizer.optimizeHumanoidHierarchicalAbsoluteManipulability, 'function');
+});
+
+test('RobotVisualizer exposes optimizeHumanoidHierarchicalAbsoluteVFIManipulability for hierarchical w_abs_vfi buttons', () => {
+    const visualizer = new RobotVisualizer(null);
+    assert.equal(typeof visualizer.optimizeHumanoidHierarchicalAbsoluteVFIManipulability, 'function');
+});
+
+test('RobotVisualizer exposes optimizeHumanoidHierarchicalAbsoluteVFIManipulabilityIterative for iterative hierarchical w_abs_vfi buttons', () => {
+    const visualizer = new RobotVisualizer(null);
+    assert.equal(typeof visualizer.optimizeHumanoidHierarchicalAbsoluteVFIManipulabilityIterative, 'function');
+});
+
+test('RobotVisualizer metric-only MJ optimization routes through the mj_restore wrapper', () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.humanoidMode = true;
+    const originalWindow = globalThis.window;
+    globalThis.window = {
+        humanoidQ: [0, 0]
+    };
+    const originalDocument = globalThis.document;
+    globalThis.document = {
+        getElementById: () => null
+    };
+
+    let called = null;
+    visualizer._getHumanoidAbsolutePose = () => [1, 0, 0, 0, 0, 0, 0, 0];
+    visualizer._getHumanoidRelativePose = () => new Array(8).fill(0);
+    visualizer._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstMJRestore = (...args) => {
+        called = args;
+        return true;
+    };
+
+    try {
+        const result = visualizer.optimizeHumanoidHierarchicalAbsoluteVFIManipulability('increase');
+        assert.equal(result, true);
+        assert.ok(Array.isArray(called));
+        assert.equal(called[7]?.jogMetricOverride, 'w_abs_hier_vfi');
+        assert.equal(called[7]?.metricDirection, 'increase');
+    } finally {
+        globalThis.document = originalDocument;
+        if (originalWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = originalWindow;
+        }
+    }
+});
+
+test('RobotVisualizer metric-only MJ optimization routes relative-mode w+ through the relative-task mj_restore wrapper', () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.humanoidMode = true;
+    const originalWindow = globalThis.window;
+    globalThis.window = {
+        humanoidQ: [0, 0]
+    };
+    const originalDocument = globalThis.document;
+    globalThis.document = {
+        getElementById: (id) => {
+            if (id === 'dual-arm-control-mode-select') return { value: 'relative' };
+            return null;
+        }
+    };
+
+    let called = null;
+    visualizer._getHumanoidAbsolutePose = () => new Array(8).fill(0);
+    visualizer._getHumanoidRelativePose = () => new Array(8).fill(1);
+    visualizer._updateHumanoidJointsFromRelativePoseTargetAbsoluteFirstMJRestore = (...args) => {
+        called = args;
+        return true;
+    };
+
+    try {
+        const result = visualizer.optimizeHumanoidHierarchicalAbsoluteManipulability('increase');
+        assert.equal(result, true);
+        assert.ok(Array.isArray(called));
+        assert.deepEqual(called[0], new Array(8).fill(1));
+        assert.equal(called[4]?.jogMetricOverride, 'w_abs_hier');
+        assert.equal(called[4]?.metricDirection, 'increase');
+    } finally {
+        globalThis.document = originalDocument;
+        if (originalWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = originalWindow;
+        }
+    }
+});
+
+test('RobotVisualizer metric-only MJ optimization routes distance-mode w+ through the distance-task mj_restore wrapper', () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.humanoidMode = true;
+    const originalWindow = globalThis.window;
+    globalThis.window = {
+        humanoidQ: [0, 0]
+    };
+    const originalDocument = globalThis.document;
+    globalThis.document = {
+        getElementById: (id) => {
+            if (id === 'dual-arm-control-mode-select') return { value: 'distance' };
+            return null;
+        }
+    };
+
+    let called = null;
+    visualizer._getHumanoidAbsolutePose = () => new Array(8).fill(0);
+    visualizer._getHumanoidRelativePose = () => new Array(8).fill(1);
+    visualizer._updateHumanoidJointsFromRelativeDistanceDeltaMJRestore = (...args) => {
+        called = args;
+        return true;
+    };
+
+    try {
+        const result = visualizer.optimizeHumanoidHierarchicalAbsoluteVFIManipulability('increase');
+        assert.equal(result, true);
+        assert.ok(Array.isArray(called));
+        assert.equal(called[0], 0);
+        assert.equal(called[4]?.jogMetricOverride, 'w_abs_hier_vfi');
+        assert.equal(called[4]?.metricDirection, 'increase');
+    } finally {
+        globalThis.document = originalDocument;
+        if (originalWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = originalWindow;
+        }
+    }
+});
+
+test('RobotVisualizer metric-only MJ optimization routes robot1-mode w+ through the special pre-w stage and applies q_pre', async () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.humanoidMode = true;
+    visualizer.humanoidWaistLength = 4;
+    visualizer.humanoidLeftArmLength = 7;
+    visualizer.humanoidRightArmLength = 7;
+    const originalWindow = globalThis.window;
+    globalThis.window = {
+        humanoidQ: new Array(20).fill(0),
+        updateGlobalVariables: () => {},
+        updateRobotPose: () => {}
+    };
+    const originalDocument = globalThis.document;
+    globalThis.document = {
+        getElementById: (id) => {
+            if (id === 'dual-arm-control-mode-select') return { value: 'robot1' };
+            return null;
+        }
+    };
+
+    let capturedArgs = null;
+    let appliedQ = null;
+    visualizer._getHumanoidAbsolutePose = () => new Array(8).fill(0);
+    visualizer._getHumanoidRelativePose = () => new Array(8).fill(0);
+    visualizer._getHumanoidPose1 = () => new Array(8).fill(1);
+    visualizer._runHumanoidMJRestoreSpecialModePreWStage = async (args) => {
+        capturedArgs = args;
+        return {
+            state: 'active',
+            qApplied: new Array(20).fill(0.25),
+            acceptedCandidate: true
+        };
+    };
+    visualizer._applyHumanoidJointSolution = (q) => {
+        appliedQ = q.slice();
+    };
+    visualizer._publishHumanoidJogDiagnostics = () => {};
+
+    try {
+        const result = await visualizer.optimizeHumanoidHierarchicalAbsoluteManipulability('increase');
+        assert.equal(result, true);
+        assert.ok(capturedArgs);
+        assert.equal(capturedArgs.mode, 'robot1');
+        assert.equal(capturedArgs.preWMetric, 'w_abs_hier');
+        assert.deepEqual(appliedQ, new Array(20).fill(0.25));
+    } finally {
+        globalThis.document = originalDocument;
+        if (originalWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = originalWindow;
+        }
+    }
+});
+
+test('RobotVisualizer plain new qpJ absolute-target step does not inject w secondary optimization or wvfi guard', () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.humanoidMode = true;
+    visualizer.humanoidModel = {};
+    visualizer.humanoidWaistLength = 4;
+    visualizer.humanoidLeftArmLength = 7;
+    visualizer.humanoidRightArmLength = 7;
+    visualizer.humanoidJointNames = Array.from({ length: 20 }, (_, index) => `joint${index}`);
+    visualizer.humanoidURDF = {
+        joints: Object.fromEntries(Array.from({ length: 20 }, (_, index) => [`joint${index}`, { limit: { lower: -2, upper: 2 } }]))
+    };
+    visualizer.setHumanoidJogSolverMode('vfi');
+
+    const originalWindow = globalThis.window;
+    globalThis.window = {
+        humanoidQ: new Array(20).fill(0),
+        DQModule: { DQWrapper: {}, Kinematics: null },
+        updateGlobalVariables: () => {},
+        updateRobotPose: () => {}
+    };
+    const originalDocument = globalThis.document;
+    globalThis.document = {
+        getElementById: () => ({ checked: true, value: 'absolute' })
+    };
+
+    let capturedOptions = null;
+    visualizer._getHumanoidAbsolutePose = () => new Array(8).fill(0);
+    visualizer._getHumanoidRelativePose = () => new Array(8).fill(0);
+    visualizer._getHumanoidAbsolutePoseJacobian = () => new Array(8).fill(0).map(() => new Array(14).fill(0));
+    visualizer._getHumanoidRelativePoseJacobian = () => new Array(8).fill(0).map(() => new Array(14).fill(0));
+    visualizer._getWaistXVFIRows = () => null;
+    visualizer._computeProtectedManipulabilityGradient = () => ['unexpected'];
+    visualizer._buildWVFILowerBoundGuard = () => ({ apply: () => ({ accepted: false }) });
+    visualizer._solveVFICommandStep = (options) => {
+        capturedOptions = options;
+        return {
+            dq: new Array(14).fill(0),
+            stats: {
+                qpConverged: true,
+                stepNorm: 0,
+                maxViolationAfter: 0,
+                invariantRows: 8,
+                commandRows: 8,
+                constraintRows: 0
+            }
+        };
+    };
+    visualizer._computeModeCCTSM = () => ({ w: 0, w_vfi: 0 });
+    visualizer._publishHumanoidJogDiagnostics = () => {};
+    visualizer.setHumanoidJoints = () => {};
+
+    try {
+        const result = visualizer._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstVFI(
+            [0, 1, 0, 0, 0, 0, 0, 0],
+            new Array(20).fill(0),
+            true,
+            false,
+            false,
+            null,
+            null
+        );
+        assert.equal(result, true);
+        assert.ok(capturedOptions);
+        assert.equal(capturedOptions.nullManipGrad, null);
+        assert.equal(capturedOptions.wvfiGuard, null);
+    } finally {
+        globalThis.document = originalDocument;
+        if (originalWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = originalWindow;
+        }
+    }
+});
+
+test('RobotVisualizer iterative hierarchical w_abs_hier_vfi optimization routes through the local mj_restore manifold wrapper with a 15/35 plan', () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.humanoidMode = true;
+    const originalWindow = globalThis.window;
+    globalThis.window = {
+        humanoidQ: [0, 0]
+    };
+    const originalDocument = globalThis.document;
+    globalThis.document = {
+        getElementById: () => ({ value: 'absolute', checked: true })
+    };
+
+    let called = null;
+    visualizer._getHumanoidAbsolutePose = () => new Array(8).fill(0);
+    visualizer._getHumanoidRelativePose = () => new Array(8).fill(0);
+    visualizer._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstManifold = (...args) => {
+        called = args;
+        return true;
+    };
+
+    try {
+        const result = visualizer.optimizeHumanoidHierarchicalAbsoluteVFIManipulabilityIterative('increase');
+        assert.equal(result, true);
+        assert.ok(Array.isArray(called));
+        assert.equal(called[6]?.solverMode, 'mj_restore');
+        assert.equal(called[6]?.preferWorker, false);
+        assert.equal(called[6]?.jogMetricOverride, 'w_abs_hier_vfi');
+        assert.equal(called[6]?.metricDirection, 'increase');
+        assert.deepEqual(called[6]?.iterativeMetricProjectionPlan, {
+            metricIterations: 15,
+            restoreIterations: 35
+        });
+    } finally {
+        globalThis.document = originalDocument;
+        if (originalWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = originalWindow;
+        }
+    }
+});
+
+test('RobotVisualizer manifold metric evaluator prefers current-task hierarchical fields over absolute-task fields', () => {
+    const visualizer = new RobotVisualizer(null);
+
+    assert.equal(
+        visualizer._evaluateHumanoidJogManifoldMetricValue('w_abs_hier', {
+            w_abs_hier: 0.31,
+            w_task_hier: 0.18
+        }),
+        0.18
+    );
+
+    assert.equal(
+        visualizer._evaluateHumanoidJogManifoldMetricValue('w_abs_hier_vfi', {
+            w_abs_hier_vfi: 0.27,
+            w_task_hier: 0.2,
+            w_task_hier_vfi: 0.14
+        }),
+        0.14
+    );
+});
+
+test('RobotVisualizer prewarms the mj_restore worker when the solver mode switches to mj_restore', async () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.humanoidMJWorkerModelSpec = { waistChain: [1] };
+
+    let ensuredSpec = null;
+    visualizer._canUseHumanoidJogMJRestoreWorker = () => true;
+    visualizer._getHumanoidHierarchicalVfiBlend = () => 1;
+    visualizer._getHumanoidJogMJWorkerClient = () => ({
+        ensureModel: async (modelSpec) => {
+            ensuredSpec = modelSpec;
+            return true;
+        }
+    });
+
+    visualizer.setHumanoidJogSolverMode('mj_restore');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.deepEqual(ensuredSpec, { waistChain: [1] });
+});
+
+test('RobotVisualizer retains mj_restore_pre_w as the humanoid jog solver mode', () => {
+    const visualizer = new RobotVisualizer(null);
+
+    visualizer.setHumanoidJogSolverMode('mj_restore_pre_w');
+
+    assert.equal(visualizer.humanoidJogSolverMode, 'mj_restore_pre_w');
+});
+
+test('RobotVisualizer mj_restore_pre_w coalesces overlapping absolute jog requests and keeps only the latest pending request', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const q0 = [0.1, -0.2, 0.3];
+    const calls = [];
+    const pendingResolvers = [];
+
+    visualizer.setHumanoidJogSolverMode('mj_restore_pre_w');
+    visualizer._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstMJRestorePreW = (...args) => {
+        calls.push(args[0][4]);
+        return new Promise((resolve) => {
+            pendingResolvers.push(resolve);
+        });
+    };
+
+    const targetA = [1, 0, 0, 0, 0.01, 0, 0, 0];
+    const targetB = [1, 0, 0, 0, 0.02, 0, 0, 0];
+    const targetC = [1, 0, 0, 0, 0.03, 0, 0, 0];
+
+    assert.equal(
+        visualizer.updateHumanoidJointsFromAbsolutePoseTargetRelativeFirst(targetA.slice(), q0.slice(), true, false, false, null, null),
+        true
+    );
+    assert.equal(
+        visualizer.updateHumanoidJointsFromAbsolutePoseTargetRelativeFirst(targetB.slice(), q0.slice(), true, false, false, null, null),
+        true
+    );
+    assert.equal(
+        visualizer.updateHumanoidJointsFromAbsolutePoseTargetRelativeFirst(targetC.slice(), q0.slice(), true, false, false, null, null),
+        true
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(calls, [0.01]);
+    assert.equal(pendingResolvers.length, 1);
+
+    pendingResolvers.shift()(true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.deepEqual(calls, [0.01, 0.03]);
+    assert.equal(pendingResolvers.length, 1);
+
+    pendingResolvers.shift()(true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.deepEqual(calls, [0.01, 0.03]);
+    assert.equal(visualizer._humanoidMJPreWLoopActive, false);
+});
+
+test('RobotVisualizer absolute mj_restore_pre_w resolves the dedicated pre-w metric, runs pre-w first, then restores from q_pre', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const q0 = [0.1, -0.2, 0.3];
+    const qPre = [0.4, -0.1, 0.2];
+    const absTarget = [1, 0, 0, 0, 0.02, 0, 0, 0];
+    const absCurrent = [1, 0, 0, 0, 0, 0, 0, 0];
+    const relCurrent = [0, 1, 0, 0, 0, 0, 0, 0];
+    const callOrder = [];
+    const originalDocument = globalThis.document;
+    const textEl = { textContent: '' };
+    const tsEl = { textContent: '' };
+    const panelEl = { classList: { toggle: () => {} } };
+
+    globalThis.document = {
+        getElementById: (id) => {
+            if (id === 'humanoid-vfi-diagnostics-text') return textEl;
+            if (id === 'humanoid-vfi-diagnostics-timestamp') return tsEl;
+            if (id === 'humanoid-vfi-diagnostics-panel') return panelEl;
+            return null;
+        }
+    };
+
+    try {
+        visualizer.setHumanoidJogSolverMode('mj_restore_pre_w');
+        visualizer._getHumanoidAbsolutePose = () => absCurrent.slice();
+        visualizer._getHumanoidRelativePose = () => relCurrent.slice();
+        visualizer._getHumanoidManifoldJogSecondaryMetric = () => 'w_abs_vfi';
+        visualizer._runHumanoidMJRestorePreWStage = async (options) => {
+            callOrder.push({ stage: 'pre', options });
+            return {
+                state: 'active',
+                acceptedCandidate: true,
+                qApplied: qPre.slice()
+            };
+        };
+        visualizer._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstMJRestore = (...args) => {
+            callOrder.push({ stage: 'restore', args });
+            return true;
+        };
+
+        const result = await visualizer.updateHumanoidJointsFromAbsolutePoseTargetRelativeFirst(
+            absTarget.slice(),
+            q0.slice(),
+            true,
+            false,
+            false,
+            null,
+            null
+        );
+
+        assert.equal(result, true);
+        assert.deepEqual(callOrder.map((entry) => entry.stage), ['pre', 'restore']);
+        assert.equal(callOrder[0].options.controlMode, 'absolute');
+        assert.equal(callOrder[0].options.includeWaist, false);
+        assert.equal(callOrder[0].options.keepBodyZVertical, false);
+        assert.equal(callOrder[0].options.jogMetric, 'w_abs_hier');
+        assert.equal(callOrder[0].options.metricDirection, 'increase');
+        assert.deepEqual(callOrder[0].options.q0, q0);
+        assert.deepEqual(callOrder[0].options.dqAbsoluteProtectedTargetArray, absCurrent);
+        assert.deepEqual(callOrder[0].options.fixedRelativeProtectedTargetArray, relCurrent);
+        assert.deepEqual(callOrder[1].args[0], absTarget);
+        assert.deepEqual(callOrder[1].args[1], qPre);
+        assert.deepEqual(callOrder[1].args[5], relCurrent);
+        assert.equal(callOrder[1].args[7]?.solverMode, 'mj_restore_pre_w');
+        assert.equal(callOrder[1].args[7]?.preWState, 'applied');
+        assert.equal(callOrder[1].args[7]?.preWMetric, 'w_abs_hier');
+        assert.equal(callOrder[1].args[7]?.preWStart, 'q_pre');
+    } finally {
+        globalThis.document = originalDocument;
+    }
+});
+
+test('RobotVisualizer decoupled mj_restore_pre_w runs pre-w first with waist joints included and restores from q_pre while protecting current poses', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const q0 = [0.1, -0.2, 0.3];
+    const qPre = [0.4, -0.1, 0.2];
+    const absTarget = [1, 0, 0, 0, 0.02, 0, 0, 0];
+    const absCurrent = [1, 0, 0, 0, 0, 0, 0, 0];
+    const relCurrent = [0, 1, 0, 0, 0, 0, 0, 0];
+    const callOrder = [];
+
+    visualizer.setHumanoidJogSolverMode('mj_restore_pre_w');
+    visualizer._getHumanoidAbsolutePose = () => absCurrent.slice();
+    visualizer._getHumanoidRelativePose = () => relCurrent.slice();
+    visualizer._getHumanoidManifoldJogSecondaryMetric = () => 'w_abs_hier_vfi';
+    visualizer._runHumanoidMJRestorePreWStage = async (options) => {
+        callOrder.push({ stage: 'pre', options });
+        return {
+            state: 'active',
+            acceptedCandidate: true,
+            qApplied: qPre.slice()
+        };
+    };
+    visualizer._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstMJRestore = (...args) => {
+        callOrder.push({ stage: 'restore', args });
+        return true;
+    };
+
+    const result = await visualizer.updateHumanoidJointsFromAbsolutePoseTargetRelativeFirst(
+        absTarget.slice(),
+        q0.slice(),
+        true,
+        true,
+        false,
+        null,
+        null
+    );
+
+    assert.equal(result, true);
+    assert.deepEqual(callOrder.map((entry) => entry.stage), ['pre', 'restore']);
+    assert.equal(callOrder[0].options.controlMode, 'decoupled');
+    assert.equal(callOrder[0].options.includeWaist, true);
+    assert.equal(callOrder[0].options.keepBodyZVertical, false);
+    assert.deepEqual(callOrder[0].options.dqAbsoluteProtectedTargetArray, absCurrent);
+    assert.deepEqual(callOrder[0].options.fixedRelativeProtectedTargetArray, relCurrent);
+    assert.deepEqual(callOrder[1].args[1], qPre);
+    assert.equal(callOrder[1].args[3], true);
+    assert.equal(callOrder[1].args[4], false);
+    assert.deepEqual(callOrder[1].args[5], relCurrent);
+});
+
+test('RobotVisualizer decoupled-upright mj_restore_pre_w runs pre-w first with waist joints, body-z protection, and restores from q_pre', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const q0 = [0.1, -0.2, 0.3];
+    const qPre = [0.4, -0.1, 0.2];
+    const absTarget = [1, 0, 0, 0, 0.02, 0, 0, 0];
+    const absCurrent = [1, 0, 0, 0, 0, 0, 0, 0];
+    const relCurrent = [0, 1, 0, 0, 0, 0, 0, 0];
+    const callOrder = [];
+
+    visualizer.setHumanoidJogSolverMode('mj_restore_pre_w');
+    visualizer._getHumanoidAbsolutePose = () => absCurrent.slice();
+    visualizer._getHumanoidRelativePose = () => relCurrent.slice();
+    visualizer._getHumanoidManifoldJogSecondaryMetric = () => 'w_abs_hier_vfi';
+    visualizer._runHumanoidMJRestorePreWStage = async (options) => {
+        callOrder.push({ stage: 'pre', options });
+        return {
+            state: 'active',
+            acceptedCandidate: true,
+            qApplied: qPre.slice()
+        };
+    };
+    visualizer._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstMJRestore = (...args) => {
+        callOrder.push({ stage: 'restore', args });
+        return true;
+    };
+
+    const result = await visualizer.updateHumanoidJointsFromAbsolutePoseTargetRelativeFirst(
+        absTarget.slice(),
+        q0.slice(),
+        true,
+        true,
+        true,
+        null,
+        null
+    );
+
+    assert.equal(result, true);
+    assert.deepEqual(callOrder.map((entry) => entry.stage), ['pre', 'restore']);
+    assert.equal(callOrder[0].options.controlMode, 'decoupled-upright');
+    assert.equal(callOrder[0].options.includeWaist, true);
+    assert.equal(callOrder[0].options.keepBodyZVertical, true);
+    assert.deepEqual(callOrder[0].options.dqAbsoluteProtectedTargetArray, absCurrent);
+    assert.deepEqual(callOrder[0].options.fixedRelativeProtectedTargetArray, relCurrent);
+    assert.deepEqual(callOrder[1].args[1], qPre);
+    assert.equal(callOrder[1].args[3], true);
+    assert.equal(callOrder[1].args[4], true);
+    assert.deepEqual(callOrder[1].args[5], relCurrent);
+});
+
+test('RobotVisualizer mj_restore_pre_w falls back to q0 for stage 2 when pre-w is skipped, rejected, or failed', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const q0 = [0.1, -0.2, 0.3];
+    const absTarget = [1, 0, 0, 0, 0.02, 0, 0, 0];
+    const absCurrent = [1, 0, 0, 0, 0, 0, 0, 0];
+    const relCurrent = [0, 1, 0, 0, 0, 0, 0, 0];
+    const fallbackStates = [
+        'skipped(no_progress)',
+        'rejected(hard_constraints)',
+        'failed(thrown)'
+    ];
+    const originalDocument = globalThis.document;
+    const textEl = { textContent: '' };
+    const tsEl = { textContent: '' };
+    const panelEl = { classList: { toggle: () => {} } };
+
+    globalThis.document = {
+        getElementById: (id) => {
+            if (id === 'humanoid-vfi-diagnostics-text') return textEl;
+            if (id === 'humanoid-vfi-diagnostics-timestamp') return tsEl;
+            if (id === 'humanoid-vfi-diagnostics-panel') return panelEl;
+            return null;
+        }
+    };
+
+    try {
+        visualizer.setHumanoidJogSolverMode('mj_restore_pre_w');
+        visualizer._getHumanoidAbsolutePose = () => absCurrent.slice();
+        visualizer._getHumanoidRelativePose = () => relCurrent.slice();
+        visualizer._getHumanoidManifoldJogSecondaryMetric = () => 'w_abs_hier_vfi';
+
+        for (const state of fallbackStates) {
+            let restoreArgs = null;
+            visualizer._runHumanoidMJRestorePreWStage = async () => ({
+                state,
+                acceptedCandidate: false,
+                qApplied: [9, 9, 9]
+            });
+            visualizer._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstMJRestore = (...args) => {
+                restoreArgs = args;
+                return true;
+            };
+
+            const result = await visualizer.updateHumanoidJointsFromAbsolutePoseTargetRelativeFirst(
+                absTarget.slice(),
+                q0.slice(),
+                true,
+                false,
+                false,
+                null,
+                null
+            );
+
+            assert.equal(result, true, state);
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            assert.deepEqual(restoreArgs[1], q0, state);
+        }
+    } finally {
+        globalThis.document = originalDocument;
+    }
+});
+
+test('RobotVisualizer candidate-only decoupled pre-w disables arm-only fallback and stays candidate-only', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const q0 = [0.1, -0.2, 0.3];
+    const absTarget = [1, 0, 0, 0, 0, 0, 0, 0];
+    const relTarget = [0, 1, 0, 0, 0, 0, 0, 0];
+    let called = null;
+    visualizer._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstManifold = (...args) => {
+        called = args;
+        return Promise.resolve({
+            state: 'skipped(no_progress)',
+            acceptedCandidate: false,
+            qApplied: q0.slice()
+        });
+    };
+
+    const result = await visualizer._runHumanoidMJRestorePreWStage({
+        controlMode: 'decoupled',
+        q0: q0.slice(),
+        dqAbsoluteProtectedTargetArray: absTarget.slice(),
+        fixedRelativeProtectedTargetArray: relTarget.slice(),
+        enableJointLimitAvoidance: true,
+        includeWaist: true,
+        keepBodyZVertical: false,
+        jogMetric: 'w_abs_hier_vfi',
+        metricDirection: 'increase'
+    });
+
+    assert.equal(result.acceptedCandidate, false);
+    assert.ok(Array.isArray(called));
+    assert.equal(called[3], true);
+    assert.equal(called[6]?.candidateOnly, true);
+    assert.equal(called[6]?.allowArmOnlyFallback, false);
+    assert.equal(called[6]?.preferWorker, true);
+    assert.deepEqual(called[6]?.iterativeMetricProjectionPlan, {
+        metricIterations: 3,
+        restoreIterations: 1
+    });
+});
+
+test('RobotVisualizer candidate-only pre-w stage forwards mj_restore_pre_w solver identity into the manifold pass', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const q0 = [0.1, -0.2, 0.3];
+    const absTarget = [1, 0, 0, 0, 0, 0, 0, 0];
+    const relTarget = [0, 1, 0, 0, 0, 0, 0, 0];
+    let called = null;
+    visualizer._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstManifold = (...args) => {
+        called = args;
+        return Promise.resolve({
+            state: 'skipped(no_progress)',
+            acceptedCandidate: false,
+            qApplied: q0.slice()
+        });
+    };
+
+    await visualizer._runHumanoidMJRestorePreWStage({
+        controlMode: 'absolute',
+        q0: q0.slice(),
+        dqAbsoluteProtectedTargetArray: absTarget.slice(),
+        fixedRelativeProtectedTargetArray: relTarget.slice(),
+        enableJointLimitAvoidance: true,
+        includeWaist: false,
+        keepBodyZVertical: false,
+        jogMetric: 'w_abs_hier',
+        metricDirection: 'increase'
+    });
+
+    assert.ok(Array.isArray(called));
+    assert.equal(called[6]?.solverMode, 'mj_restore_pre_w');
+});
+
+test('RobotVisualizer plain mj_restore still ignores the selected w metric for jog commands', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const q0 = [0.1, -0.2, 0.3];
+    const absTarget = [1, 0, 0, 0, 0.02, 0, 0, 0];
+    const capturedCalls = [];
+
+    visualizer.setHumanoidJogSolverMode('mj_restore');
+    visualizer._getHumanoidManifoldJogSecondaryMetric = () => 'w_abs_hier_vfi';
+    visualizer._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstMJRestore = (...args) => {
+        capturedCalls.push(args);
+        return true;
+    };
+
+    const result = await visualizer.updateHumanoidJointsFromAbsolutePoseTargetRelativeFirst(
+        absTarget.slice(),
+        q0.slice(),
+        true,
+        false,
+        false,
+        null,
+        null
+    );
+
+    assert.equal(result, true);
+    assert.equal(capturedCalls.length, 1);
+    assert.equal(capturedCalls[0][7], undefined);
+});
+
+test('RobotVisualizer plain mj_restore absolute jogs force jogMetricOverride none on the local path', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const currentQ = [0.1, -0.2, 0.3];
+    const absCurrent = [1, 0, 0, 0, 0, 0, 0, 0];
+    const absTarget = [1, 0, 0, 0, 0.01, 0, 0, 0];
+    const relCurrent = [0, 1, 0, 0, 0, 0, 0, 0];
+
+    let manifoldArgs = null;
+    visualizer._canUseHumanoidJogMJRestoreWorker = () => false;
+    visualizer._getHumanoidAbsolutePose = () => absCurrent.slice();
+    visualizer._getHumanoidRelativePose = () => relCurrent.slice();
+    visualizer._getHumanoidManifoldJogSecondaryMetric = () => 'w_abs_hier_vfi';
+    visualizer._signedPoseError = () => [1];
+    visualizer._computePoseErrorNorm = () => 0.1;
+    visualizer._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstManifold = (...args) => {
+        manifoldArgs = args;
+        return Promise.resolve(true);
+    };
+
+    const result = await visualizer._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstMJRestore(
+        absTarget.slice(),
+        currentQ.slice(),
+        true,
+        false,
+        false,
+        relCurrent.slice(),
+        null,
+        null
+    );
+
+    assert.equal(result, true);
+    assert.ok(Array.isArray(manifoldArgs));
+    assert.equal(manifoldArgs[6]?.solverMode, 'mj_restore');
+    assert.equal(manifoldArgs[6]?.jogMetricOverride, 'none');
+    assert.equal(manifoldArgs[6]?.metricDirection, undefined);
+});
+
+test('RobotVisualizer mj_restore_pre_w absolute stage 2 preserves solver identity and pre-w metadata on the real local manifold path', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const currentQ = [0.1, -0.2, 0.3];
+    const absCurrent = [1, 0, 0, 0, 0, 0, 0, 0];
+    const absTarget = [1, 0, 0, 0, 0.01, 0, 0, 0];
+    const relCurrent = [0, 1, 0, 0, 0, 0, 0, 0];
+
+    let manifoldArgs = null;
+    visualizer._canUseHumanoidJogMJRestoreWorker = () => false;
+    visualizer._getHumanoidAbsolutePose = () => absCurrent.slice();
+    visualizer._getHumanoidRelativePose = () => relCurrent.slice();
+    visualizer._getHumanoidManifoldJogSecondaryMetric = () => 'w_abs_hier_vfi';
+    visualizer._signedPoseError = () => [1];
+    visualizer._computePoseErrorNorm = () => 0.1;
+    visualizer._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstManifold = (...args) => {
+        manifoldArgs = args;
+        return Promise.resolve(true);
+    };
+
+    const result = await visualizer._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstMJRestore(
+        absTarget.slice(),
+        currentQ.slice(),
+        true,
+        false,
+        false,
+        relCurrent.slice(),
+        null,
+        {
+            solverMode: 'mj_restore_pre_w',
+            preWState: 'applied',
+            preWMetric: 'w_abs_hier_vfi',
+            preWStart: 'q_pre'
+        }
+    );
+
+    assert.equal(result, true);
+    assert.ok(Array.isArray(manifoldArgs));
+    assert.equal(manifoldArgs[6]?.solverMode, 'mj_restore_pre_w');
+    assert.equal(manifoldArgs[6]?.preWState, 'applied');
+    assert.equal(manifoldArgs[6]?.preWMetric, 'w_abs_hier_vfi');
+    assert.equal(manifoldArgs[6]?.preWStart, 'q_pre');
+});
+
+test('RobotVisualizer manifold executor keeps mj_restore_pre_w identity on early failure paths', async () => {
+    const visualizer = new RobotVisualizer(null);
+
+    const result = await visualizer._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstManifold(
+        [1, 0, 0, 0, 0, 0, 0, 0],
+        [],
+        true,
+        false,
+        false,
+        null,
+        {
+            solverMode: 'mj_restore_pre_w'
+        }
+    );
+
+    assert.equal(result, false);
+    assert.equal(visualizer.lastIKSolveStatus?.solver, 'mj_restore_pre_w');
+    assert.equal(visualizer.lastIKSolveStatus?.reason, 'invalid_state');
+});
+
+test('RobotVisualizer plain mj_restore distance jogs do not consult the selected w metric', () => {
+    const visualizer = new RobotVisualizer(null);
+    const q0 = [0.1, -0.2, 0.3];
+    const absCurrent = [1, 0, 0, 0, 0, 0, 0, 0];
+    const relCurrent = [1, 0, 0, 0, 0, 0, 0, 0];
+    const originalWindow = globalThis.window;
+    globalThis.window = {
+        humanoidQ: q0.slice(),
+        DQModule: {
+            DQWrapper: {
+                createFromArray: (value) => value,
+                getTranslation: () => [0, 0, 0, 0]
+            },
+            Kinematics: {
+                distanceJacobian: () => [[0, 0, 0]]
+            }
+        }
+    };
+
+    let selectedMetricReads = 0;
+    visualizer.humanoidModel = {};
+    visualizer.setHumanoidJogSolverMode('mj_restore');
+    visualizer.humanoidWaistLength = 1;
+    visualizer.humanoidLeftArmLength = 1;
+    visualizer.humanoidRightArmLength = 1;
+    visualizer._getHumanoidManifoldJogSecondaryMetric = () => {
+        selectedMetricReads += 1;
+        return 'w_abs_hier_vfi';
+    };
+    visualizer._getHumanoidAbsolutePose = () => absCurrent.slice();
+    visualizer._getHumanoidRelativePose = () => relCurrent.slice();
+    visualizer._getHumanoidPose1 = () => relCurrent.slice();
+    visualizer._getHumanoidPose2 = () => relCurrent.slice();
+    visualizer._getHumanoidJointLimits = () => null;
+    visualizer._sliceHumanoidActiveJoints = () => [0.1, -0.2, 0.3];
+    visualizer._writeHumanoidActiveJoints = (_qInitial, qActive) => qActive.slice();
+    visualizer._buildHumanoidManifoldWaistXCorridor = () => ({ enabled: false, violation: 0 });
+    visualizer._buildManipulabilityVFIConstraints = () => null;
+    visualizer._computeModeCCTSM = () => ({ w: 1, w_vfi: 1 });
+    visualizer._computeProtectedManipulabilityGradient = () => [0, 0, 0];
+    visualizer._extractHumanoidWVFIConstraintDiagnostics = () => ({});
+    visualizer._extractHumanoidWaistXCorridorDiagnostics = () => ({});
+    visualizer._publishHumanoidJogDiagnostics = () => {};
+    visualizer._notifyHumanoidJogUnreachable = () => {};
+    visualizer._applyHumanoidJointSolution = () => true;
+    visualizer._getHumanoidAbsolutePoseJacobian = () => Array.from({ length: 8 }, () => [0, 0, 0]);
+    visualizer._getHumanoidRelativePoseJacobian = () => Array.from({ length: 8 }, () => [0, 0, 0]);
+    visualizer._getHumanoidSingleArmPoseJacobian = () => Array.from({ length: 8 }, () => [0, 0, 0]);
+
+    try {
+        visualizer._updateHumanoidJointsFromRelativeDistanceDeltaMJRestore(0.01, q0.slice(), true, false);
+        assert.equal(selectedMetricReads, 0);
+    } finally {
+        if (originalWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = originalWindow;
+        }
+    }
+});
+
+test('RobotVisualizer _runHumanoidMJRestorePreWStage skips unsupported control modes safely', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const currentQ = [0.1, -0.2, 0.3];
+    const dqAbsoluteTargetArray = [1, 0, 0, 0, 0, 0, 0, 0];
+    const relCurrentArray = [0, 1, 0, 0, 0, 0, 0, 0];
+    const unsupportedControlModes = ['unknown'];
+
+    let manifoldCalls = 0;
+    visualizer._getHumanoidAbsolutePose = () => dqAbsoluteTargetArray.slice();
+    visualizer._getHumanoidRelativePose = () => relCurrentArray.slice();
+    visualizer._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstManifold = () => {
+        manifoldCalls += 1;
+        return true;
+    };
+
+    for (const controlMode of unsupportedControlModes) {
+        manifoldCalls = 0;
+        const result = await visualizer._runHumanoidMJRestorePreWStage({
+            controlMode,
+            q0: currentQ.slice(),
+            dqAbsoluteProtectedTargetArray: dqAbsoluteTargetArray.slice(),
+            fixedRelativeProtectedTargetArray: relCurrentArray.slice(),
+            enableJointLimitAvoidance: true,
+            includeWaist: controlMode.includes('fullbody'),
+            keepBodyZVertical: false,
+            jogMetric: 'w_abs_hier',
+            metricDirection: 'increase'
+        });
+
+        assert.deepEqual(result, {
+            state: 'skipped(unsupported_control_mode)',
+            qPreEligible: false
+        }, controlMode);
+        assert.equal(manifoldCalls, 0, controlMode);
+    }
+});
+
+test('RobotVisualizer mj_restore relative variants route through the dedicated MJ relative helper', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const currentQ = [0.1, -0.2, 0.3];
+    const relTarget = [0, 1, 0, 0, 0, 0, 0, 0];
+    const variants = [
+        { includeWaist: false, label: 'arm-only' },
+        { includeWaist: true, label: 'fullbody' }
+    ];
+
+    let relativeMJCalls = 0;
+    visualizer.setHumanoidJogSolverMode('mj_restore');
+    visualizer._updateHumanoidJointsFromRelativePoseTargetAbsoluteFirstMJRestore = (...args) => {
+        relativeMJCalls += 1;
+        assert.equal(args[3], variants[relativeMJCalls - 1].includeWaist);
+        assert.equal(args[4], null);
+        return true;
+    };
+    visualizer._updateHumanoidJointsFromRelativePoseTargetAbsoluteFirstVFI = () => {
+        throw new Error('relative new qpJ fallback should not be used');
+    };
+
+    for (const variant of variants) {
+        const result = await visualizer.updateHumanoidJointsFromRelativePoseTargetAbsoluteFirst(
+            relTarget.slice(),
+            currentQ.slice(),
+            true,
+            variant.includeWaist,
+            null
+        );
+        assert.equal(result, true, variant.label);
+    }
+
+    assert.equal(relativeMJCalls, variants.length);
+});
+
+test('RobotVisualizer mj_restore_pre_w relative variants run pre-w first, then use the MJ relative helper', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const currentQ = [0.1, -0.2, 0.3];
+    const qPre = [0.4, -0.1, 0.2];
+    const absCurrent = [1, 0, 0, 0, 0, 0, 0, 0];
+    const relCurrent = [0, 1, 0, 0, 0, 0, 0, 0];
+    const relTarget = [0, 1, 0, 0, 0, 0, 0, 0];
+    const variants = [
+        { includeWaist: false, label: 'arm-only' },
+        { includeWaist: true, label: 'fullbody' }
+    ];
+
+    let preWCalls = 0;
+    let relativeMJCalls = 0;
+    const originalDocument = globalThis.document;
+    const textEl = { textContent: '' };
+    const tsEl = { textContent: '' };
+    const panelEl = { classList: { toggle: () => {} } };
+    globalThis.document = {
+        getElementById: (id) => {
+            if (id === 'humanoid-vfi-diagnostics-text') return textEl;
+            if (id === 'humanoid-vfi-diagnostics-timestamp') return tsEl;
+            if (id === 'humanoid-vfi-diagnostics-panel') return panelEl;
+            return null;
+        }
+    };
+    try {
+        visualizer.setHumanoidJogSolverMode('mj_restore_pre_w');
+        visualizer._getHumanoidAbsolutePose = () => absCurrent.slice();
+        visualizer._getHumanoidRelativePose = () => relCurrent.slice();
+        visualizer._getHumanoidManifoldJogSecondaryMetric = () => 'w_abs_hier_vfi';
+        visualizer._runHumanoidMJRestorePreWStage = async (options) => {
+            preWCalls += 1;
+            assert.equal(options.controlMode, variants[preWCalls - 1].includeWaist ? 'relative-fullbody' : 'relative');
+            assert.equal(options.jogMetric, 'w_abs_hier_vfi');
+            assert.equal(options.metricDirection, 'increase');
+            return { state: 'active', acceptedCandidate: true, qApplied: qPre.slice() };
+        };
+        visualizer._updateHumanoidJointsFromRelativePoseTargetAbsoluteFirstMJRestore = (...args) => {
+            relativeMJCalls += 1;
+            assert.equal(args[3], variants[relativeMJCalls - 1].includeWaist);
+            assert.equal(args[4]?.solverMode, 'mj_restore_pre_w');
+            assert.equal(args[4]?.preWState, 'applied');
+            assert.equal(args[4]?.preWMetric, 'w_abs_hier_vfi');
+            assert.equal(args[4]?.preWStart, 'q_pre');
+            assert.deepEqual(args[1], qPre);
+            visualizer.lastHumanoidJogDiagnostics = {
+                solverMode: 'mj_restore_pre_w',
+                renderedLines: ['pre_w: applied']
+            };
+            return true;
+        };
+        visualizer._updateHumanoidJointsFromRelativePoseTargetAbsoluteFirstVFI = () => {
+            throw new Error('relative new qpJ fallback should not be used');
+        };
+
+        for (const variant of variants) {
+            const result = await visualizer.updateHumanoidJointsFromRelativePoseTargetAbsoluteFirst(
+                relTarget.slice(),
+                currentQ.slice(),
+                true,
+                variant.includeWaist,
+                null
+            );
+            assert.equal(result, true, variant.label);
+            assert.equal(visualizer.lastHumanoidJogDiagnostics.solverMode, 'mj_restore_pre_w', variant.label);
+            assert.ok(
+                visualizer.lastHumanoidJogDiagnostics.renderedLines.some((line) => line.includes('pre_w: applied')),
+                variant.label
+            );
+        }
+
+        assert.equal(preWCalls, variants.length);
+        assert.equal(relativeMJCalls, variants.length);
+    } finally {
+        globalThis.document = originalDocument;
+    }
+});
+
+test('RobotVisualizer mj_restore_pre_w distance variants run pre-w first, then use the MJ distance helper', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const currentQ = [0.1, -0.2, 0.3];
+    const qPre = [0.4, -0.1, 0.2];
+    const absCurrent = [1, 0, 0, 0, 0, 0, 0, 0];
+    const relCurrent = [0, 1, 0, 0, 0, 0, 0, 0];
+    const variants = [
+        { includeWaist: false, label: 'arm-only' },
+        { includeWaist: true, label: 'fullbody' }
+    ];
+    const originalDocument = globalThis.document;
+    const textEl = { textContent: '' };
+    const tsEl = { textContent: '' };
+    const panelEl = { classList: { toggle: () => {} } };
+
+    let preWCalls = 0;
+    let distanceRestoreCalls = 0;
+    globalThis.document = {
+        getElementById: (id) => {
+            if (id === 'humanoid-vfi-diagnostics-text') return textEl;
+            if (id === 'humanoid-vfi-diagnostics-timestamp') return tsEl;
+            if (id === 'humanoid-vfi-diagnostics-panel') return panelEl;
+            return null;
+        }
+    };
+
+    try {
+        visualizer.setHumanoidJogSolverMode('mj_restore_pre_w');
+        visualizer._getHumanoidAbsolutePose = () => absCurrent.slice();
+        visualizer._getHumanoidRelativePose = () => relCurrent.slice();
+        visualizer._runHumanoidMJRestorePreWStage = async (options) => {
+            preWCalls += 1;
+            assert.equal(options.controlMode, variants[preWCalls - 1].includeWaist ? 'distance-fullbody' : 'distance');
+            assert.equal(options.jogMetric, 'w_abs_hier_vfi');
+            assert.equal(options.metricDirection, 'increase');
+            return { state: 'active', acceptedCandidate: true, qApplied: qPre.slice() };
+        };
+        visualizer._getHumanoidManifoldJogSecondaryMetric = () => 'w_abs_hier_vfi';
+        visualizer._updateHumanoidJointsFromRelativeDistanceDeltaMJRestore = (...args) => {
+            distanceRestoreCalls += 1;
+            assert.deepEqual(args[1], qPre);
+            assert.equal(args[3], variants[distanceRestoreCalls - 1].includeWaist);
+            assert.equal(args[4]?.solverMode, 'mj_restore_pre_w');
+            assert.equal(args[4]?.preWState, 'applied');
+            assert.equal(args[4]?.preWMetric, 'w_abs_hier_vfi');
+            assert.equal(args[4]?.preWStart, 'q_pre');
+            return true;
+        };
+
+        for (const variant of variants) {
+            const result = await visualizer.updateHumanoidJointsFromRelativeDistanceDelta(
+                0.01,
+                currentQ.slice(),
+                true,
+                variant.includeWaist
+            );
+            assert.equal(result, true, variant.label);
+        }
+
+        assert.equal(preWCalls, variants.length);
+        assert.equal(distanceRestoreCalls, variants.length);
+    } finally {
+        globalThis.document = originalDocument;
+    }
+});
+
+test('RobotVisualizer relative-target mj_restore applies task-aware metric refinement when jogMetricOverride is requested', async () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.humanoidModel = {};
+    visualizer.humanoidWaistLength = 4;
+    visualizer.humanoidLeftArmLength = 7;
+    visualizer.humanoidRightArmLength = 7;
+    const originalWindow = globalThis.window;
+    const originalDocument = globalThis.document;
+    const q0 = new Array(20).fill(0).map((_, index) => index * 0.01);
+    const absCurrent = [1, 0, 0, 0, 0, 0, 0, 0];
+    const relCurrent = [0, 1, 0, 0, 0, 0, 0, 0];
+    const Jabs = Array.from({ length: 8 }, (_, rowIndex) => {
+        const row = new Array(q0.length).fill(0);
+        row[4 + (rowIndex % 7)] = 0.1 * (rowIndex + 1);
+        return row;
+    });
+    const Jrel = Array.from({ length: 8 }, (_, rowIndex) => {
+        const row = new Array(q0.length).fill(0);
+        row[4 + ((rowIndex + 2) % 7)] = 0.08 * (rowIndex + 1);
+        return row;
+    });
+    const metricCalls = [];
+    let firstMetricAttempt = null;
+    globalThis.window = {
+        humanoidQ: q0.slice(),
+        DQModule: { DQWrapper: {} },
+        updateGlobalVariables: () => {},
+        updateRobotPose: () => {}
+    };
+    globalThis.document = {
+        getElementById: () => null
+    };
+    visualizer._getHumanoidAbsolutePose = () => absCurrent.slice();
+    visualizer._getHumanoidRelativePose = () => relCurrent.slice();
+    visualizer._getHumanoidAbsolutePoseJacobian = () => Jabs.map((row) => row.slice());
+    visualizer._getHumanoidRelativePoseJacobian = () => Jrel.map((row) => row.slice());
+    visualizer._buildManipulabilityVFIConstraints = () => [];
+    visualizer._computeModeCCTSM = (...args) => {
+        assert.equal(args[3], 'relative');
+        return {
+            taskMetricKind: 'relative_pose',
+            w_task_hier: 0.2,
+            w_task_hier_vfi: 0.17,
+            w_vfi: 0.17,
+            w: 0.2
+        };
+    };
+    visualizer._attemptHumanoidJogManifoldMetricRefinement = async (options) => {
+        metricCalls.push(options.metric);
+        if (!firstMetricAttempt) firstMetricAttempt = options;
+        const currentProblem = {
+            ...options.baseProblem,
+            q: options.baseQActive.slice(),
+            metadata: {
+                ...(options.baseProblem?.metadata || {}),
+                cctsm: {
+                    taskMetricKind: 'relative_pose',
+                    w_task_arm: 0.21,
+                    w_task_hier: options.metric === 'w_abs_hier' ? 0.22 : 0.2,
+                    w_task_arm_vfi: 0.18,
+                    w_task_hier_vfi: 0.17,
+                    w_vfi: 0.17,
+                    w: 0.2
+                }
+            }
+        };
+        return {
+            state: 'active',
+            before: 0.2,
+            after: 0.22,
+            applied: true,
+            finalProblem: currentProblem,
+            refineResult: {
+                converged: true,
+                reason: 'projected_candidate',
+                qApplied: options.baseQActive.slice(),
+                iterations: 0,
+                acceptedIterations: 1,
+                currentProblem
+            },
+            nullspaceResult: { reason: 'accepted' }
+        };
+    };
+    visualizer._publishHumanoidJogDiagnostics = () => {};
+    visualizer._applyHumanoidJointSolution = () => {};
+
+    try {
+        const result = await visualizer._updateHumanoidJointsFromRelativePoseTargetAbsoluteFirstMJRestore(
+            relCurrent.slice(),
+            q0.slice(),
+            true,
+            false,
+            {
+                solverMode: 'mj_restore',
+                jogMetricOverride: 'w_abs_hier',
+                metricDirection: 'increase'
+            }
+        );
+        assert.equal(result, true);
+        assert.ok(firstMetricAttempt);
+        assert.deepEqual(metricCalls, ['w_abs_arm', 'w_abs_hier']);
+        assert.equal(firstMetricAttempt.baseProblem?.metadata?.metricMode, 'relative');
+        assert.equal(firstMetricAttempt.baseProblem?.metadata?.cctsm?.taskMetricKind, 'relative_pose');
+        assert.equal(firstMetricAttempt.baseProblem?.metadata?.Jcmd?.length, 6);
+        assert.equal(firstMetricAttempt.baseProblem?.metadata?.protectedRows?.length, 6);
+    } finally {
+        globalThis.document = originalDocument;
+        if (originalWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = originalWindow;
+        }
+    }
+});
+
+test('RobotVisualizer relative-target mj_restore hierarchical VFI refinement uses task-arm primary before task-hier secondary', async () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.humanoidModel = {};
+    visualizer.humanoidWaistLength = 4;
+    visualizer.humanoidLeftArmLength = 7;
+    visualizer.humanoidRightArmLength = 7;
+    const originalWindow = globalThis.window;
+    const originalDocument = globalThis.document;
+    const q0 = new Array(20).fill(0).map((_, index) => index * 0.01);
+    const absCurrent = [1, 0, 0, 0, 0, 0, 0, 0];
+    const relCurrent = [0, 1, 0, 0, 0, 0, 0, 0];
+    const Jabs = Array.from({ length: 8 }, (_, rowIndex) => {
+        const row = new Array(q0.length).fill(0);
+        row[4 + (rowIndex % 7)] = 0.1 * (rowIndex + 1);
+        return row;
+    });
+    const Jrel = Array.from({ length: 8 }, (_, rowIndex) => {
+        const row = new Array(q0.length).fill(0);
+        row[4 + ((rowIndex + 2) % 7)] = 0.08 * (rowIndex + 1);
+        return row;
+    });
+    const metricCalls = [];
+    globalThis.window = {
+        humanoidQ: q0.slice(),
+        DQModule: { DQWrapper: {} },
+        updateGlobalVariables: () => {},
+        updateRobotPose: () => {}
+    };
+    globalThis.document = {
+        getElementById: () => null
+    };
+    visualizer._getHumanoidAbsolutePose = () => absCurrent.slice();
+    visualizer._getHumanoidRelativePose = () => relCurrent.slice();
+    visualizer._getHumanoidAbsolutePoseJacobian = () => Jabs.map((row) => row.slice());
+    visualizer._getHumanoidRelativePoseJacobian = () => Jrel.map((row) => row.slice());
+    visualizer._buildManipulabilityVFIConstraints = () => [];
+    visualizer._computeModeCCTSM = (...args) => {
+        assert.equal(args[3], 'relative');
+        return {
+            taskMetricKind: 'relative_pose',
+            w_task_arm_vfi: 0.14,
+            w_task_hier_vfi: 0.17,
+            w_task_arm: 0.16,
+            w_task_hier: 0.2,
+            w_vfi: 0.17,
+            w: 0.2
+        };
+    };
+    visualizer._attemptHumanoidJogManifoldMetricRefinement = async (options) => {
+        metricCalls.push(options.metric);
+        const currentProblem = {
+            ...options.baseProblem,
+            q: options.baseQActive.slice(),
+            metadata: {
+                ...(options.baseProblem?.metadata || {}),
+                cctsm: {
+                    taskMetricKind: 'relative_pose',
+                    w_task_arm_vfi: options.metric === 'w_abs_arm_vfi' ? 0.16 : 0.16,
+                    w_task_hier_vfi: options.metric === 'w_abs_hier_vfi' ? 0.19 : 0.17,
+                    w_task_arm: 0.16,
+                    w_task_hier: 0.2,
+                    w_vfi: 0.18,
+                    w: 0.2
+                }
+            },
+            equalities: {
+                blocks: {
+                    relative: { residual: [1e-6] },
+                    absolute: { residual: [1e-6] }
+                }
+            },
+            inequalities: {
+                wvfiFloor: { violation: 0 },
+                waistXCorridor: { violation: 0 }
+            }
+        };
+        return {
+            state: 'active',
+            before: 0.17,
+            after: options.metric === 'w_abs_arm_vfi' ? 0.18 : 0.19,
+            applied: true,
+            finalProblem: currentProblem,
+            refineResult: {
+                converged: true,
+                reason: 'projected_candidate',
+                qApplied: options.baseQActive.slice(),
+                iterations: 0,
+                acceptedIterations: 1,
+                currentProblem
+            },
+            nullspaceResult: { reason: 'accepted' }
+        };
+    };
+    visualizer._publishHumanoidJogDiagnostics = () => {};
+    visualizer._applyHumanoidJointSolution = () => {};
+
+    try {
+        const result = await visualizer._updateHumanoidJointsFromRelativePoseTargetAbsoluteFirstMJRestore(
+            relCurrent.slice(),
+            q0.slice(),
+            true,
+            false,
+            {
+                solverMode: 'mj_restore',
+                jogMetricOverride: 'w_abs_hier_vfi',
+                metricDirection: 'increase'
+            }
+        );
+        assert.equal(result, true);
+        assert.deepEqual(metricCalls, ['w_abs_arm_vfi', 'w_abs_hier_vfi']);
+    } finally {
+        globalThis.document = originalDocument;
+        if (originalWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = originalWindow;
+        }
+    }
+});
+
+test('RobotVisualizer relative-target metric-only hierarchical VFI refinement can use the worker-side secondary metric fast path', async () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.humanoidModel = {
+        solveAbsoluteTargetMJRestore: () => ({})
+    };
+    visualizer.humanoidWaistLength = 4;
+    visualizer.humanoidLeftArmLength = 7;
+    visualizer.humanoidRightArmLength = 7;
+    visualizer.humanoidMJWorkerModelSpec = { waistChain: [] };
+    const originalWindow = globalThis.window;
+    const originalDocument = globalThis.document;
+    const q0 = new Array(20).fill(0).map((_, index) => index * 0.01);
+    const absCurrent = [1, 0, 0, 0, 0, 0, 0, 0];
+    const relCurrent = [0, 1, 0, 0, 0, 0, 0, 0];
+    const Jabs = Array.from({ length: 8 }, (_, rowIndex) => {
+        const row = new Array(q0.length).fill(0);
+        row[4 + (rowIndex % 7)] = 0.1 * (rowIndex + 1);
+        return row;
+    });
+    const Jrel = Array.from({ length: 8 }, (_, rowIndex) => {
+        const row = new Array(q0.length).fill(0);
+        row[4 + ((rowIndex + 2) % 7)] = 0.08 * (rowIndex + 1);
+        return row;
+    });
+    let observedSecondaryMetricRequest = null;
+    let localMetricRefineCalls = 0;
+    globalThis.window = {
+        humanoidQ: q0.slice(),
+        DQModule: { DQWrapper: {} },
+        updateGlobalVariables: () => {},
+        updateRobotPose: () => {}
+    };
+    globalThis.document = {
+        getElementById: () => null
+    };
+    visualizer._canUseHumanoidJogMJRestoreWorker = () => true;
+    visualizer._getHumanoidJogMJWorkerClient = () => ({
+        solve: async ({ secondaryMetricRequest }) => {
+            observedSecondaryMetricRequest = secondaryMetricRequest;
+            return {
+                converged: true,
+                reason: 'converged',
+                iterations: 0,
+                acceptedIterations: 0,
+                lastAcceptedScale: 1,
+                commandResidualNorm: 0,
+                relativeResidualNorm: 0,
+                bodyResidualNorm: 0,
+                inequalityViolation: 0,
+                qApplied: q0.slice(4, 18),
+                secondaryMetric: 'w_abs_hier_vfi',
+                secondaryState: 'active',
+                secondaryBefore: 1.6,
+                secondaryAfter: 1.8,
+                secondaryApplied: true
+            };
+        }
+    });
+    visualizer._getHumanoidAbsolutePose = () => absCurrent.slice();
+    visualizer._getHumanoidRelativePose = () => relCurrent.slice();
+    visualizer._getHumanoidAbsolutePoseJacobian = () => Jabs.map((row) => row.slice());
+    visualizer._getHumanoidRelativePoseJacobian = () => Jrel.map((row) => row.slice());
+    visualizer._buildManipulabilityVFIConstraints = () => [];
+    visualizer._computeModeCCTSM = (...args) => {
+        assert.equal(args[3], 'relative');
+        return {
+            taskMetricKind: 'relative_pose',
+            w_task_arm_vfi: 1.7,
+            w_task_hier_vfi: 1.8,
+            w_task_arm: 1.75,
+            w_task_hier: 1.9,
+            w_vfi: 1.8,
+            w: 1.9
+        };
+    };
+    visualizer._attemptHumanoidJogManifoldMetricRefinement = async () => {
+        localMetricRefineCalls += 1;
+        throw new Error('local refine should not run when worker metric attempt is accepted');
+    };
+    visualizer._publishHumanoidJogDiagnostics = () => {};
+    visualizer._applyHumanoidJointSolution = () => {};
+
+    try {
+        const result = await visualizer._updateHumanoidJointsFromRelativePoseTargetAbsoluteFirstMJRestore(
+            relCurrent.slice(),
+            q0.slice(),
+            true,
+            false,
+            {
+                solverMode: 'mj_restore',
+                preferWorker: true,
+                jogMetricOverride: 'w_abs_hier_vfi',
+                metricDirection: 'increase'
+            }
+        );
+        assert.equal(result, true);
+        assert.deepEqual(observedSecondaryMetricRequest, {
+            metric: 'w_abs_hier_vfi',
+            metricMode: 'relative',
+            stepSize: 0.01,
+            restoreMaxIterations: 24,
+            waistActiveCount: 0,
+            hierarchicalVfiBlend: 1
+        });
+        assert.equal(localMetricRefineCalls, 0);
+    } finally {
+        globalThis.document = originalDocument;
+        if (originalWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = originalWindow;
+        }
+    }
+});
+
+test('RobotVisualizer distance-target mj_restore applies task-aware metric refinement when jogMetricOverride is requested', async () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.humanoidModel = {};
+    visualizer.humanoidWaistLength = 4;
+    visualizer.humanoidLeftArmLength = 7;
+    visualizer.humanoidRightArmLength = 7;
+    const originalWindow = globalThis.window;
+    const originalDocument = globalThis.document;
+    const q0 = new Array(20).fill(0).map((_, index) => index * 0.01);
+    const absCurrent = [1, 0, 0, 0, 0, 0, 0, 0];
+    const relCurrent = [1, 0, 0, 0, 0, 0.2, 0, 0.3];
+    const pose1 = [1, 0, 0, 0, 0, 0.1, 0, 0];
+    const pose2 = [1, 0, 0, 0, 0, -0.1, 0, 0];
+    const Jabs = Array.from({ length: 8 }, (_, rowIndex) => {
+        const row = new Array(q0.length).fill(0);
+        row[4 + (rowIndex % 7)] = 0.1 * (rowIndex + 1);
+        return row;
+    });
+    const Jrel = Array.from({ length: 8 }, (_, rowIndex) => {
+        const row = new Array(q0.length).fill(0);
+        row[4 + ((rowIndex + 1) % 7)] = 0.07 * (rowIndex + 1);
+        return row;
+    });
+    const Jpose1 = Array.from({ length: 8 }, (_, rowIndex) => {
+        const row = new Array(q0.length).fill(0);
+        row[4 + (rowIndex % 7)] = 0.05 * (rowIndex + 1);
+        return row;
+    });
+    const Jpose2 = Array.from({ length: 8 }, (_, rowIndex) => {
+        const row = new Array(q0.length).fill(0);
+        row[11 + (rowIndex % 7)] = 0.04 * (rowIndex + 1);
+        return row;
+    });
+    const metricCalls = [];
+    let firstMetricAttempt = null;
+    globalThis.window = {
+        humanoidQ: q0.slice(),
+        DQModule: {
+            DQWrapper: {
+                createFromArray: (value) => value,
+                getTranslation: () => [0, 0.2, 0, 0.3]
+            },
+            Kinematics: {
+                distanceJacobian: () => [new Array(q0.length).fill(0).map((_, index) => (index === 4 ? 0.12 : 0))]
+            }
+        },
+        updateGlobalVariables: () => {},
+        updateRobotPose: () => {}
+    };
+    globalThis.document = {
+        getElementById: () => null
+    };
+    visualizer._getHumanoidAbsolutePose = () => absCurrent.slice();
+    visualizer._getHumanoidRelativePose = () => relCurrent.slice();
+    visualizer._getHumanoidPose1 = () => pose1.slice();
+    visualizer._getHumanoidPose2 = () => pose2.slice();
+    visualizer._getHumanoidAbsolutePoseJacobian = () => Jabs.map((row) => row.slice());
+    visualizer._getHumanoidRelativePoseJacobian = () => Jrel.map((row) => row.slice());
+    visualizer._getHumanoidSingleArmPoseJacobian = (q, armIndex) => (armIndex === 1 ? Jpose1 : Jpose2).map((row) => row.slice());
+    visualizer._buildManipulabilityVFIConstraints = () => [];
+    visualizer._computeModeCCTSM = (...args) => {
+        assert.ok(args[3] === 'relative' || args[3] === 'distance');
+        return {
+            taskMetricKind: 'relative_pose',
+            w_task_hier: 0.12,
+            w_task_hier_vfi: 0.09,
+            w_vfi: 0.09,
+            w: 0.12
+        };
+    };
+    visualizer._attemptHumanoidJogManifoldMetricRefinement = async (options) => {
+        metricCalls.push(options.metric);
+        if (!firstMetricAttempt) firstMetricAttempt = options;
+        const currentProblem = {
+            ...options.baseProblem,
+            q: options.baseQActive.slice(),
+            metadata: {
+                ...(options.baseProblem?.metadata || {}),
+                cctsm: {
+                    taskMetricKind: 'relative_pose',
+                    w_task_arm: 0.13,
+                    w_task_hier: 0.14,
+                    w_task_arm_vfi: 0.1,
+                    w_task_hier_vfi: options.metric === 'w_abs_hier_vfi' ? 0.14 : 0.12,
+                    w_vfi: 0.14,
+                    w: 0.14
+                }
+            }
+        };
+        return {
+            state: 'active',
+            before: 0.12,
+            after: 0.14,
+            applied: true,
+            finalProblem: currentProblem,
+            refineResult: {
+                converged: true,
+                reason: 'projected_candidate',
+                qApplied: options.baseQActive.slice(),
+                iterations: 0,
+                acceptedIterations: 1,
+                currentProblem
+            },
+            nullspaceResult: { reason: 'accepted' }
+        };
+    };
+    visualizer._publishHumanoidJogDiagnostics = () => {};
+    visualizer._applyHumanoidJointSolution = () => {};
+
+    try {
+        const result = await visualizer._updateHumanoidJointsFromRelativeDistanceDeltaMJRestore(
+            0,
+            q0.slice(),
+            true,
+            false,
+            {
+                solverMode: 'mj_restore',
+                jogMetricOverride: 'w_abs_hier_vfi',
+                metricDirection: 'increase'
+            }
+        );
+        assert.equal(result, true);
+        assert.ok(firstMetricAttempt);
+        assert.deepEqual(metricCalls, ['w_abs_arm_vfi', 'w_abs_hier_vfi']);
+        assert.equal(firstMetricAttempt.baseProblem?.metadata?.metricMode, 'relative');
+        assert.equal(firstMetricAttempt.baseProblem?.metadata?.cctsm?.taskMetricKind, 'relative_pose');
+        assert.equal(firstMetricAttempt.baseProblem?.metadata?.Jcmd?.length, 6);
+        assert.equal(firstMetricAttempt.baseProblem?.metadata?.protectedRows?.length, 6);
+    } finally {
+        globalThis.document = originalDocument;
+        if (originalWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = originalWindow;
+        }
+    }
+});
+
+test('RobotVisualizer distance-target mj_restore hierarchical VFI refinement uses task-arm primary before task-hier secondary', async () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.humanoidModel = {};
+    visualizer.humanoidWaistLength = 4;
+    visualizer.humanoidLeftArmLength = 7;
+    visualizer.humanoidRightArmLength = 7;
+    const originalWindow = globalThis.window;
+    const originalDocument = globalThis.document;
+    const q0 = new Array(20).fill(0).map((_, index) => index * 0.01);
+    const absCurrent = [1, 0, 0, 0, 0, 0, 0, 0];
+    const relCurrent = [1, 0, 0, 0, 0, 0.2, 0, 0.3];
+    const pose1 = [1, 0, 0, 0, 0, 0.1, 0, 0];
+    const pose2 = [1, 0, 0, 0, 0, -0.1, 0, 0];
+    const Jabs = Array.from({ length: 8 }, (_, rowIndex) => {
+        const row = new Array(q0.length).fill(0);
+        row[4 + (rowIndex % 7)] = 0.1 * (rowIndex + 1);
+        return row;
+    });
+    const Jrel = Array.from({ length: 8 }, (_, rowIndex) => {
+        const row = new Array(q0.length).fill(0);
+        row[4 + ((rowIndex + 1) % 7)] = 0.07 * (rowIndex + 1);
+        return row;
+    });
+    const Jpose1 = Array.from({ length: 8 }, (_, rowIndex) => {
+        const row = new Array(q0.length).fill(0);
+        row[4 + (rowIndex % 7)] = 0.05 * (rowIndex + 1);
+        return row;
+    });
+    const Jpose2 = Array.from({ length: 8 }, (_, rowIndex) => {
+        const row = new Array(q0.length).fill(0);
+        row[11 + (rowIndex % 7)] = 0.04 * (rowIndex + 1);
+        return row;
+    });
+    const metricCalls = [];
+    globalThis.window = {
+        humanoidQ: q0.slice(),
+        DQModule: {
+            DQWrapper: {
+                createFromArray: (value) => value,
+                getTranslation: () => [0, 0.2, 0, 0.3]
+            },
+            Kinematics: {
+                distanceJacobian: () => [new Array(q0.length).fill(0).map((_, index) => (index === 4 ? 0.12 : 0))]
+            }
+        },
+        updateGlobalVariables: () => {},
+        updateRobotPose: () => {}
+    };
+    globalThis.document = {
+        getElementById: () => null
+    };
+    visualizer._getHumanoidAbsolutePose = () => absCurrent.slice();
+    visualizer._getHumanoidRelativePose = () => relCurrent.slice();
+    visualizer._getHumanoidPose1 = () => pose1.slice();
+    visualizer._getHumanoidPose2 = () => pose2.slice();
+    visualizer._getHumanoidAbsolutePoseJacobian = () => Jabs.map((row) => row.slice());
+    visualizer._getHumanoidRelativePoseJacobian = () => Jrel.map((row) => row.slice());
+    visualizer._getHumanoidSingleArmPoseJacobian = (q, armIndex) => (armIndex === 1 ? Jpose1 : Jpose2).map((row) => row.slice());
+    visualizer._buildManipulabilityVFIConstraints = () => [];
+    visualizer._computeModeCCTSM = (...args) => {
+        assert.ok(args[3] === 'relative' || args[3] === 'distance');
+        return {
+            taskMetricKind: 'relative_pose',
+            w_task_arm_vfi: 0.09,
+            w_task_hier_vfi: 0.12,
+            w_task_arm: 0.1,
+            w_task_hier: 0.14,
+            w_vfi: 0.12,
+            w: 0.14
+        };
+    };
+    visualizer._attemptHumanoidJogManifoldMetricRefinement = async (options) => {
+        metricCalls.push(options.metric);
+        const currentProblem = {
+            ...options.baseProblem,
+            q: options.baseQActive.slice(),
+            metadata: {
+                ...(options.baseProblem?.metadata || {}),
+                cctsm: {
+                    taskMetricKind: 'relative_pose',
+                    w_task_arm_vfi: 0.1,
+                    w_task_hier_vfi: options.metric === 'w_abs_hier_vfi' ? 0.14 : 0.12,
+                    w_task_arm: 0.1,
+                    w_task_hier: 0.14,
+                    w_vfi: 0.14,
+                    w: 0.14
+                }
+            },
+            equalities: {
+                blocks: {
+                    command: { residual: [1e-6] },
+                    absolute: { residual: [1e-6] },
+                    relative: { residual: [] }
+                }
+            },
+            inequalities: {
+                wvfiFloor: { violation: 0 },
+                waistXCorridor: { violation: 0 }
+            }
+        };
+        return {
+            state: 'active',
+            before: 0.12,
+            after: options.metric === 'w_abs_arm_vfi' ? 0.13 : 0.14,
+            applied: true,
+            finalProblem: currentProblem,
+            refineResult: {
+                converged: true,
+                reason: 'projected_candidate',
+                qApplied: options.baseQActive.slice(),
+                iterations: 0,
+                acceptedIterations: 1,
+                currentProblem
+            },
+            nullspaceResult: { reason: 'accepted' }
+        };
+    };
+    visualizer._publishHumanoidJogDiagnostics = () => {};
+    visualizer._applyHumanoidJointSolution = () => {};
+
+    try {
+        const result = await visualizer._updateHumanoidJointsFromRelativeDistanceDeltaMJRestore(
+            0,
+            q0.slice(),
+            true,
+            false,
+            {
+                solverMode: 'mj_restore',
+                jogMetricOverride: 'w_abs_hier_vfi',
+                metricDirection: 'increase'
+            }
+        );
+        assert.equal(result, true);
+        assert.deepEqual(metricCalls, ['w_abs_arm_vfi', 'w_abs_hier_vfi']);
+    } finally {
+        globalThis.document = originalDocument;
+        if (originalWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = originalWindow;
+        }
+    }
+});
+
+test('RobotVisualizer distance-target metric-only hierarchical VFI refinement can use the worker-side secondary metric fast path', async () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.humanoidModel = {
+        solveAbsoluteTargetMJRestore: () => ({})
+    };
+    visualizer.humanoidWaistLength = 4;
+    visualizer.humanoidLeftArmLength = 7;
+    visualizer.humanoidRightArmLength = 7;
+    visualizer.humanoidMJWorkerModelSpec = { waistChain: [] };
+    const originalWindow = globalThis.window;
+    const originalDocument = globalThis.document;
+    const q0 = new Array(20).fill(0).map((_, index) => index * 0.01);
+    const absCurrent = [1, 0, 0, 0, 0, 0, 0, 0];
+    const relCurrent = [1, 0, 0, 0, 0, 0.2, 0, 0.3];
+    const pose1 = [1, 0, 0, 0, 0, 0.1, 0, 0];
+    const pose2 = [1, 0, 0, 0, 0, -0.1, 0, 0];
+    const Jabs = Array.from({ length: 8 }, (_, rowIndex) => {
+        const row = new Array(q0.length).fill(0);
+        row[4 + (rowIndex % 7)] = 0.1 * (rowIndex + 1);
+        return row;
+    });
+    const Jrel = Array.from({ length: 8 }, (_, rowIndex) => {
+        const row = new Array(q0.length).fill(0);
+        row[4 + ((rowIndex + 2) % 7)] = 0.08 * (rowIndex + 1);
+        return row;
+    });
+    let observedSecondaryMetricRequest = null;
+    let localMetricRefineCalls = 0;
+    globalThis.window = {
+        humanoidQ: q0.slice(),
+        DQModule: {
+            DQWrapper: {
+                createFromArray: (value) => value,
+                getTranslation: () => [0, 0.2, 0, 0.3]
+            },
+            Kinematics: {
+                distanceJacobian: () => [new Array(q0.length).fill(0).map((_, index) => (index === 4 ? 0.12 : 0))]
+            }
+        },
+        updateGlobalVariables: () => {},
+        updateRobotPose: () => {}
+    };
+    globalThis.document = {
+        getElementById: () => null
+    };
+    visualizer._canUseHumanoidJogMJRestoreWorker = () => true;
+    visualizer._getHumanoidJogMJWorkerClient = () => ({
+        solve: async ({ secondaryMetricRequest }) => {
+            observedSecondaryMetricRequest = secondaryMetricRequest;
+            return {
+                converged: true,
+                reason: 'converged',
+                iterations: 0,
+                acceptedIterations: 0,
+                lastAcceptedScale: 1,
+                commandResidualNorm: 0,
+                relativeResidualNorm: 0,
+                bodyResidualNorm: 0,
+                inequalityViolation: 0,
+                qApplied: q0.slice(4, 18),
+                secondaryMetric: 'w_abs_hier_vfi',
+                secondaryState: 'active',
+                secondaryBefore: 1.7,
+                secondaryAfter: 1.9,
+                secondaryApplied: true
+            };
+        }
+    });
+    visualizer._getHumanoidAbsolutePose = () => absCurrent.slice();
+    visualizer._getHumanoidRelativePose = () => relCurrent.slice();
+    visualizer._getHumanoidPose1 = () => pose1.slice();
+    visualizer._getHumanoidPose2 = () => pose2.slice();
+    visualizer._getHumanoidAbsolutePoseJacobian = () => Jabs.map((row) => row.slice());
+    visualizer._getHumanoidRelativePoseJacobian = () => Jrel.map((row) => row.slice());
+    visualizer._buildManipulabilityVFIConstraints = () => [];
+    visualizer._computeModeCCTSM = (...args) => {
+        assert.ok(args[3] === 'relative' || args[3] === 'distance');
+        return {
+            taskMetricKind: 'relative_pose',
+            w_task_arm_vfi: 1.8,
+            w_task_hier_vfi: 1.9,
+            w_task_arm: 1.85,
+            w_task_hier: 2.0,
+            w_vfi: 1.9,
+            w: 2.0
+        };
+    };
+    visualizer._attemptHumanoidJogManifoldMetricRefinement = async () => {
+        localMetricRefineCalls += 1;
+        throw new Error('local refine should not run when worker metric attempt is accepted');
+    };
+    visualizer._publishHumanoidJogDiagnostics = () => {};
+    visualizer._applyHumanoidJointSolution = () => {};
+
+    try {
+        const result = await visualizer._updateHumanoidJointsFromRelativeDistanceDeltaMJRestore(
+            0,
+            q0.slice(),
+            true,
+            false,
+            {
+                solverMode: 'mj_restore',
+                preferWorker: true,
+                jogMetricOverride: 'w_abs_hier_vfi',
+                metricDirection: 'increase'
+            }
+        );
+        assert.equal(result, true);
+        assert.deepEqual(observedSecondaryMetricRequest, {
+            metric: 'w_abs_hier_vfi',
+            metricMode: 'relative',
+            stepSize: 0.01,
+            restoreMaxIterations: 24,
+            waistActiveCount: 0,
+            hierarchicalVfiBlend: 1
+        });
+        assert.equal(localMetricRefineCalls, 0);
+    } finally {
+        globalThis.document = originalDocument;
+        if (originalWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = originalWindow;
+        }
+    }
+});
+
+test('RobotVisualizer relative-target mj_restore metric-only accepts applied task-aware refinement using metric-button tolerances', async () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.humanoidModel = {};
+    visualizer.humanoidWaistLength = 4;
+    visualizer.humanoidLeftArmLength = 7;
+    visualizer.humanoidRightArmLength = 7;
+    const originalWindow = globalThis.window;
+    const originalDocument = globalThis.document;
+    const q0 = new Array(20).fill(0).map((_, index) => index * 0.01);
+    const absCurrent = [1, 0, 0, 0, 0, 0, 0, 0];
+    const relCurrent = [0, 1, 0, 0, 0, 0, 0, 0];
+    const Jabs = Array.from({ length: 8 }, (_, rowIndex) => {
+        const row = new Array(q0.length).fill(0);
+        row[4 + (rowIndex % 7)] = 0.1 * (rowIndex + 1);
+        return row;
+    });
+    const Jrel = Array.from({ length: 8 }, (_, rowIndex) => {
+        const row = new Array(q0.length).fill(0);
+        row[4 + ((rowIndex + 2) % 7)] = 0.08 * (rowIndex + 1);
+        return row;
+    });
+    globalThis.window = {
+        humanoidQ: q0.slice(),
+        DQModule: { DQWrapper: {} },
+        updateGlobalVariables: () => {},
+        updateRobotPose: () => {}
+    };
+    globalThis.document = {
+        getElementById: () => null
+    };
+    visualizer._getHumanoidAbsolutePose = () => absCurrent.slice();
+    visualizer._getHumanoidRelativePose = () => relCurrent.slice();
+    visualizer._getHumanoidAbsolutePoseJacobian = () => Jabs.map((row) => row.slice());
+    visualizer._getHumanoidRelativePoseJacobian = () => Jrel.map((row) => row.slice());
+    visualizer._buildManipulabilityVFIConstraints = () => [];
+    visualizer._computeModeCCTSM = () => ({
+        taskMetricKind: 'relative_pose',
+        w_task_hier: 2.009,
+        w_task_hier_vfi: 2.021,
+        w_vfi: 0.59,
+        w: 0.62
+    });
+    let publishedDiagnostics = null;
+    visualizer._publishHumanoidJogDiagnostics = (payload) => {
+        publishedDiagnostics = payload;
+    };
+    visualizer._applyHumanoidJointSolution = () => {};
+    visualizer._attemptHumanoidJogManifoldMetricRefinement = async (options) => {
+        const currentProblem = {
+            ...options.baseProblem,
+            q: options.baseQActive.slice(),
+            metadata: {
+                ...(options.baseProblem?.metadata || {}),
+                cctsm: {
+                    taskMetricKind: 'relative_pose',
+                    w_task_hier: 2.021,
+                    w_task_hier_vfi: 2.021,
+                    w_vfi: 0.59,
+                    w: 0.62
+                }
+            },
+            equalities: {
+                blocks: {
+                    relative: { residual: [1.31e-6] },
+                    absolute: { residual: [3.77e-5] }
+                }
+            },
+            inequalities: {
+                wvfiFloor: { violation: 0 },
+                waistXCorridor: { violation: 0 }
+            }
+        };
+        return {
+            state: 'active',
+            before: 2.009,
+            after: 2.021,
+            applied: true,
+            finalProblem: currentProblem,
+            refineResult: {
+                converged: true,
+                reason: 'projected_integration',
+                qApplied: options.baseQActive.slice(),
+                iterations: 0,
+                acceptedIterations: 1,
+                currentProblem
+            },
+            nullspaceResult: { reason: 'accepted' }
+        };
+    };
+
+    try {
+        const result = await visualizer._updateHumanoidJointsFromRelativePoseTargetAbsoluteFirstMJRestore(
+            relCurrent.slice(),
+            q0.slice(),
+            true,
+            false,
+            {
+                solverMode: 'mj_restore',
+                jogMetricOverride: 'w_abs_hier_vfi',
+                metricDirection: 'increase'
+            }
+        );
+        assert.equal(result, true);
+        assert.equal(visualizer.lastIKSolveStatus?.converged, true);
+        assert.equal(visualizer.lastIKSolveStatus?.reason, 'converged');
+        assert.equal(Number.isFinite(publishedDiagnostics?.timingSolveMs), true);
+        assert.equal(Number.isFinite(publishedDiagnostics?.timingTotalMs), true);
+    } finally {
+        globalThis.document = originalDocument;
+        if (originalWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = originalWindow;
+        }
+    }
+});
+
+test('RobotVisualizer distance-target mj_restore metric-only accepts applied task-aware refinement using metric-button tolerances', async () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.humanoidModel = {};
+    visualizer.humanoidWaistLength = 4;
+    visualizer.humanoidLeftArmLength = 7;
+    visualizer.humanoidRightArmLength = 7;
+    const originalWindow = globalThis.window;
+    const originalDocument = globalThis.document;
+    const q0 = new Array(20).fill(0).map((_, index) => index * 0.01);
+    const absCurrent = [1, 0, 0, 0, 0, 0, 0, 0];
+    const relCurrent = [1, 0, 0, 0, 0, 0.2, 0, 0.3];
+    const pose1 = [1, 0, 0, 0, 0, 0.1, 0, 0];
+    const pose2 = [1, 0, 0, 0, 0, -0.1, 0, 0];
+    const Jabs = Array.from({ length: 8 }, (_, rowIndex) => {
+        const row = new Array(q0.length).fill(0);
+        row[4 + (rowIndex % 7)] = 0.1 * (rowIndex + 1);
+        return row;
+    });
+    const Jrel = Array.from({ length: 8 }, (_, rowIndex) => {
+        const row = new Array(q0.length).fill(0);
+        row[4 + ((rowIndex + 1) % 7)] = 0.07 * (rowIndex + 1);
+        return row;
+    });
+    const Jpose1 = Array.from({ length: 8 }, (_, rowIndex) => {
+        const row = new Array(q0.length).fill(0);
+        row[4 + (rowIndex % 7)] = 0.05 * (rowIndex + 1);
+        return row;
+    });
+    const Jpose2 = Array.from({ length: 8 }, (_, rowIndex) => {
+        const row = new Array(q0.length).fill(0);
+        row[11 + (rowIndex % 7)] = 0.04 * (rowIndex + 1);
+        return row;
+    });
+    globalThis.window = {
+        humanoidQ: q0.slice(),
+        DQModule: {
+            DQWrapper: {
+                createFromArray: (value) => value,
+                getTranslation: () => [0, 0.2, 0, 0.3]
+            },
+            Kinematics: {
+                distanceJacobian: () => [new Array(q0.length).fill(0).map((_, index) => (index === 4 ? 0.12 : 0))]
+            }
+        },
+        updateGlobalVariables: () => {},
+        updateRobotPose: () => {}
+    };
+    globalThis.document = {
+        getElementById: () => null
+    };
+    visualizer._getHumanoidAbsolutePose = () => absCurrent.slice();
+    visualizer._getHumanoidRelativePose = () => relCurrent.slice();
+    visualizer._getHumanoidPose1 = () => pose1.slice();
+    visualizer._getHumanoidPose2 = () => pose2.slice();
+    visualizer._getHumanoidAbsolutePoseJacobian = () => Jabs.map((row) => row.slice());
+    visualizer._getHumanoidRelativePoseJacobian = () => Jrel.map((row) => row.slice());
+    visualizer._getHumanoidSingleArmPoseJacobian = (q, armIndex) => (armIndex === 1 ? Jpose1 : Jpose2).map((row) => row.slice());
+    visualizer._buildManipulabilityVFIConstraints = () => [];
+    visualizer._computeModeCCTSM = () => ({
+        taskMetricKind: 'relative_pose',
+        w_task_hier: 0.31,
+        w_task_hier_vfi: 0.34,
+        w_vfi: 0.34,
+        w: 0.31
+    });
+    let publishedDiagnostics = null;
+    visualizer._publishHumanoidJogDiagnostics = (payload) => {
+        publishedDiagnostics = payload;
+    };
+    visualizer._applyHumanoidJointSolution = () => {};
+    visualizer._attemptHumanoidJogManifoldMetricRefinement = async (options) => {
+        const currentProblem = {
+            ...options.baseProblem,
+            q: options.baseQActive.slice(),
+            metadata: {
+                ...(options.baseProblem?.metadata || {}),
+                cctsm: {
+                    taskMetricKind: 'relative_pose',
+                    w_task_hier: 0.34,
+                    w_task_hier_vfi: 0.34,
+                    w_vfi: 0.34,
+                    w: 0.31
+                }
+            },
+            equalities: {
+                blocks: {
+                    command: { residual: [1.31e-6] },
+                    absolute: { residual: [3.77e-5] },
+                    relative: { residual: [] }
+                }
+            },
+            inequalities: {
+                wvfiFloor: { violation: 0 },
+                waistXCorridor: { violation: 0 }
+            }
+        };
+        return {
+            state: 'active',
+            before: 0.31,
+            after: 0.34,
+            applied: true,
+            finalProblem: currentProblem,
+            refineResult: {
+                converged: true,
+                reason: 'projected_integration',
+                qApplied: options.baseQActive.slice(),
+                iterations: 0,
+                acceptedIterations: 1,
+                currentProblem
+            },
+            nullspaceResult: { reason: 'accepted' }
+        };
+    };
+
+    try {
+        const result = await visualizer._updateHumanoidJointsFromRelativeDistanceDeltaMJRestore(
+            0,
+            q0.slice(),
+            true,
+            false,
+            {
+                solverMode: 'mj_restore',
+                jogMetricOverride: 'w_abs_hier_vfi',
+                metricDirection: 'increase'
+            }
+        );
+        assert.equal(result, true);
+        assert.equal(visualizer.lastIKSolveStatus?.converged, true);
+        assert.equal(visualizer.lastIKSolveStatus?.reason, 'converged');
+        assert.equal(Number.isFinite(publishedDiagnostics?.timingSolveMs), true);
+        assert.equal(Number.isFinite(publishedDiagnostics?.timingTotalMs), true);
+    } finally {
+        globalThis.document = originalDocument;
+        if (originalWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = originalWindow;
+        }
+    }
+});
+
+test('RobotVisualizer _runHumanoidMJRestorePreWStage builds relative-task pre-w problems with relative metric semantics', async () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.humanoidWaistLength = 4;
+    visualizer.humanoidLeftArmLength = 7;
+    visualizer.humanoidRightArmLength = 7;
+    const q0 = new Array(20).fill(0).map((_, index) => index * 0.01);
+    const absCurrent = [1, 0, 0, 0, 0, 0, 0, 0];
+    const relCurrent = [0, 1, 0, 0, 0, 0, 0, 0];
+    const Jabs = Array.from({ length: 8 }, (_, rowIndex) => {
+        const row = new Array(q0.length).fill(0);
+        row[4 + (rowIndex % 7)] = 0.1 * (rowIndex + 1);
+        return row;
+    });
+    const Jrel = Array.from({ length: 8 }, (_, rowIndex) => {
+        const row = new Array(q0.length).fill(0);
+        row[4 + ((rowIndex + 2) % 7)] = 0.08 * (rowIndex + 1);
+        return row;
+    });
+    visualizer._getHumanoidAbsolutePose = () => absCurrent.slice();
+    visualizer._getHumanoidRelativePose = () => relCurrent.slice();
+    visualizer._getHumanoidAbsolutePoseJacobian = () => Jabs.map((row) => row.slice());
+    visualizer._getHumanoidRelativePoseJacobian = () => Jrel.map((row) => row.slice());
+    visualizer._buildManipulabilityVFIConstraints = () => [];
+    visualizer._computeModeCCTSM = (...args) => {
+        assert.equal(args[3], 'relative');
+        return {
+            taskMetricKind: 'relative_pose',
+            w_task_hier: 0.2,
+            w_task_hier_vfi: 0.17,
+            w_vfi: 0.17
+        };
+    };
+    let helperCalled = false;
+    visualizer._runHumanoidMJRestoreMetricOnlyPreWAttempt = async (options) => {
+        helperCalled = true;
+        const context = {
+            qInitialFull: q0.slice(),
+            qInitialActive: visualizer._sliceHumanoidActiveJoints(q0, 4, 14),
+            armStart: 4,
+            activeCount: 14,
+            hardLimits: null,
+            lowerBounds: new Array(14).fill(-Math.PI),
+            upperBounds: new Array(14).fill(Math.PI),
+            stepBounds: new Array(14).fill(0.05),
+            includeWaist: false,
+            keepBodyZVertical: false,
+            restoreProfile: {
+                referenceStiffness: 1,
+                referenceDamping: 0.35
+            }
+        };
+        const problem = options.buildProblem(context.qInitialActive.slice(), context);
+        assert.equal(problem?.metadata?.metricMode, 'relative');
+        assert.equal(problem?.metadata?.cctsm?.taskMetricKind, 'relative_pose');
+        assert.equal(problem?.metadata?.Jcmd?.length, 6);
+        assert.equal(problem?.metadata?.protectedRows?.length, 6);
+        return {
+            state: 'active',
+            applied: true,
+            qApplied: q0.slice(),
+            qPreEligible: true
+        };
+    };
+
+    await visualizer._runHumanoidMJRestorePreWStage({
+        controlMode: 'relative',
+        q0,
+        dqAbsoluteProtectedTargetArray: absCurrent.slice(),
+        fixedRelativeProtectedTargetArray: relCurrent.slice(),
+        enableJointLimitAvoidance: true,
+        includeWaist: false,
+        keepBodyZVertical: false,
+        jogMetric: 'w_abs_hier_vfi',
+        metricDirection: 'increase'
+    });
+    assert.equal(helperCalled, true);
+});
+
+test('RobotVisualizer _runHumanoidMJRestorePreWStage builds distance-task pre-w problems with relative-pose metric semantics', async () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.humanoidWaistLength = 4;
+    visualizer.humanoidLeftArmLength = 7;
+    visualizer.humanoidRightArmLength = 7;
+    const originalWindow = globalThis.window;
+    const q0 = new Array(20).fill(0).map((_, index) => index * 0.01);
+    const absCurrent = [1, 0, 0, 0, 0, 0, 0, 0];
+    const relCurrent = [1, 0, 0, 0, 0, 0.2, 0, 0.3];
+    const pose1 = [1, 0, 0, 0, 0, 0.1, 0, 0];
+    const pose2 = [1, 0, 0, 0, 0, -0.1, 0, 0];
+    const Jabs = Array.from({ length: 8 }, (_, rowIndex) => {
+        const row = new Array(q0.length).fill(0);
+        row[4 + (rowIndex % 7)] = 0.1 * (rowIndex + 1);
+        return row;
+    });
+    const Jrel = Array.from({ length: 8 }, (_, rowIndex) => {
+        const row = new Array(q0.length).fill(0);
+        row[4 + ((rowIndex + 1) % 7)] = 0.07 * (rowIndex + 1);
+        return row;
+    });
+    const Jpose1 = Array.from({ length: 8 }, (_, rowIndex) => {
+        const row = new Array(q0.length).fill(0);
+        row[4 + (rowIndex % 7)] = 0.05 * (rowIndex + 1);
+        return row;
+    });
+    const Jpose2 = Array.from({ length: 8 }, (_, rowIndex) => {
+        const row = new Array(q0.length).fill(0);
+        row[11 + (rowIndex % 7)] = 0.04 * (rowIndex + 1);
+        return row;
+    });
+    globalThis.window = {
+        ...(originalWindow || {}),
+        DQModule: {
+            DQWrapper: {
+                createFromArray: (value) => value,
+                getTranslation: (value) => value
+            },
+            Kinematics: {
+                distanceJacobian: () => [new Array(q0.length).fill(0).map((_, index) => (index === 4 ? 0.12 : 0))]
+            }
+        }
+    };
+    visualizer._getHumanoidAbsolutePose = () => absCurrent.slice();
+    visualizer._getHumanoidRelativePose = () => relCurrent.slice();
+    visualizer._getHumanoidPose1 = () => pose1.slice();
+    visualizer._getHumanoidPose2 = () => pose2.slice();
+    visualizer._getHumanoidAbsolutePoseJacobian = () => Jabs.map((row) => row.slice());
+    visualizer._getHumanoidRelativePoseJacobian = () => Jrel.map((row) => row.slice());
+    visualizer._getHumanoidSingleArmPoseJacobian = (q, armIndex) => (armIndex === 1 ? Jpose1 : Jpose2).map((row) => row.slice());
+    visualizer._buildManipulabilityVFIConstraints = () => [];
+    visualizer._computeModeCCTSM = (...args) => {
+        assert.equal(args[3], 'relative');
+        return {
+            taskMetricKind: 'relative_pose',
+            w_task_hier: 0.12,
+            w_task_hier_vfi: 0.09,
+            w_vfi: 0.09
+        };
+    };
+    let helperCalled = false;
+    visualizer._runHumanoidMJRestoreMetricOnlyPreWAttempt = async (options) => {
+        helperCalled = true;
+        const context = {
+            qInitialFull: q0.slice(),
+            qInitialActive: visualizer._sliceHumanoidActiveJoints(q0, 4, 14),
+            armStart: 4,
+            activeCount: 14,
+            hardLimits: null,
+            lowerBounds: new Array(14).fill(-Math.PI),
+            upperBounds: new Array(14).fill(Math.PI),
+            stepBounds: new Array(14).fill(0.05),
+            includeWaist: false,
+            keepBodyZVertical: false,
+            restoreProfile: {
+                referenceStiffness: 1,
+                referenceDamping: 0.35
+            }
+        };
+        const problem = options.buildProblem(context.qInitialActive.slice(), context);
+        assert.equal(problem?.metadata?.metricMode, 'relative');
+        assert.equal(problem?.metadata?.cctsm?.taskMetricKind, 'relative_pose');
+        assert.equal(problem?.metadata?.Jcmd?.length, 6);
+        assert.equal(problem?.metadata?.protectedRows?.length, 6);
+        return {
+            state: 'active',
+            applied: true,
+            qApplied: q0.slice(),
+            qPreEligible: true
+        };
+    };
+
+    try {
+        await visualizer._runHumanoidMJRestorePreWStage({
+            controlMode: 'distance',
+            q0,
+            dqAbsoluteProtectedTargetArray: absCurrent.slice(),
+            fixedRelativeProtectedTargetArray: relCurrent.slice(),
+            enableJointLimitAvoidance: true,
+            includeWaist: false,
+            keepBodyZVertical: false,
+            jogMetric: 'w_abs_hier',
+            metricDirection: 'increase'
+        });
+        assert.equal(helperCalled, true);
+    } finally {
+        if (originalWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = originalWindow;
+        }
+    }
+});
+
+test('RobotVisualizer _computeModeCCTSM provides task-specific manipulability aliases for robot1 and waist-body-link-xz', () => {
+    const visualizer = new RobotVisualizer(null);
+    const originalWindow = globalThis.window;
+    const q = new Array(20).fill(0);
+    const armJacobian = Array.from({ length: 8 }, () => new Array(q.length).fill(0));
+    armJacobian[1][4] = 0.5;
+    armJacobian[2][5] = 0.5;
+    armJacobian[3][6] = 0.5;
+    armJacobian[5][7] = 0.5;
+    armJacobian[6][8] = 0.5;
+    armJacobian[7][9] = 0.5;
+    const waistJacobian = Array.from({ length: 8 }, () => new Array(q.length).fill(0));
+    waistJacobian[5][0] = 0.5;
+    waistJacobian[7][1] = 0.5;
+    globalThis.window = {
+        ...(originalWindow || {}),
+        DQModule: {
+            DQWrapper: {
+                createFromArray: (value) => value,
+                getTranslation: () => [0, 0.1, 0, 0.2]
+            }
+        }
+    };
+    visualizer._getHumanoidPose1 = () => [1, 0, 0, 0, 0, 0, 0, 0];
+    visualizer._getHumanoidSingleArmPoseJacobian = () => armJacobian.map((row) => row.slice());
+    visualizer.humanoidModel = {
+        fkmEffector: () => [1, 0, 0, 0, 0, 0, 0, 0],
+        poseJacobianEffector: () => waistJacobian.map((row) => row.slice())
+    };
+
+    try {
+        const robot1Result = visualizer._computeModeCCTSM(q.slice(), 4, 7, 'robot1', [], { force: true });
+        assert.equal(robot1Result?.taskMetricKind, 'left_arm_pose');
+        assert.ok(Number.isFinite(robot1Result?.w_task_hier));
+
+        const waistResult = visualizer._computeModeCCTSM(q.slice(), 0, 4, 'waist-body-link-xz', [], { force: true });
+        assert.equal(waistResult?.taskMetricKind, 'body_link_xz');
+        assert.ok(Number.isFinite(waistResult?.w_task_hier));
+    } finally {
+        if (originalWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = originalWindow;
+        }
+    }
+});
+
+test('RobotVisualizer _computeModeCCTSM uses task-only command Jacobians for relative and distance task metrics', () => {
+    const visualizer = new RobotVisualizer(null);
+    const originalWindow = globalThis.window;
+    const q = new Array(20).fill(0);
+    const absPose = [1, 0, 0, 0, 0, 0, 0, 0];
+    const relPose = [1, 0, 0, 0, 0, 0.2, 0, 0.3];
+    const JA8 = Array.from({ length: 8 }, () => new Array(q.length).fill(0));
+    const JR8 = Array.from({ length: 8 }, () => new Array(q.length).fill(0));
+    JA8[1][4] = 0.5;
+    JA8[2][5] = 0.5;
+    JA8[3][6] = 0.5;
+    JA8[5][7] = 0.5;
+    JA8[6][8] = 0.5;
+    JA8[7][9] = 0.5;
+    JR8[1][4] = 0.5;
+    JR8[2][5] = 0.5;
+    JR8[3][6] = 0.5;
+    JR8[5][7] = 0.5;
+    JR8[6][8] = 0.5;
+    JR8[7][9] = 0.5;
+    const activeStart = 4;
+    const activeCount = 14;
+    globalThis.window = {
+        ...(originalWindow || {}),
+        DQModule: {
+            DQWrapper: {
+                createFromArray: (value) => value,
+                getTranslation: () => [0, 0.2, 0, 0.3]
+            },
+            Kinematics: {
+                distanceJacobian: () => {
+                    const row = new Array(q.length).fill(0);
+                    row[4] = 0.25;
+                    row[5] = 0.1;
+                    return [row];
+                }
+            }
+        }
+    };
+    visualizer._getHumanoidAbsolutePose = () => absPose.slice();
+    visualizer._getHumanoidRelativePose = () => relPose.slice();
+    visualizer._getHumanoidAbsolutePoseJacobian = () => JA8.map((row) => row.slice());
+    visualizer._getHumanoidRelativePoseJacobian = () => JR8.map((row) => row.slice());
+    visualizer._getHumanoidPose1 = () => [1, 0, 0, 0, 0, 0.1, 0, 0];
+    visualizer._getHumanoidPose2 = () => [1, 0, 0, 0, 0, -0.1, 0, 0];
+    visualizer._getHumanoidSingleArmPoseJacobian = () => JA8.map((row) => row.slice());
+
+    try {
+        const JAActive = JA8.map((row) => row.slice(activeStart, activeStart + activeCount));
+        const JRActive = JR8.map((row) => row.slice(activeStart, activeStart + activeCount));
+        const relativeTaskOnly = computeCombinedCCTSM(computeTwistJacobian(JRActive, relPose), []).w;
+        const relativeResult = visualizer._computeModeCCTSM(q.slice(), activeStart, activeCount, 'relative', [], { force: true });
+        assert.equal(relativeResult?.taskMetricKind, 'relative_pose');
+        assert.ok(Number.isFinite(relativeResult?.w_task_hier));
+        assert.ok(Math.abs(relativeResult.w_task_hier - relativeTaskOnly) < 1e-9);
+        assert.ok(Math.abs(relativeResult.w_task_hier - relativeResult.w) > 1e-6);
+
+        const distanceResult = visualizer._computeModeCCTSM(q.slice(), activeStart, activeCount, 'distance', [], { force: true });
+        assert.equal(distanceResult?.taskMetricKind, 'relative_pose');
+        assert.ok(Number.isFinite(distanceResult?.w_task_hier));
+        assert.ok(Math.abs(distanceResult.w_task_hier - relativeTaskOnly) < 1e-9);
+        assert.ok(Math.abs(distanceResult.w_task_hier - distanceResult.w) > 1e-6);
+    } finally {
+        if (originalWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = originalWindow;
+        }
+    }
+});
+
+test('RobotVisualizer plain mj_restore routes robot1 and robot2 jogs through the dedicated MJ single-arm helper', () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.humanoidMode = true;
+    visualizer.setHumanoidJogSolverMode('mj_restore');
+    const originalWindow = globalThis.window;
+    globalThis.window = {
+        humanoidQ: new Array(20).fill(0),
+        updateGlobalVariables: () => {},
+        updateRobotPose: () => {}
+    };
+
+    let mjCalls = 0;
+    visualizer._getHumanoidPose1 = () => [1, 0, 0, 0, 0, 0, 0, 0];
+    visualizer._getHumanoidPose2 = () => [1, 0, 0, 0, 0, 0, 0, 0];
+    visualizer._updateHumanoidSingleArmPoseTargetMJRestore = (...args) => {
+        mjCalls += 1;
+        assert.equal(args[mjCalls === 1 ? 2 : 2], mjCalls === 1 ? 1 : 2);
+        return true;
+    };
+    visualizer.updateHumanoidSingleArmPoseTarget = () => {
+        throw new Error('legacy single-arm backend should not be used');
+    };
+    const DQ = {
+        createFromArray: (value) => value,
+        getRotation: () => [1, 0, 0, 0],
+        translation: (x, y, z) => ({ x, y, z }),
+        multiply: (a, b) => ({ a, b }),
+        toArray: () => [1, 0, 0, 0, 0, 0, 0, 0]
+    };
+    globalThis.window.DQModule = { DQWrapper: DQ };
+
+    try {
+        visualizer.moveHumanoidLeftArmAlongAxis('x', 'positive');
+        visualizer.moveHumanoidRightArmAlongAxis('x', 'positive');
+        assert.equal(mjCalls, 2);
+    } finally {
+        if (originalWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = originalWindow;
+        }
+    }
+});
+
+test('RobotVisualizer plain mj_restore routes robot1-waist and robot2-waist jogs through the dedicated MJ single-arm-plus-waist helper', () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.humanoidMode = true;
+    visualizer.setHumanoidJogSolverMode('mj_restore');
+    const originalWindow = globalThis.window;
+    globalThis.window = {
+        humanoidQ: new Array(20).fill(0),
+        updateGlobalVariables: () => {},
+        updateRobotPose: () => {}
+    };
+
+    let mjCalls = 0;
+    visualizer._getHumanoidPose1 = () => [1, 0, 0, 0, 0, 0, 0, 0];
+    visualizer._getHumanoidPose2 = () => [1, 0, 0, 0, 0, 0, 0, 0];
+    visualizer._updateHumanoidSingleArmPlusWaistPoseTargetMJRestore = (...args) => {
+        mjCalls += 1;
+        assert.equal(args[2], mjCalls === 1 ? 1 : 2);
+        return true;
+    };
+    const DQ = {
+        createFromArray: (value) => value,
+        getRotation: () => [1, 0, 0, 0],
+        translation: (x, y, z) => ({ x, y, z }),
+        multiply: (a, b) => ({ a, b }),
+        toArray: () => [1, 0, 0, 0, 0, 0, 0, 0]
+    };
+    globalThis.window.DQModule = { DQWrapper: DQ };
+
+    try {
+        visualizer.moveHumanoidLeftArmWithWaistAlongAxis('x', 'positive');
+        visualizer.moveHumanoidRightArmWithWaistAlongAxis('x', 'positive');
+        assert.equal(mjCalls, 2);
+    } finally {
+        if (originalWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = originalWindow;
+        }
+    }
+});
+
+test('RobotVisualizer zero-space single-arm-plus-waist control keeps the opposite arm pose fixed via coordinated compensation', () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.humanoidMode = true;
+    visualizer.setHumanoidJogSolverMode('priority');
+    visualizer.humanoidModel = {};
+    visualizer.humanoidWaistLength = 1;
+    visualizer.humanoidLeftArmLength = 1;
+    visualizer.humanoidRightArmLength = 1;
+    visualizer.humanoidJointNames = ['waist0', 'ljoint1', 'rjoint1'];
+    visualizer.humanoidURDF = {
+        joints: {
+            waist0: { limit: { lower: -2, upper: 2 } },
+            ljoint1: { limit: { lower: -2, upper: 2 } },
+            rjoint1: { limit: { lower: -2, upper: 2 } }
+        }
+    };
+
+    const originalWindow = globalThis.window;
+    globalThis.window = {
+        humanoidQ: [0, 0, 0],
+        updateGlobalVariables: () => {},
+        updateRobotPose: () => {},
+        DQModule: { DQWrapper: {} }
+    };
+
+    const makePose = (trackedValue) => [1, trackedValue, 0, 0, 0, 0, 0, 0];
+    const makeJacobian = (waistCoeff, leftCoeff, rightCoeff) => {
+        const J = Array.from({ length: 8 }, () => [0, 0, 0]);
+        J[1] = [waistCoeff, leftCoeff, rightCoeff];
+        return J;
+    };
+
+    visualizer._getHumanoidPose1 = (q) => makePose(q[0]);
+    visualizer._getHumanoidPose2 = (q) => makePose(q[0] + q[2]);
+    visualizer._getHumanoidPose1Jacobian = () => makeJacobian(1, 0, 0);
+    visualizer._getHumanoidPose2Jacobian = () => makeJacobian(1, 0, 1);
+    visualizer.setHumanoidJoints = () => {};
+
+    try {
+        const targetPose1 = makePose(1);
+        const ok = visualizer.updateHumanoidSingleArmPlusWaistPoseTarget(targetPose1, [0, 0, 0], 1);
+        assert.equal(ok, true);
+        const qSolved = globalThis.window.humanoidQ.slice();
+        const pose1Solved = visualizer._getHumanoidPose1(qSolved);
+        const pose2Solved = visualizer._getHumanoidPose2(qSolved);
+
+        assert.ok(Math.abs((pose1Solved[1] || 0) - 1) < 1e-2);
+        assert.ok(Math.abs(pose2Solved[1] || 0) < 1e-2);
+        assert.ok(Math.abs(qSolved[0]) > 1e-3, 'waist joint should participate');
+        assert.ok(Math.abs(qSolved[2]) > 1e-3, 'opposite arm should compensate to keep its pose fixed');
+    } finally {
+        if (originalWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = originalWindow;
+        }
+    }
+});
+
+test('RobotVisualizer plain mj_restore routes waist-body-link-xz jogs through the dedicated MJ waist helper', () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.humanoidMode = true;
+    visualizer.setHumanoidJogSolverMode('mj_restore');
+    const originalWindow = globalThis.window;
+    globalThis.window = {
+        humanoidQ: new Array(20).fill(0),
+        updateGlobalVariables: () => {},
+        updateRobotPose: () => {}
+    };
+
+    visualizer.humanoidModel = {
+        fkmEffector: () => [1, 0, 0, 0, 0, 0, 0, 0]
+    };
+    visualizer._updateHumanoidWaistPoseTargetMJRestore = () => true;
+    visualizer.updateHumanoidWaistPoseTarget = () => {
+        throw new Error('legacy waist backend should not be used');
+    };
+    let called = 0;
+    visualizer._updateHumanoidWaistPoseTargetMJRestore = (...args) => {
+        called += 1;
+        return true;
+    };
+    const DQ = {
+        createFromArray: (value) => value,
+        getRotation: () => [1, 0, 0, 0],
+        translation: (x, y, z) => ({ x, y, z }),
+        multiply: (a, b) => ({ a, b }),
+        toArray: () => [1, 0, 0, 0, 0, 0, 0, 0]
+    };
+    globalThis.window.DQModule = { DQWrapper: DQ };
+
+    try {
+        visualizer.moveHumanoidWaistBodyLinkAlongAxis('x', 'positive');
+        assert.equal(called, 1);
+    } finally {
+        if (originalWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = originalWindow;
+        }
+    }
+});
+
+test('RobotVisualizer mj_restore_pre_w routes robot1 and robot2 jogs through a local special-mode pre-w stage before stage 2', async () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.humanoidMode = true;
+    visualizer.setHumanoidJogSolverMode('mj_restore_pre_w');
+    visualizer._getHumanoidManifoldJogSecondaryMetric = () => 'w_abs_hier_vfi';
+    const originalWindow = globalThis.window;
+    const currentQ = new Array(20).fill(0).map((_, index) => index * 0.01);
+    globalThis.window = {
+        humanoidQ: currentQ.slice(),
+        updateGlobalVariables: () => {},
+        updateRobotPose: () => {}
+    };
+
+    const preWOffsets = {
+        1: 0.11,
+        2: -0.07
+    };
+    const stage2Calls = [];
+    let preWCalls = 0;
+    visualizer._getHumanoidPose1 = () => [1, 0, 0, 0, 0, 0, 0, 0];
+    visualizer._getHumanoidPose2 = () => [1, 0, 0, 0, 0, 0, 0, 0];
+    visualizer._runHumanoidMJRestoreSpecialModePreWStage = async (options) => {
+        preWCalls += 1;
+        assert.equal(options.preWMetric, 'w_abs_hier_vfi');
+        assert.equal(options.mode, preWCalls === 1 ? 'robot1' : 'robot2');
+        const offset = preWOffsets[preWCalls];
+        return {
+            state: 'active',
+            applied: true,
+            qApplied: currentQ.map((value, index) => value + offset + index * 0.001),
+            qPreEligible: true
+        };
+    };
+    visualizer._updateHumanoidCustomPoseTargetMJRestore = (options) => {
+        stage2Calls.push(options);
+        assert.equal(options.solverMode, 'mj_restore_pre_w');
+        assert.equal(options.internalOptions?.preWState, 'applied');
+        assert.equal(options.internalOptions?.preWMetric, 'w_abs_hier_vfi');
+        assert.equal(options.internalOptions?.preWStart, 'q_pre');
+        const expectedOffset = preWOffsets[stage2Calls.length];
+        assert.ok(Array.isArray(options.currentQ));
+        assert.equal(options.currentQ[0], currentQ[0] + expectedOffset);
+        return true;
+    };
+
+    try {
+        await visualizer._updateHumanoidSingleArmPoseTargetMJRestore([1, 0, 0, 0, 0, 0, 0, 0], currentQ.slice(), 1, false, false, { solverMode: 'mj_restore_pre_w' });
+        await visualizer._updateHumanoidSingleArmPoseTargetMJRestore([1, 0, 0, 0, 0, 0, 0, 0], currentQ.slice(), 2, false, false, { solverMode: 'mj_restore_pre_w' });
+        assert.equal(preWCalls, 2);
+        assert.equal(stage2Calls.length, 2);
+    } finally {
+        if (originalWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = originalWindow;
+        }
+    }
+});
+
+test('RobotVisualizer mj_restore_pre_w routes robot1-waist and robot2-waist jogs through stage 2 with pre-w disabled_for_mode metadata', async () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.humanoidMode = true;
+    visualizer.setHumanoidJogSolverMode('mj_restore_pre_w');
+    visualizer._getHumanoidManifoldJogSecondaryMetric = () => 'w_abs_hier_vfi';
+    const originalWindow = globalThis.window;
+    const currentQ = new Array(20).fill(0).map((_, index) => index * 0.01);
+    globalThis.window = {
+        humanoidQ: currentQ.slice(),
+        updateGlobalVariables: () => {},
+        updateRobotPose: () => {}
+    };
+
+    const stage2Calls = [];
+    visualizer._getHumanoidPose1 = () => [1, 0, 0, 0, 0, 0, 0, 0];
+    visualizer._getHumanoidPose2 = () => [1, 0, 0, 0, 0, 0, 0, 0];
+    visualizer._updateHumanoidCustomPoseTargetMJRestore = (options) => {
+        stage2Calls.push(options);
+        assert.equal(options.solverMode, 'mj_restore_pre_w');
+        assert.equal(options.internalOptions?.preWState, 'disabled_for_mode');
+        assert.equal(options.internalOptions?.preWMetric, 'w_abs_hier_vfi');
+        assert.equal(options.internalOptions?.preWStart, 'q0');
+        assert.ok(Array.isArray(options.currentQ));
+        assert.equal(options.currentQ[0], currentQ[0]);
+        return true;
+    };
+
+    try {
+        await visualizer._updateHumanoidSingleArmPlusWaistPoseTargetMJRestore([1, 0, 0, 0, 0, 0, 0, 0], currentQ.slice(), 1, { solverMode: 'mj_restore_pre_w' });
+        await visualizer._updateHumanoidSingleArmPlusWaistPoseTargetMJRestore([1, 0, 0, 0, 0, 0, 0, 0], currentQ.slice(), 2, { solverMode: 'mj_restore_pre_w' });
+        assert.equal(stage2Calls.length, 2);
+    } finally {
+        if (originalWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = originalWindow;
+        }
+    }
+});
+
+test('RobotVisualizer mj_restore_pre_w routes waist-body-link-xz jogs through a local special-mode pre-w stage before stage 2', async () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.humanoidMode = true;
+    visualizer.setHumanoidJogSolverMode('mj_restore_pre_w');
+    visualizer._getHumanoidManifoldJogSecondaryMetric = () => 'w_abs_hier';
+    const originalWindow = globalThis.window;
+    const currentQ = new Array(20).fill(0).map((_, index) => index * 0.01);
+    globalThis.window = {
+        humanoidQ: currentQ.slice(),
+        updateGlobalVariables: () => {},
+        updateRobotPose: () => {}
+    };
+
+    visualizer.humanoidModel = {
+        fkmEffector: () => [1, 0, 0, 0, 0, 0, 0, 0],
+        poseJacobianEffector: () => [new Array(currentQ.length).fill(0)]
+    };
+    let preWCalls = 0;
+    let stage2Calls = 0;
+    visualizer._runHumanoidMJRestoreSpecialModePreWStage = async (options) => {
+        preWCalls += 1;
+        assert.equal(options.preWMetric, 'w_abs_hier');
+        assert.equal(options.includeWaist, true);
+        assert.equal(options.mode, 'waist-body-link-xz');
+        return {
+            state: 'active',
+            applied: true,
+            qApplied: currentQ.map((value, index) => value + 0.02 + index * 0.001),
+            qPreEligible: true
+        };
+    };
+    visualizer._updateHumanoidCustomPoseTargetMJRestore = (options) => {
+        stage2Calls += 1;
+        assert.equal(options.solverMode, 'mj_restore_pre_w');
+        assert.equal(options.internalOptions?.preWState, 'applied');
+        assert.equal(options.internalOptions?.preWMetric, 'w_abs_hier');
+        assert.equal(options.internalOptions?.preWStart, 'q_pre');
+        assert.equal(options.currentQ[0], currentQ[0] + 0.02);
+        return true;
+    };
+    const DQ = {
+        createFromArray: (value) => value,
+        getRotation: () => [1, 0, 0, 0],
+        translation: (x, y, z) => ({ x, y, z }),
+        multiply: (a, b) => ({ a, b }),
+        toArray: () => [1, 0, 0, 0, 0, 0, 0, 0]
+    };
+    globalThis.window.DQModule = { DQWrapper: DQ };
+
+    try {
+        await visualizer.moveHumanoidWaistBodyLinkAlongAxis('x', 'positive');
+        assert.equal(preWCalls, 1);
+        assert.equal(stage2Calls, 1);
+    } finally {
+        if (originalWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = originalWindow;
+        }
+    }
+});
+
+test('RobotVisualizer publishes rendered mj_restore_pre_w diagnostics lines for applied, skipped, and disabled states', () => {
+    const visualizer = new RobotVisualizer(null);
+    const originalDocument = globalThis.document;
+    const textEl = { textContent: '' };
+    const tsEl = { textContent: '' };
+    const panelEl = { classList: { toggle: () => {} } };
+
+    globalThis.document = {
+        getElementById: (id) => {
+            if (id === 'humanoid-vfi-diagnostics-text') return textEl;
+            if (id === 'humanoid-vfi-diagnostics-timestamp') return tsEl;
+            if (id === 'humanoid-vfi-diagnostics-panel') return panelEl;
+            return null;
+        }
+    };
+
+    try {
+        visualizer._publishHumanoidJogDiagnostics(buildHumanoidJogMJDiagnostics({
+            solverMode: 'mj_restore_pre_w',
+            modeTag: 'absolute-target',
+            preWState: 'applied',
+            preWMetric: 'w_abs_hier',
+            preWStart: 'q_pre'
+        }));
+        assert.ok(visualizer.lastHumanoidJogDiagnostics.renderedLines.includes('pre_w: applied'));
+        assert.ok(visualizer.lastHumanoidJogDiagnostics.renderedLines.includes('pre_w_metric: w_abs_hier'));
+        assert.ok(visualizer.lastHumanoidJogDiagnostics.renderedLines.includes('task_pre_w: w_abs_hier'));
+        assert.ok(visualizer.lastHumanoidJogDiagnostics.renderedLines.includes('pre_w_start: q_pre'));
+
+        visualizer._publishHumanoidJogDiagnostics(buildHumanoidJogMJDiagnostics({
+            solverMode: 'mj_restore_pre_w',
+            modeTag: 'absolute-target',
+            preWState: 'skipped(no_progress)',
+            preWMetric: 'w_abs_hier',
+            preWStart: 'q0'
+        }));
+        assert.ok(visualizer.lastHumanoidJogDiagnostics.renderedLines.includes('pre_w: skipped(no_progress)'));
+        assert.ok(visualizer.lastHumanoidJogDiagnostics.renderedLines.includes('pre_w_metric: w_abs_hier'));
+        assert.ok(visualizer.lastHumanoidJogDiagnostics.renderedLines.includes('task_pre_w: w_abs_hier'));
+        assert.ok(visualizer.lastHumanoidJogDiagnostics.renderedLines.includes('pre_w_start: q0'));
+
+        visualizer._publishHumanoidJogDiagnostics(buildHumanoidJogMJDiagnostics({
+            solverMode: 'mj_restore_pre_w',
+            modeTag: 'relative-target',
+            jogMetric: 'w_abs_hier_vfi',
+            jogMetricState: 'active',
+            jogMetricBefore: 1.2,
+            jogMetricAfter: 1.3,
+            jogMetricApplied: true,
+            preWState: 'disabled_for_mode',
+            preWMetric: 'w_abs_hier_vfi',
+            preWStart: 'q0'
+        }));
+        assert.ok(visualizer.lastHumanoidJogDiagnostics.renderedLines.includes('task_w: w_rel_hier_vfi'));
+        assert.ok(visualizer.lastHumanoidJogDiagnostics.renderedLines.includes('pre_w: disabled_for_mode'));
+        assert.ok(visualizer.lastHumanoidJogDiagnostics.renderedLines.includes('pre_w_metric: w_abs_hier_vfi'));
+        assert.ok(visualizer.lastHumanoidJogDiagnostics.renderedLines.includes('task_pre_w: w_rel_hier_vfi'));
+        assert.ok(visualizer.lastHumanoidJogDiagnostics.renderedLines.includes('pre_w_start: q0'));
+    } finally {
+        globalThis.document = originalDocument;
+    }
+});
+
+test('RobotVisualizer worker queue preserves mj_restore_pre_w solver identity and pre-w metadata when draining', async () => {
+    const visualizer = new RobotVisualizer(null);
+    let manifoldArgs = null;
+    let resolveCall = null;
+    const called = new Promise((resolve) => {
+        resolveCall = resolve;
+    });
+    visualizer._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstManifold = (...args) => {
+        manifoldArgs = args;
+        resolveCall();
+        return Promise.resolve(true);
+    };
+
+    const enqueued = visualizer._enqueueHumanoidJogMJRestoreWorkerRequest({
+        dqAbsoluteTargetArray: [1, 0, 0, 0, 0, 0, 0, 0],
+        currentQ: [0.1, -0.2, 0.3],
+        enableJointLimitAvoidance: true,
+        includeWaist: false,
+        keepBodyZVertical: false,
+        fixedRelativeTargetArray: [0, 1, 0, 0, 0, 0, 0, 0],
+        translationAxisGuard: null,
+        solverMode: 'mj_restore_pre_w',
+        jogMetricOverride: 'none',
+        metricDirection: 'increase',
+        preWState: 'applied',
+        preWMetric: 'w_abs_hier',
+        preWStart: 'q_pre'
+    });
+
+    assert.equal(enqueued, true);
+    await called;
+    assert.ok(Array.isArray(manifoldArgs));
+    assert.equal(manifoldArgs[6]?.solverMode, 'mj_restore_pre_w');
+    assert.equal(manifoldArgs[6]?.preWState, 'applied');
+    assert.equal(manifoldArgs[6]?.preWMetric, 'w_abs_hier');
+    assert.equal(manifoldArgs[6]?.preWStart, 'q_pre');
+});
+
+test('RobotVisualizer routes metric-only hierarchical w_abs_hier_vfi MJ requests through the worker queue like w_abs_hier', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const currentQ = [0.1, -0.2, 0.3];
+    const absTarget = [1, 0, 0, 0, 0, 0, 0, 0];
+    const relTarget = [0, 1, 0, 0, 0, 0, 0, 0];
+
+    let enqueued = false;
+    let manifoldArgs = null;
+    visualizer._canUseHumanoidJogMJRestoreWorker = () => true;
+    visualizer._getHumanoidAbsolutePose = () => absTarget.slice();
+    visualizer._getHumanoidRelativePose = () => relTarget.slice();
+    visualizer._enqueueHumanoidJogMJRestoreWorkerRequest = () => {
+        enqueued = true;
+        return true;
+    };
+    visualizer._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstManifold = (...args) => {
+        manifoldArgs = args;
+        return Promise.resolve(true);
+    };
+
+    const result = await visualizer._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstMJRestore(
+        absTarget.slice(),
+        currentQ.slice(),
+        false,
+        false,
+        false,
+        relTarget.slice(),
+        null,
+        {
+            jogMetricOverride: 'w_abs_hier_vfi',
+            metricDirection: 'increase'
+        }
+    );
+
+    assert.equal(result, true);
+    assert.equal(enqueued, true);
+    assert.equal(manifoldArgs, null);
+});
+
+test('RobotVisualizer iterative metric projection plan runs 15 metric passes followed by 35 restore passes', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const evaluateProblem = (qActive) => ({
+        q: qActive.slice(),
+        equalities: {
+            activeResidualNorm: 0
+        },
+        inequalities: {
+            wvfiFloor: { violation: 0 },
+            waistXCorridor: { violation: 0 }
+        },
+        metadata: {
+            cctsm: { marker: qActive[0] }
+        }
+    });
+    let metricPasses = 0;
+    let restorePasses = 0;
+    visualizer._evaluateHumanoidJogManifoldMetricValue = (_metric, cctsm) => cctsm?.marker ?? Number.NaN;
+    visualizer._attemptHumanoidJogManifoldMetricRefinement = async ({ baseQActive }) => {
+        metricPasses += 1;
+        const qApplied = [(baseQActive[0] ?? 0) + 1];
+        const finalProblem = evaluateProblem(qApplied);
+        return {
+            metric: 'w_abs_hier_vfi',
+            state: 'active',
+            before: qApplied[0] - 1,
+            after: qApplied[0],
+            applied: true,
+            axisLabel: '',
+            nullspaceResult: { accepted: true, stepNorm: 1 },
+            refineResult: {
+                converged: true,
+                reason: 'projected_candidate',
+                qApplied,
+                iterations: 0,
+                acceptedIterations: 1,
+                lastAcceptedScale: 1,
+                currentProblem: finalProblem
+            },
+            finalProblem,
+            directionResult: { applied: true, reason: 'improved', before: qApplied[0] - 1, after: qApplied[0] }
+        };
+    };
+    const restoreFn = async ({ qInitial }) => {
+        restorePasses += 1;
+        const qApplied = [(qInitial[0] ?? 0) + 1];
+        const currentProblem = evaluateProblem(qApplied);
+        return {
+            converged: true,
+            reason: 'converged',
+            qApplied,
+            iterations: 1,
+            acceptedIterations: 1,
+            lastAcceptedScale: 1,
+            currentProblem
+        };
+    };
+
+    const result = await visualizer._runHumanoidIterativeMetricProjectionPlan({
+        baseProblem: evaluateProblem([0]),
+        baseQActive: [0],
+        metric: 'w_abs_hier_vfi',
+        direction: 'increase',
+        evaluateProblem,
+        armStart: 0,
+        activeCount: 1,
+        activeLimits: null,
+        lowerBounds: [-10],
+        upperBounds: [10],
+        stepBounds: [10],
+        wvfiMin: 0,
+        restoreMaxIterations: 1,
+        damping: 1e-4,
+        minScale: 1e-6,
+        reductionFactor: 0.5,
+        equalityTolerance: 1e-12,
+        inequalityTolerance: 1e-12,
+        stepSize: 0.01,
+        restoreFn,
+        restoreConfig: {
+            referenceStiffness: 1,
+            referenceDamping: 0.35
+        },
+        metricIterations: 15,
+        restoreIterations: 35
+    });
+
+    assert.equal(metricPasses, 15);
+    assert.equal(restorePasses, 35);
+    assert.equal(result.applied, true);
+    assert.equal(result.after, 50);
+    assert.equal(result.refineResult?.qApplied?.[0], 50);
+});
+
+test('RobotVisualizer routes metric-only w_abs_vfi MJ requests to the local solver instead of the worker queue', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const currentQ = [0.1, -0.2, 0.3];
+    const absTarget = [1, 0, 0, 0, 0, 0, 0, 0];
+    const relTarget = [0, 1, 0, 0, 0, 0, 0, 0];
+
+    let enqueued = false;
+    let manifoldArgs = null;
+    visualizer._canUseHumanoidJogMJRestoreWorker = () => true;
+    visualizer._getHumanoidAbsolutePose = () => absTarget.slice();
+    visualizer._getHumanoidRelativePose = () => relTarget.slice();
+    visualizer._enqueueHumanoidJogMJRestoreWorkerRequest = () => {
+        enqueued = true;
+        return true;
+    };
+    visualizer._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstManifold = (...args) => {
+        manifoldArgs = args;
+        return Promise.resolve(true);
+    };
+
+    const result = await visualizer._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstMJRestore(
+        absTarget.slice(),
+        currentQ.slice(),
+        false,
+        false,
+        false,
+        relTarget.slice(),
+        null,
+        {
+            jogMetricOverride: 'w_abs_vfi',
+            metricDirection: 'increase'
+        }
+    );
+
+    assert.equal(result, true);
+    assert.equal(enqueued, false);
+    assert.ok(Array.isArray(manifoldArgs));
+    assert.equal(manifoldArgs[6]?.solverMode, 'mj_restore');
+    assert.equal(manifoldArgs[6]?.preferWorker, false);
+    assert.equal(manifoldArgs[6]?.jogMetricOverride, 'w_abs_vfi');
+    assert.equal(manifoldArgs[6]?.metricDirection, 'increase');
+});
+
+test('RobotVisualizer routes full-body upright mj_restore pose jogs with waist regularization to the local solver', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const currentQ = [0.1, -0.2, 0.3];
+    const absCurrent = [1, 0, 0, 0, 0, 0, 0, 0];
+    const absTarget = [1, 0, 0, 0, -0.01, 0, 0, 0];
+    const relCurrent = [1, 0, 0, 0, 0, 0, 0, 0];
+    visualizer.humanoidWaistLength = 4;
+    visualizer.humanoidLeftArmLength = 7;
+    visualizer.humanoidRightArmLength = 7;
+
+    let enqueued = false;
+    let manifoldArgs = null;
+    visualizer._canUseHumanoidJogMJRestoreWorker = () => true;
+    visualizer._getHumanoidAbsolutePose = () => absCurrent.slice();
+    visualizer._getHumanoidRelativePose = () => relCurrent.slice();
+    visualizer._signedPoseError = () => [1];
+    visualizer._computePoseErrorNorm = () => 0.1;
+    visualizer._enqueueHumanoidJogMJRestoreWorkerRequest = () => {
+        enqueued = true;
+        return true;
+    };
+    visualizer._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstManifold = (...args) => {
+        manifoldArgs = args;
+        return Promise.resolve(true);
+    };
+
+    const result = await visualizer._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstMJRestore(
+        absTarget.slice(),
+        currentQ.slice(),
+        false,
+        true,
+        true,
+        relCurrent.slice(),
+        null,
+        {
+            jogMetricOverride: 'none'
+        }
+    );
+
+    assert.equal(result, true);
+    assert.equal(enqueued, false);
+    assert.ok(Array.isArray(manifoldArgs));
+    assert.equal(manifoldArgs[6]?.solverMode, 'mj_restore');
+    assert.equal(manifoldArgs[6]?.preferWorker, false);
+});
+
+test('RobotVisualizer exposes _computePoseErrorNorm for hierarchical manipulability helpers', () => {
+    const visualizer = new RobotVisualizer(null);
+    assert.equal(typeof visualizer._computePoseErrorNorm, 'function');
+    assert.equal(visualizer._computePoseErrorNorm([3, 4]), 5);
+});
+
+test('RobotVisualizer manifold jog metric refinement computes stepNorm without throwing', async () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer._computeHumanoidJogManifoldMetricGradient = () => [0, 1];
+    visualizer._evaluateHumanoidJogManifoldMetricValue = (_metric, cctsm) => cctsm?.w_abs ?? Number.NaN;
+
+    const evaluateProblem = (qActive) => ({
+        q: qActive.slice(),
+        equalities: {
+            weightedResidual: [],
+            weightedJacobian: [],
+            residual: [],
+            jacobian: [],
+            blocks: {}
+        },
+        inequalities: {
+            wvfiFloor: { value: 1, violation: 0 },
+            waistXCorridor: { violation: 0 }
+        },
+        bounds: {
+            effectiveLower: [-1, -1],
+            effectiveUpper: [1, 1]
+        },
+        metadata: {
+            qFull: qActive.slice(),
+            Jabs: [[1, 0], [0, 1]],
+            protectedRows: [[1, 0]],
+            cctsm: { w_abs: qActive[1] }
+        }
+    });
+
+    const result = await visualizer._attemptHumanoidJogManifoldMetricRefinement({
+        baseProblem: evaluateProblem([0, 0]),
+        baseQActive: [0, 0],
+        metric: 'w_abs',
+        direction: 'increase',
+        evaluateProblem,
+        armStart: 0,
+        activeCount: 2,
+        activeLimits: null,
+        lowerBounds: [-1, -1],
+        upperBounds: [1, 1],
+        stepBounds: [1, 1],
+        wvfiMin: 0,
+        restoreMaxIterations: 2,
+        stepSize: 0.1
+    });
+
+    assert.equal(result.applied, true);
+    assert.ok(Number.isFinite(result.nullspaceResult?.stepNorm));
+});
+
+test('RobotVisualizer manifold metric refinement can fallback to wvfi gradient', async () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer._computeHumanoidJogManifoldMetricGradient = () => [0, 0];
+    visualizer._evaluateHumanoidJogManifoldMetricValue = (_metric, cctsm) => cctsm?.w_abs ?? Number.NaN;
+    visualizer._isHumanoidMetricRestoreUsable = (restoreResult) => restoreResult?.converged === true && Array.isArray(restoreResult?.qApplied);
+
+    const evaluateProblem = (qActive) => ({
+        q: qActive.slice(),
+        equalities: {
+            weightedResidual: [],
+            weightedJacobian: [],
+            residual: [],
+            jacobian: [],
+            blocks: {}
+        },
+        inequalities: {
+            wvfiFloor: {
+                value: 0.8,
+                violation: 0,
+                gradient: [0, 0.2]
+            },
+            waistXCorridor: { violation: 0 }
+        },
+        bounds: {
+            effectiveLower: [-1, -1],
+            effectiveUpper: [1, 1]
+        },
+        metadata: {
+            qFull: qActive.slice(),
+            Jabs: [[1, 0], [0, 1]],
+            protectedRows: [[1, 0]],
+            cctsm: { w_abs: qActive[1] }
+        }
+    });
+
+    const result = await visualizer._attemptHumanoidJogManifoldMetricRefinement({
+        baseProblem: evaluateProblem([0, 0]),
+        baseQActive: [0, 0],
+        metric: 'w_abs',
+        direction: 'increase',
+        evaluateProblem,
+        armStart: 0,
+        activeCount: 2,
+        activeLimits: null,
+        lowerBounds: [-1, -1],
+        upperBounds: [1, 1],
+        stepBounds: [1, 1],
+        wvfiMin: 0.5,
+        restoreMaxIterations: 2,
+        stepSize: 0.1,
+        restoreFn: ({ qInitial }) => ({
+            converged: true,
+            acceptedIterations: 1,
+            qApplied: [0, qInitial[1] + 0.2],
+            currentProblem: evaluateProblem([0, qInitial[1] + 0.2])
+        })
+    });
+
+    assert.equal(result.applied, true);
+    assert.equal(result.nullspaceResult?.gradientSource, 'wvfi');
+    assert.equal(result.state, 'active');
+});
+
+test('RobotVisualizer manifold metric refinement can accept a wvfi fallback step when the fallback metric improves', async () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer._computeHumanoidJogManifoldMetricGradient = () => [0, 0];
+    visualizer._evaluateHumanoidJogManifoldMetricValue = (metric, cctsm) => cctsm?.[metric] ?? Number.NaN;
+    visualizer._isHumanoidMetricRestoreUsable = (restoreResult) => restoreResult?.converged === true && Array.isArray(restoreResult?.qApplied);
+
+    const evaluateProblem = (qActive) => ({
+        q: qActive.slice(),
+        equalities: {
+            weightedResidual: [],
+            weightedJacobian: [],
+            residual: [],
+            jacobian: [],
+            blocks: {}
+        },
+        inequalities: {
+            wvfiFloor: {
+                value: 0.8 + qActive[1],
+                violation: 0,
+                gradient: [0, 1]
+            },
+            waistXCorridor: { violation: 0 }
+        },
+        bounds: {
+            effectiveLower: [-1, -1],
+            effectiveUpper: [1, 1]
+        },
+        metadata: {
+            qFull: qActive.slice(),
+            Jabs: [[1, 0], [0, 1]],
+            protectedRows: [],
+            cctsm: {
+                w_abs_arm_vfi: 1 + qActive[1],
+                w_abs_arm: 1 - qActive[1],
+                w_abs_hier_vfi: 1 + qActive[1]
+            }
+        }
+    });
+
+    const result = await visualizer._attemptHumanoidJogManifoldMetricRefinement({
+        baseProblem: evaluateProblem([0, 0]),
+        baseQActive: [0, 0],
+        metric: 'w_abs_arm_vfi',
+        direction: 'increase',
+        evaluateProblem,
+        armStart: 0,
+        activeCount: 2,
+        activeLimits: null,
+        lowerBounds: [-1, -1],
+        upperBounds: [1, 1],
+        stepBounds: [1, 1],
+        wvfiMin: 0,
+        restoreMaxIterations: 2,
+        stepSize: 0.1,
+        directionFallbackMetric: 'w_abs_hier_vfi',
+        restoreFn: ({ qInitial }) => ({
+            converged: true,
+            acceptedIterations: 1,
+            qApplied: qInitial.slice(),
+            currentProblem: evaluateProblem(qInitial)
+        })
+    });
+
+    assert.equal(result.applied, true);
+    assert.equal(result.nullspaceResult?.gradientSource, 'wvfi');
+    assert.equal(result.state, 'active');
+});
+
+test('RobotVisualizer manifold metric refinement can accept a safety fallback when w_vfi improves and the requested metric regresses only slightly', async () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer._computeHumanoidJogManifoldMetricGradient = () => [0, 0];
+    visualizer._evaluateHumanoidJogManifoldMetricValue = (metric, cctsm) => cctsm?.[metric] ?? Number.NaN;
+    visualizer._isHumanoidMetricRestoreUsable = (restoreResult) => restoreResult?.converged === true && Array.isArray(restoreResult?.qApplied);
+
+    const evaluateProblem = (qActive) => ({
+        q: qActive.slice(),
+        equalities: {
+            weightedResidual: [],
+            weightedJacobian: [],
+            residual: [],
+            jacobian: [],
+            blocks: {}
+        },
+        inequalities: {
+            wvfiFloor: {
+                value: 0.8 + qActive[1],
+                violation: 0,
+                gradient: [0, 1]
+            },
+            waistXCorridor: { violation: 0 }
+        },
+        bounds: {
+            effectiveLower: [-1, -1],
+            effectiveUpper: [1, 1]
+        },
+        metadata: {
+            qFull: qActive.slice(),
+            Jabs: [[1, 0], [0, 1]],
+            protectedRows: [],
+            cctsm: {
+                w_abs_arm_vfi: 1 - 5e-7 * qActive[1],
+                w_abs_arm: 1 - 5e-7 * qActive[1],
+                w_abs_hier_vfi: 1 - 5e-7 * qActive[1],
+                w_vfi: 1 + qActive[1]
+            }
+        }
+    });
+
+    const result = await visualizer._attemptHumanoidJogManifoldMetricRefinement({
+        baseProblem: evaluateProblem([0, 0]),
+        baseQActive: [0, 0],
+        metric: 'w_abs_arm_vfi',
+        direction: 'increase',
+        evaluateProblem,
+        armStart: 0,
+        activeCount: 2,
+        activeLimits: null,
+        lowerBounds: [-1, -1],
+        upperBounds: [1, 1],
+        stepBounds: [1, 1],
+        wvfiMin: 0,
+        restoreMaxIterations: 2,
+        stepSize: 0.1,
+        directionFallbackMetric: 'w_abs_hier_vfi',
+        restoreFn: ({ qInitial }) => ({
+            converged: true,
+            acceptedIterations: 1,
+            qApplied: qInitial.slice(),
+            currentProblem: evaluateProblem(qInitial)
+        })
+    });
+
+    assert.equal(result.applied, true);
+    assert.equal(result.nullspaceResult?.gradientSource, 'wvfi');
+    assert.equal(result.state, 'active');
+});
+
+test('RobotVisualizer manifold metric refinement can bias a hierarchical VFI step away from an active joint limit', async () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer._computeHumanoidJogManifoldMetricGradient = () => [-1, 0];
+    visualizer._evaluateHumanoidJogManifoldMetricValue = (_metric, cctsm) => cctsm?.w_abs_arm ?? Number.NaN;
+    visualizer._isHumanoidMetricRestoreUsable = (restoreResult) => restoreResult?.converged === true && Array.isArray(restoreResult?.qApplied);
+
+    const activeLimits = [
+        { lower: 0, upper: 2 },
+        { lower: -1, upper: 1 }
+    ];
+    const evaluateProblem = (qActive) => ({
+        q: qActive.slice(),
+        equalities: {
+            weightedResidual: [],
+            weightedJacobian: [],
+            residual: [],
+            jacobian: [],
+            blocks: {}
+        },
+        inequalities: {
+            wvfiFloor: {
+                value: 0.8 + qActive[0],
+                violation: 0,
+                gradient: [1, 0]
+            },
+            waistXCorridor: { violation: 0 }
+        },
+        bounds: {
+            effectiveLower: [-1, -1],
+            effectiveUpper: [1, 1]
+        },
+        metadata: {
+            qFull: qActive.slice(),
+            Jabs: [[1, 0], [0, 1]],
+            protectedRows: [],
+            cctsm: {
+                w_abs_arm: qActive[0]
+            }
+        }
+    });
+
+    const result = await visualizer._attemptHumanoidJogManifoldMetricRefinement({
+        baseProblem: evaluateProblem([0.0015, 0]),
+        baseQActive: [0.0015, 0],
+        metric: 'w_abs_arm',
+        direction: 'increase',
+        evaluateProblem,
+        armStart: 0,
+        activeCount: 2,
+        activeLimits,
+        lowerBounds: [-1, -1],
+        upperBounds: [1, 1],
+        stepBounds: [1, 1],
+        wvfiMin: 0,
+        restoreMaxIterations: 2,
+        stepSize: 0.1,
+        preferActiveLimitRetreat: true,
+        restoreFn: ({ qInitial }) => ({
+            converged: true,
+            acceptedIterations: 1,
+            qApplied: qInitial.slice(),
+            currentProblem: evaluateProblem(qInitial)
+        })
+    });
+
+    assert.equal(result.applied, true);
+    assert.ok((result.nullspaceResult?.step?.[0] ?? 0) > 0);
+    assert.ok((result.refineResult?.qApplied?.[0] ?? 0) > 0.0015);
+    assert.ok((result.nullspaceResult?.stepNorm ?? 0) > 0.99);
+});
+
+test('RobotVisualizer manifold metric refinement can accept an active-limit retreat when VFI distance improves', async () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer._computeHumanoidJogManifoldMetricGradient = () => [-1, 0];
+    visualizer._evaluateHumanoidJogManifoldMetricValue = (_metric, cctsm) => cctsm?.w_abs_arm ?? Number.NaN;
+    visualizer._isHumanoidMetricRestoreUsable = (restoreResult) => restoreResult?.converged === true && Array.isArray(restoreResult?.qApplied);
+
+    const activeLimits = [
+        { lower: 0, upper: 2 },
+        { lower: -1, upper: 1 }
+    ];
+    const evaluateProblem = (qActive) => ({
+        q: qActive.slice(),
+        equalities: {
+            weightedResidual: [],
+            weightedJacobian: [],
+            residual: [],
+            jacobian: [],
+            blocks: {}
+        },
+        inequalities: {
+            wvfiFloor: {
+                value: 0.8 + qActive[0],
+                violation: 0,
+                gradient: [1, 0]
+            },
+            waistXCorridor: { violation: 0 }
+        },
+        bounds: {
+            effectiveLower: [-1, -1],
+            effectiveUpper: [1, 1]
+        },
+        metadata: {
+            qFull: qActive.slice(),
+            Jabs: [[1, 0], [0, 1]],
+            protectedRows: [],
+            cctsm: {
+                w_abs_arm: 1 - 1e-5 * qActive[0]
+            }
+        }
+    });
+
+    const result = await visualizer._attemptHumanoidJogManifoldMetricRefinement({
+        baseProblem: evaluateProblem([0.0015, 0]),
+        baseQActive: [0.0015, 0],
+        metric: 'w_abs_arm',
+        direction: 'increase',
+        evaluateProblem,
+        armStart: 0,
+        activeCount: 2,
+        activeLimits,
+        lowerBounds: [-1, -1],
+        upperBounds: [1, 1],
+        stepBounds: [1, 1],
+        wvfiMin: 0,
+        restoreMaxIterations: 2,
+        stepSize: 0.1,
+        preferActiveLimitRetreat: true,
+        restoreFn: ({ qInitial }) => ({
+            converged: true,
+            acceptedIterations: 1,
+            qApplied: qInitial.slice(),
+            currentProblem: evaluateProblem(qInitial)
+        })
+    });
+
+    assert.equal(result.applied, true);
+    assert.equal(result.state, 'active');
+    assert.equal(result.directionResult?.reason, 'active_limit_retreat');
+});
+
+test('RobotVisualizer manifold metric refinement can accept the retreat target directly when the projected candidate already preserves pose', async () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer._computeHumanoidJogManifoldMetricGradient = () => [-1, 0];
+    visualizer._evaluateHumanoidJogManifoldMetricValue = (_metric, cctsm) => cctsm?.w_abs_arm ?? Number.NaN;
+    visualizer._isHumanoidMetricRestoreUsable = (restoreResult) => restoreResult?.converged === true && Array.isArray(restoreResult?.qApplied);
+
+    const activeLimits = [
+        { lower: 0, upper: 2 },
+        { lower: -1, upper: 1 }
+    ];
+    const evaluateProblem = (qActive) => ({
+        q: qActive.slice(),
+        equalities: {
+            weightedResidual: [],
+            weightedJacobian: [],
+            residual: [],
+            jacobian: [],
+            blocks: {}
+        },
+        inequalities: {
+            wvfiFloor: {
+                value: 0.8 + qActive[0],
+                violation: 0,
+                gradient: [1, 0]
+            },
+            waistXCorridor: { violation: 0 }
+        },
+        bounds: {
+            effectiveLower: [-1, -1],
+            effectiveUpper: [1, 1]
+        },
+        metadata: {
+            qFull: qActive.slice(),
+            Jabs: [[1, 0], [0, 1]],
+            protectedRows: [],
+            cctsm: {
+                w_abs_arm: qActive[0]
+            }
+        }
+    });
+
+    let wrappedRestoreCalled = false;
+    const result = await visualizer._attemptHumanoidJogManifoldMetricRefinement({
+        baseProblem: evaluateProblem([0, 0]),
+        baseQActive: [0, 0],
+        metric: 'w_abs_arm',
+        direction: 'increase',
+        evaluateProblem,
+        armStart: 0,
+        activeCount: 2,
+        activeLimits,
+        lowerBounds: [-1, -1],
+        upperBounds: [1, 1],
+        stepBounds: [1, 1],
+        wvfiMin: 0,
+        restoreMaxIterations: 2,
+        stepSize: 1e-4,
+        preferActiveLimitRetreat: true,
+        restoreFn: () => {
+            wrappedRestoreCalled = true;
+            throw new Error('wrapped_restore_should_not_run_for_active_limit_retreat');
+        }
+    });
+
+    assert.equal(result.applied, true);
+    assert.equal(wrappedRestoreCalled, false);
+    assert.equal(result.refineResult?.reason, 'projected_candidate');
+    assert.equal(result.refineResult?.iterations, 0);
+    assert.ok((result.refineResult?.qApplied?.[0] ?? 0) >= 0.03 - 1e-12);
+});
+
+test('RobotVisualizer manifold metric refinement continues with restore when the retreat seed still violates pose constraints', async () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer._computeHumanoidJogManifoldMetricGradient = () => [-1, 0];
+    visualizer._evaluateHumanoidJogManifoldMetricValue = (_metric, cctsm) => cctsm?.w_abs_vfi ?? Number.NaN;
+    visualizer._isHumanoidMetricRestoreUsable = (restoreResult) => restoreResult?.converged === true && Array.isArray(restoreResult?.qApplied);
+
+    const activeLimits = [
+        { lower: 0, upper: 2 },
+        { lower: -1, upper: 1 }
+    ];
+    const evaluateProblem = (qActive) => ({
+        q: qActive.slice(),
+        equalities: {
+            activeResidualNorm: Math.abs((qActive[0] ?? 0) + (qActive[1] ?? 0)),
+            weightedResidual: [(qActive[0] ?? 0) + (qActive[1] ?? 0)],
+            weightedJacobian: [[1, 1]],
+            residual: [(qActive[0] ?? 0) + (qActive[1] ?? 0)],
+            jacobian: [[1, 1]],
+            blocks: {}
+        },
+        inequalities: {
+            wvfiFloor: {
+                value: 0.8 + qActive[0],
+                violation: 0,
+                gradient: [1, 0]
+            },
+            waistXCorridor: { violation: 0 }
+        },
+        bounds: {
+            effectiveLower: [-1, -1],
+            effectiveUpper: [1, 1]
+        },
+        metadata: {
+            qFull: qActive.slice(),
+            Jabs: [[1, 0], [0, 1]],
+            protectedRows: [],
+            cctsm: {
+                w_abs_vfi: 1 + qActive[0]
+            }
+        }
+    });
+
+    const result = await visualizer._attemptHumanoidJogManifoldMetricRefinement({
+        baseProblem: evaluateProblem([0, 0]),
+        baseQActive: [0, 0],
+        metric: 'w_abs_vfi',
+        direction: 'increase',
+        evaluateProblem,
+        armStart: 0,
+        activeCount: 2,
+        activeLimits,
+        lowerBounds: [-1, -1],
+        upperBounds: [1, 1],
+        stepBounds: [1, 1],
+        wvfiMin: 0,
+        restoreMaxIterations: 2,
+        equalityTolerance: 1e-6,
+        inequalityTolerance: 1e-6,
+        stepSize: 1e-4,
+        preferActiveLimitRetreat: true
+    });
+
+    assert.notEqual(result.refineResult?.reason, 'retreat_seed');
+    assert.ok((result.refineResult?.qApplied?.[0] ?? 0) >= 0.03 - 1e-12);
+});
+
+test('RobotVisualizer manifold metric refinement accepts a projected nullspace candidate without running restore when pose protection already holds', async () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer._computeHumanoidJogManifoldMetricGradient = () => [1, 0];
+    visualizer._evaluateHumanoidJogManifoldMetricValue = (_metric, cctsm) => cctsm?.w_abs_vfi ?? Number.NaN;
+    visualizer._isHumanoidMetricRestoreUsable = (restoreResult) => restoreResult?.converged === true && Array.isArray(restoreResult?.qApplied);
+    visualizer._buildManipulabilityVFIConstraints = () => [{
+        source: 'joint_limit',
+        row: [1, 0],
+        distance: 0,
+        threshold: 0.15
+    }];
+
+    const activeLimits = [
+        { lower: 0, upper: 2 },
+        { lower: -1, upper: 1 }
+    ];
+    const evaluateProblem = (qActive) => ({
+        q: qActive.slice(),
+        equalities: {
+            activeResidualNorm: Math.abs(qActive[1] ?? 0),
+            weightedResidual: [qActive[1] ?? 0],
+            weightedJacobian: [[0, 1]],
+            residual: [qActive[1] ?? 0],
+            jacobian: [[0, 1]],
+            blocks: {}
+        },
+        inequalities: {
+            wvfiFloor: {
+                value: 0.8 + qActive[0],
+                violation: 0,
+                gradient: [1, 0]
+            },
+            waistXCorridor: { violation: 0 }
+        },
+        bounds: {
+            effectiveLower: [0, -1],
+            effectiveUpper: [2, 1]
+        },
+        metadata: {
+            qFull: qActive.slice(),
+            Jabs: [[1, 0], [0, 1]],
+            protectedRows: [[0, 1]],
+            cctsm: {
+                w_abs_vfi: 1 + qActive[0]
+            }
+        }
+    });
+
+    let restoreCalled = false;
+    const result = await visualizer._attemptHumanoidJogManifoldMetricRefinement({
+        baseProblem: evaluateProblem([0, 0]),
+        baseQActive: [0, 0],
+        metric: 'w_abs_hier_vfi',
+        direction: 'increase',
+        evaluateProblem,
+        armStart: 0,
+        activeCount: 2,
+        activeLimits,
+        lowerBounds: [0, -1],
+        upperBounds: [2, 1],
+        stepBounds: [0.1, 0.1],
+        wvfiMin: 0,
+        restoreMaxIterations: 8,
+        equalityTolerance: 1e-6,
+        inequalityTolerance: 1e-6,
+        stepSize: 0.1,
+        preferActiveLimitRetreat: true,
+        restoreFn: () => {
+            restoreCalled = true;
+            throw new Error('restore_should_not_run_when_projected_candidate_is_already_pose_preserving');
+        }
+    });
+
+    assert.equal(restoreCalled, false);
+    assert.equal(result.applied, true);
+    assert.equal(result.state, 'active');
+    assert.equal(result.refineResult?.reason, 'projected_candidate');
+    assert.ok((result.refineResult?.qApplied?.[0] ?? 0) > 0.05);
+});
+
+test('RobotVisualizer manifold metric refinement backtracks along the projected nullspace direction before falling back to restore', async () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer._computeHumanoidJogManifoldMetricGradient = () => [1, 0];
+    visualizer._evaluateHumanoidJogManifoldMetricValue = (_metric, cctsm) => cctsm?.w_abs_vfi ?? Number.NaN;
+    visualizer._isHumanoidMetricRestoreUsable = (restoreResult) => restoreResult?.converged === true && Array.isArray(restoreResult?.qApplied);
+    visualizer._buildManipulabilityVFIConstraints = () => [{
+        source: 'joint_limit',
+        row: [1, 0],
+        distance: 0,
+        threshold: 0.15
+    }];
+
+    const activeLimits = [
+        { lower: 0, upper: 2 },
+        { lower: -1, upper: 1 }
+    ];
+    const evaluateProblem = (qActive) => ({
+        q: qActive.slice(),
+        equalities: {
+            activeResidualNorm: Math.pow(qActive[0] ?? 0, 2),
+            weightedResidual: [Math.pow(qActive[0] ?? 0, 2)],
+            weightedJacobian: [[0, 0]],
+            residual: [Math.pow(qActive[0] ?? 0, 2)],
+            jacobian: [[0, 0]],
+            blocks: {}
+        },
+        inequalities: {
+            wvfiFloor: {
+                value: 0.8 + qActive[0],
+                violation: 0,
+                gradient: [1, 0]
+            },
+            waistXCorridor: { violation: 0 }
+        },
+        bounds: {
+            effectiveLower: [0, -1],
+            effectiveUpper: [2, 1]
+        },
+        metadata: {
+            qFull: qActive.slice(),
+            Jabs: [[1, 0], [0, 1]],
+            protectedRows: [],
+            cctsm: {
+                w_abs_vfi: 1 + qActive[0]
+            }
+        }
+    });
+
+    let restoreCalled = false;
+    const result = await visualizer._attemptHumanoidJogManifoldMetricRefinement({
+        baseProblem: evaluateProblem([0, 0]),
+        baseQActive: [0, 0],
+        metric: 'w_abs_hier_vfi',
+        direction: 'increase',
+        evaluateProblem,
+        armStart: 0,
+        activeCount: 2,
+        activeLimits,
+        lowerBounds: [0, -1],
+        upperBounds: [2, 1],
+        stepBounds: [0.1, 0.1],
+        wvfiMin: 0,
+        restoreMaxIterations: 8,
+        equalityTolerance: 3e-3,
+        inequalityTolerance: 1e-6,
+        stepSize: 0.1,
+        preferActiveLimitRetreat: true,
+        restoreFn: () => {
+            restoreCalled = true;
+            throw new Error('restore_should_not_run_when_backtracked_projected_candidate_is_pose_preserving');
+        }
+    });
+
+    assert.equal(restoreCalled, false);
+    assert.equal(result.applied, true);
+    assert.equal(result.state, 'active');
+    assert.equal(result.refineResult?.reason, 'projected_candidate_backtracked');
+    assert.ok((result.refineResult?.qApplied?.[0] ?? 0) >= 0.05 - 1e-12);
+    assert.ok((result.refineResult?.qApplied?.[0] ?? 0) < 0.1);
+});
+
+test('RobotVisualizer manifold metric refinement can reproject a drifting nullspace candidate back onto the protected pose manifold without restore', async () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer._computeHumanoidJogManifoldMetricGradient = () => [1, 0];
+    visualizer._evaluateHumanoidJogManifoldMetricValue = (_metric, cctsm) => cctsm?.w_abs_vfi ?? Number.NaN;
+    visualizer._isHumanoidMetricRestoreUsable = (restoreResult) => restoreResult?.converged === true && Array.isArray(restoreResult?.qApplied);
+    visualizer._buildManipulabilityVFIConstraints = () => [{
+        source: 'joint_limit',
+        row: [1, 0],
+        distance: 0,
+        threshold: 0.15
+    }];
+
+    const activeLimits = [
+        { lower: 0, upper: 2 },
+        { lower: -1, upper: 1 }
+    ];
+    const evaluateProblem = (qActive) => ({
+        q: qActive.slice(),
+        equalities: {
+            activeResidualNorm: Math.abs((qActive[0] ?? 0) + (qActive[1] ?? 0)),
+            weightedResidual: [(qActive[0] ?? 0) + (qActive[1] ?? 0)],
+            weightedJacobian: [[1, 1]],
+            residual: [(qActive[0] ?? 0) + (qActive[1] ?? 0)],
+            jacobian: [[1, 1]],
+            blocks: {}
+        },
+        inequalities: {
+            wvfiFloor: {
+                value: 0.8 + qActive[0],
+                violation: 0,
+                gradient: [1, 0]
+            },
+            waistXCorridor: { violation: 0 }
+        },
+        bounds: {
+            effectiveLower: [0, -1],
+            effectiveUpper: [2, 1]
+        },
+        metadata: {
+            qFull: qActive.slice(),
+            Jabs: [[1, 0], [0, 1]],
+            protectedRows: [[1, 1]],
+            cctsm: {
+                w_abs_vfi: 1 + qActive[0]
+            }
+        }
+    });
+    const baseProblem = evaluateProblem([0, 0]);
+    baseProblem.equalities.weightedJacobian = [[0, 0]];
+    baseProblem.equalities.jacobian = [[0, 0]];
+
+    let restoreCalled = false;
+    const result = await visualizer._attemptHumanoidJogManifoldMetricRefinement({
+        baseProblem,
+        baseQActive: [0, 0],
+        metric: 'w_abs_hier_vfi',
+        direction: 'increase',
+        evaluateProblem,
+        armStart: 0,
+        activeCount: 2,
+        activeLimits,
+        lowerBounds: [0, -1],
+        upperBounds: [2, 1],
+        stepBounds: [0.1, 0.1],
+        wvfiMin: 0,
+        restoreMaxIterations: 8,
+        equalityTolerance: 1e-6,
+        inequalityTolerance: 1e-6,
+        stepSize: 0.1,
+        preferActiveLimitRetreat: true,
+        restoreFn: () => {
+            restoreCalled = true;
+            throw new Error('restore_should_not_run_when_projected_correction_is_sufficient');
+        }
+    });
+
+    assert.equal(restoreCalled, false);
+    assert.equal(result.applied, true);
+    assert.equal(result.state, 'active');
+    assert.equal(result.refineResult?.reason, 'projected_correction');
+    assert.ok((result.refineResult?.qApplied?.[0] ?? 0) > 0);
+    assert.ok((result.refineResult?.qApplied?.[1] ?? 0) < 0);
+    assert.ok(Math.abs((result.refineResult?.qApplied?.[0] ?? 0) + (result.refineResult?.qApplied?.[1] ?? 0)) <= 1e-6);
+});
+
+test('RobotVisualizer projection-only manifold metric refinement returns quickly without calling restore when no strict nullspace progress exists', async () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer._computeHumanoidJogManifoldMetricGradient = () => [1, 0];
+    visualizer._evaluateHumanoidJogManifoldMetricValue = (_metric, cctsm) => cctsm?.w_abs_vfi ?? Number.NaN;
+    visualizer._isHumanoidMetricRestoreUsable = (restoreResult) => restoreResult?.converged === true && Array.isArray(restoreResult?.qApplied);
+    visualizer._buildManipulabilityVFIConstraints = () => [{
+        source: 'joint_limit',
+        row: [1, 0],
+        distance: 0,
+        threshold: 0.15
+    }];
+
+    const activeLimits = [
+        { lower: 0, upper: 2 },
+        { lower: -1, upper: 1 }
+    ];
+    const evaluateProblem = (qActive) => ({
+        q: qActive.slice(),
+        equalities: {
+            activeResidualNorm: 1,
+            weightedResidual: [1],
+            weightedJacobian: [[0, 0]],
+            residual: [1],
+            jacobian: [[0, 0]],
+            blocks: {}
+        },
+        inequalities: {
+            wvfiFloor: {
+                value: 0.8 + qActive[0],
+                violation: 0,
+                gradient: [1, 0]
+            },
+            waistXCorridor: { violation: 0 }
+        },
+        bounds: {
+            effectiveLower: [0, -1],
+            effectiveUpper: [2, 1]
+        },
+        metadata: {
+            qFull: qActive.slice(),
+            Jabs: [[1, 0], [0, 1]],
+            protectedRows: [],
+            cctsm: {
+                w_abs_vfi: 1 + qActive[0]
+            }
+        }
+    });
+
+    let restoreCalled = false;
+    const result = await visualizer._attemptHumanoidJogManifoldMetricRefinement({
+        baseProblem: evaluateProblem([0, 0]),
+        baseQActive: [0, 0],
+        metric: 'w_abs_hier_vfi',
+        direction: 'increase',
+        evaluateProblem,
+        armStart: 0,
+        activeCount: 2,
+        activeLimits,
+        lowerBounds: [0, -1],
+        upperBounds: [2, 1],
+        stepBounds: [0.1, 0.1],
+        wvfiMin: 0,
+        restoreMaxIterations: 8,
+        equalityTolerance: 1e-6,
+        inequalityTolerance: 1e-6,
+        stepSize: 0.002,
+        preferActiveLimitRetreat: true,
+        projectionOnly: true,
+        restoreFn: () => {
+            restoreCalled = true;
+            throw new Error('restore_should_not_run_for_projection_only_metric_jog');
+        }
+    });
+
+    assert.equal(restoreCalled, false);
+    assert.equal(result.applied, false);
+    assert.equal(result.state, 'skipped(projection_only_no_progress)');
+});
+
+test('RobotVisualizer projection-only manifold metric refinement can accumulate multiple strict nullspace micro-steps in one button press', async () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer._computeHumanoidJogManifoldMetricGradient = () => [1, 0];
+    visualizer._evaluateHumanoidJogManifoldMetricValue = (_metric, cctsm) => cctsm?.w_abs_vfi ?? Number.NaN;
+    visualizer._isHumanoidMetricRestoreUsable = (restoreResult) => restoreResult?.converged === true && Array.isArray(restoreResult?.qApplied);
+    visualizer._buildManipulabilityVFIConstraints = () => [{
+        source: 'joint_limit',
+        row: [1, 0],
+        distance: 0,
+        threshold: 0.15
+    }];
+
+    const activeLimits = [
+        { lower: 0, upper: 2 },
+        { lower: -1, upper: 1 }
+    ];
+    const evaluateProblem = (qActive) => ({
+        q: qActive.slice(),
+        equalities: {
+            activeResidualNorm: 0,
+            weightedResidual: [0],
+            weightedJacobian: [[0, 1]],
+            residual: [0],
+            jacobian: [[0, 1]],
+            blocks: {}
+        },
+        inequalities: {
+            wvfiFloor: {
+                value: 0.8 + qActive[0],
+                violation: 0,
+                gradient: [1, 0]
+            },
+            waistXCorridor: { violation: 0 }
+        },
+        bounds: {
+            effectiveLower: [0, -1],
+            effectiveUpper: [2, 1]
+        },
+        metadata: {
+            qFull: qActive.slice(),
+            Jabs: [[1, 0], [0, 1]],
+            protectedRows: [[0, 1]],
+            cctsm: {
+                w_abs_vfi: 1 + qActive[0]
+            }
+        }
+    });
+
+    let restoreCalled = false;
+    const result = await visualizer._attemptHumanoidJogManifoldMetricRefinement({
+        baseProblem: evaluateProblem([0, 0]),
+        baseQActive: [0, 0],
+        metric: 'w_abs_hier_vfi',
+        direction: 'increase',
+        evaluateProblem,
+        armStart: 0,
+        activeCount: 2,
+        activeLimits,
+        lowerBounds: [0, -1],
+        upperBounds: [2, 1],
+        stepBounds: [0.3, 0.1],
+        wvfiMin: 0,
+        restoreMaxIterations: 8,
+        equalityTolerance: 1e-6,
+        inequalityTolerance: 1e-6,
+        stepSize: 0.05,
+        preferActiveLimitRetreat: true,
+        projectionOnly: true,
+        projectionPasses: 3,
+        restoreFn: () => {
+            restoreCalled = true;
+            throw new Error('restore_should_not_run_for_projection_only_micro_integration');
+        }
+    });
+
+    assert.equal(restoreCalled, false);
+    assert.equal(result.applied, true);
+    assert.equal(result.state, 'active');
+    assert.equal(result.refineResult?.reason, 'projected_integration');
+    assert.ok((result.refineResult?.acceptedIterations ?? 0) >= 3);
+    assert.ok((result.refineResult?.qApplied?.[0] ?? 0) >= 0.15 - 1e-12);
+    assert.ok(Math.abs(result.refineResult?.qApplied?.[1] ?? 0) <= 1e-12);
+});
+
+test('RobotVisualizer projection-only manifold metric refinement keeps active-limit retreat steps small enough to stay on a curved protected manifold', async () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer._computeHumanoidJogManifoldMetricGradient = () => [0, 0];
+    visualizer._evaluateHumanoidJogManifoldMetricValue = (_metric, cctsm) => cctsm?.w_abs_vfi ?? Number.NaN;
+    visualizer._isHumanoidMetricRestoreUsable = (restoreResult) => restoreResult?.converged === true && Array.isArray(restoreResult?.qApplied);
+    visualizer._buildManipulabilityVFIConstraints = () => [{
+        source: 'joint_limit',
+        row: [1, 0],
+        distance: 0,
+        threshold: 0.15
+    }];
+
+    const activeLimits = [
+        { lower: 0, upper: 2 },
+        { lower: -0.001, upper: 0.001 }
+    ];
+    const evaluateProblem = (qActive) => {
+        const q0 = qActive[0] ?? 0;
+        const q1 = qActive[1] ?? 0;
+        const curvedResidual = q1 - (0.1 * q0 * q0);
+        return {
+            q: qActive.slice(),
+            equalities: {
+                activeResidualNorm: Math.abs(curvedResidual),
+                weightedResidual: [curvedResidual],
+                weightedJacobian: [[-0.2 * q0, 1]],
+                residual: [curvedResidual],
+                jacobian: [[-0.2 * q0, 1]],
+                blocks: {}
+            },
+            inequalities: {
+                wvfiFloor: {
+                    value: 0.8 + q0,
+                    violation: 0,
+                    gradient: [1, 0]
+                },
+                waistXCorridor: { violation: 0 }
+            },
+            bounds: {
+                effectiveLower: [0, -0.001],
+                effectiveUpper: [2, 0.001]
+            },
+            metadata: {
+                qFull: qActive.slice(),
+                Jabs: [[1, 0], [0, 1]],
+                protectedRows: [[-0.2 * q0, 1]],
+                cctsm: {
+                    w_abs_vfi: 1 + q0
+                }
+            }
+        };
+    };
+
+    let restoreCalled = false;
+    const result = await visualizer._attemptHumanoidJogManifoldMetricRefinement({
+        baseProblem: evaluateProblem([0, 0]),
+        baseQActive: [0, 0],
+        metric: 'w_abs_hier_vfi',
+        direction: 'increase',
+        evaluateProblem,
+        armStart: 0,
+        activeCount: 2,
+        activeLimits,
+        lowerBounds: [0, -0.001],
+        upperBounds: [2, 0.001],
+        stepBounds: [0.3, 0.001],
+        wvfiMin: 0,
+        restoreMaxIterations: 8,
+        equalityTolerance: 1e-4,
+        inequalityTolerance: 1e-6,
+        stepSize: 0.002,
+        preferWVFIFallbackOnClip: true,
+        preferActiveLimitRetreat: true,
+        projectionOnly: true,
+        projectionPasses: 16,
+        restoreFn: () => {
+            restoreCalled = true;
+            throw new Error('restore_should_not_run_for_projection_only_curved_manifold_case');
+        }
+    });
+
+    assert.equal(restoreCalled, false);
+    assert.equal(result.applied, true);
+    assert.equal(result.state, 'active');
+    assert.equal(result.refineResult?.reason, 'projected_integration');
+    assert.ok((result.refineResult?.acceptedIterations ?? 0) >= 10);
+    assert.ok((result.refineResult?.qApplied?.[0] ?? 0) >= 0.02);
+    assert.ok(Math.abs((result.refineResult?.qApplied?.[1] ?? 0)) <= 0.001 + 1e-12);
+});
+
+test('RobotVisualizer projection-only manifold metric refinement does not blow up active-limit retreat micro-steps', async () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer._computeHumanoidJogManifoldMetricGradient = () => [0, 0];
+    visualizer._evaluateHumanoidJogManifoldMetricValue = (_metric, cctsm) => cctsm?.w_abs_vfi ?? Number.NaN;
+    visualizer._isHumanoidMetricRestoreUsable = (restoreResult) => restoreResult?.converged === true && Array.isArray(restoreResult?.qApplied);
+    visualizer._buildManipulabilityVFIConstraints = () => [{
+        source: 'joint_limit',
+        row: [1, 0],
+        distance: 0,
+        threshold: 0.15
+    }];
+
+    const activeLimits = [
+        { lower: 0, upper: 2 },
+        { lower: -1, upper: 1 }
+    ];
+    const evaluateProblem = (qActive) => ({
+        q: qActive.slice(),
+        equalities: {
+            activeResidualNorm: 0,
+            weightedResidual: [0],
+            weightedJacobian: [[0, 1]],
+            residual: [0],
+            jacobian: [[0, 1]],
+            blocks: {}
+        },
+        inequalities: {
+            wvfiFloor: {
+                value: 0.8 + qActive[0],
+                violation: 0,
+                gradient: [1, 0]
+            },
+            waistXCorridor: { violation: 0 }
+        },
+        bounds: {
+            effectiveLower: [0, -1],
+            effectiveUpper: [2, 1]
+        },
+        metadata: {
+            qFull: qActive.slice(),
+            Jabs: [[1, 0], [0, 1]],
+            protectedRows: [[0, 1]],
+            cctsm: {
+                w_abs_vfi: 1 + qActive[0]
+            }
+        }
+    });
+
+    const result = await visualizer._attemptHumanoidJogManifoldMetricRefinement({
+        baseProblem: evaluateProblem([0, 0]),
+        baseQActive: [0, 0],
+        metric: 'w_abs_hier_vfi',
+        direction: 'increase',
+        evaluateProblem,
+        armStart: 0,
+        activeCount: 2,
+        activeLimits,
+        lowerBounds: [0, -1],
+        upperBounds: [2, 1],
+        stepBounds: [0.3, 0.1],
+        wvfiMin: 0,
+        restoreMaxIterations: 8,
+        equalityTolerance: 1e-6,
+        inequalityTolerance: 1e-6,
+        stepSize: 0.002,
+        preferWVFIFallbackOnClip: true,
+        preferActiveLimitRetreat: true,
+        projectionOnly: true,
+        projectionPasses: 1,
+        restoreFn: () => {
+            throw new Error('restore_should_not_run_for_projection_only_micro_step_bound_check');
+        }
+    });
+
+    assert.ok((result.nullspaceResult?.stepNorm ?? Infinity) <= 0.0025);
+});
+
+test('RobotVisualizer projection-only manifold metric refinement can accept a tiny active-limit retreat even when the requested metric regresses slightly', async () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer._computeHumanoidJogManifoldMetricGradient = () => [0, 0];
+    visualizer._evaluateHumanoidJogManifoldMetricValue = (_metric, cctsm) => cctsm?.w_abs_vfi ?? Number.NaN;
+    visualizer._isHumanoidMetricRestoreUsable = (restoreResult) => restoreResult?.converged === true && Array.isArray(restoreResult?.qApplied);
+    visualizer._buildManipulabilityVFIConstraints = (qFull) => [{
+        source: 'joint_limit',
+        row: [1, 0],
+        distance: Math.max(0, qFull[0] ?? 0),
+        threshold: 0.15
+    }];
+
+    const activeLimits = [
+        { lower: 0, upper: 2 },
+        { lower: -1, upper: 1 }
+    ];
+    const evaluateProblem = (qActive) => {
+        const q0 = qActive[0] ?? 0;
+        const q1 = qActive[1] ?? 0;
+        const restored = q0 >= 0.001 - 1e-12 && Math.abs(q1) <= 1e-12;
+        return {
+            q: qActive.slice(),
+            equalities: {
+                activeResidualNorm: restored ? 0 : 1,
+                weightedResidual: [restored ? 0 : 1],
+                weightedJacobian: [[0, 0]],
+                residual: [restored ? 0 : 1],
+                jacobian: [[0, 0]],
+                blocks: {}
+            },
+            inequalities: {
+                wvfiFloor: {
+                    value: 1,
+                    violation: 0,
+                    gradient: [0, 1]
+                },
+                waistXCorridor: { violation: 0 }
+            },
+            bounds: {
+                effectiveLower: [0, -1],
+                effectiveUpper: [2, 1]
+            },
+            metadata: {
+                qFull: qActive.slice(),
+                Jabs: [[1, 0], [0, 1]],
+                protectedRows: [[1, 0]],
+                cctsm: {
+                    w_abs_vfi: restored ? (1.0 - 1e-4 * q0) : 1.0
+                }
+            }
+        };
+    };
+
+    let restoreCalled = false;
+    const result = await visualizer._attemptHumanoidJogManifoldMetricRefinement({
+        baseProblem: evaluateProblem([0, 0]),
+        baseQActive: [0, 0],
+        metric: 'w_abs_hier_vfi',
+        direction: 'increase',
+        evaluateProblem,
+        armStart: 0,
+        activeCount: 2,
+        activeLimits,
+        lowerBounds: [0, -1],
+        upperBounds: [2, 1],
+        stepBounds: [0.3, 0.3],
+        wvfiMin: 0,
+        restoreMaxIterations: 8,
+        equalityTolerance: 1e-6,
+        inequalityTolerance: 1e-6,
+        stepSize: 0.002,
+        preferWVFIFallbackOnClip: true,
+        preferActiveLimitRetreat: true,
+        projectionOnly: true,
+        projectionPasses: 1,
+        restoreFn: () => {
+            restoreCalled = true;
+            return {
+                converged: true,
+                reason: 'converged',
+                qApplied: [0.002, 0],
+                iterations: 1,
+                acceptedIterations: 1,
+                lastAcceptedScale: 1
+            };
+        }
+    });
+
+    assert.equal(restoreCalled, true);
+    assert.equal(result.applied, true);
+    assert.equal(result.state, 'active');
+    assert.equal(result.refineResult?.reason, 'projection_retreat_restore');
+    assert.ok(Math.abs((result.refineResult?.qApplied?.[0] ?? 0) - 0.002) <= 1e-12);
+});
+
+test('RobotVisualizer projection-only manifold metric refinement does not throw when multi-pass integration re-evaluates an active-limit retreat result', async () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer._computeHumanoidJogManifoldMetricGradient = () => [0, 0];
+    visualizer._evaluateHumanoidJogManifoldMetricValue = (_metric, cctsm) => cctsm?.w_abs_vfi ?? Number.NaN;
+    visualizer._isHumanoidMetricRestoreUsable = (restoreResult) => restoreResult?.converged === true && Array.isArray(restoreResult?.qApplied);
+    visualizer._buildManipulabilityVFIConstraints = (qFull) => [{
+        source: 'joint_limit',
+        row: [1, 0],
+        distance: Math.max(0, qFull[0] ?? 0),
+        threshold: 0.15
+    }];
+
+    const activeLimits = [
+        { lower: 0, upper: 2 },
+        { lower: -1, upper: 1 }
+    ];
+    const evaluateProblem = (qActive) => {
+        const q0 = qActive[0] ?? 0;
+        const q1 = qActive[1] ?? 0;
+        const restored = q0 >= 0.001 - 1e-12 && Math.abs(q1) <= 1e-12;
+        return {
+            q: qActive.slice(),
+            equalities: {
+                activeResidualNorm: restored ? 0 : 1,
+                weightedResidual: [restored ? 0 : 1],
+                weightedJacobian: [[0, 0]],
+                residual: [restored ? 0 : 1],
+                jacobian: [[0, 0]],
+                blocks: {}
+            },
+            inequalities: {
+                wvfiFloor: {
+                    value: 1,
+                    violation: 0,
+                    gradient: [0, 1]
+                },
+                waistXCorridor: { violation: 0 }
+            },
+            bounds: {
+                effectiveLower: [0, -1],
+                effectiveUpper: [2, 1]
+            },
+            metadata: {
+                qFull: qActive.slice(),
+                Jabs: [[1, 0], [0, 1]],
+                protectedRows: [[1, 0]],
+                cctsm: {
+                    w_abs_vfi: restored ? (1.0 - 1e-4 * q0) : 1.0
+                }
+            }
+        };
+    };
+
+    const result = await visualizer._attemptHumanoidJogManifoldMetricRefinement({
+        baseProblem: evaluateProblem([0, 0]),
+        baseQActive: [0, 0],
+        metric: 'w_abs_hier_vfi',
+        direction: 'increase',
+        evaluateProblem,
+        armStart: 0,
+        activeCount: 2,
+        activeLimits,
+        lowerBounds: [0, -1],
+        upperBounds: [2, 1],
+        stepBounds: [0.3, 0.3],
+        wvfiMin: 0,
+        restoreMaxIterations: 8,
+        equalityTolerance: 1e-6,
+        inequalityTolerance: 1e-6,
+        stepSize: 0.002,
+        preferWVFIFallbackOnClip: true,
+        preferActiveLimitRetreat: true,
+        projectionOnly: true,
+        projectionPasses: 2,
+        restoreFn: () => ({
+            converged: true,
+            reason: 'converged',
+            qApplied: [0.002, 0],
+            iterations: 1,
+            acceptedIterations: 1,
+            lastAcceptedScale: 1
+        })
+    });
+
+    assert.equal(result.applied, true);
+    assert.equal(result.state, 'active');
+    assert.equal(result.refineResult?.reason, 'projected_integration');
+    assert.ok((result.refineResult?.acceptedIterations ?? 0) >= 2);
+});
+
+test('RobotVisualizer projection-only manifold metric refinement can preserve pose via projected correction without falling back to restore', async () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer._computeHumanoidJogManifoldMetricGradient = () => [0, 0];
+    visualizer._evaluateHumanoidJogManifoldMetricValue = (_metric, cctsm) => cctsm?.w_abs_vfi ?? Number.NaN;
+    visualizer._isHumanoidMetricRestoreUsable = (restoreResult) => restoreResult?.converged === true && Array.isArray(restoreResult?.qApplied);
+    visualizer._buildManipulabilityVFIConstraints = (qFull) => [{
+        source: 'joint_limit',
+        row: [1, 0],
+        distance: Math.max(0, qFull[0] ?? 0),
+        threshold: 0.15
+    }];
+
+    const activeLimits = [
+        { lower: 0, upper: 2 },
+        { lower: -1, upper: 1 }
+    ];
+    let restoreCalled = false;
+    const evaluateProblem = (qActive) => {
+        const q0 = qActive[0] ?? 0;
+        const q1 = qActive[1] ?? 0;
+        const residual = q1 - (0.25 * q0);
+        const restored = Math.abs(residual) <= 1e-6;
+        return {
+            q: qActive.slice(),
+            equalities: {
+                activeResidualNorm: Math.abs(residual),
+                weightedResidual: [residual],
+                weightedJacobian: [[-0.25, 1]],
+                residual: [residual],
+                jacobian: [[-0.25, 1]],
+                blocks: {}
+            },
+            inequalities: {
+                wvfiFloor: {
+                    value: 1,
+                    violation: 0,
+                    gradient: [0, 1]
+                },
+                waistXCorridor: { violation: 0 }
+            },
+            bounds: {
+                effectiveLower: [0, -1],
+                effectiveUpper: [2, 1]
+            },
+            metadata: {
+                qFull: qActive.slice(),
+                Jabs: [[1, 0], [0, 1]],
+                protectedRows: [[-0.25, 1]],
+                cctsm: {
+                    w_abs_vfi: restored ? (1.0 - 1e-4 * q0) : 1.0
+                }
+            }
+        };
+    };
+
+    const result = await visualizer._attemptHumanoidJogManifoldMetricRefinement({
+        baseProblem: evaluateProblem([0, 0]),
+        baseQActive: [0, 0],
+        metric: 'w_abs_hier_vfi',
+        direction: 'increase',
+        evaluateProblem,
+        armStart: 0,
+        activeCount: 2,
+        activeLimits,
+        lowerBounds: [0, -1],
+        upperBounds: [2, 1],
+        stepBounds: [0.3, 0.3],
+        wvfiMin: 0,
+        restoreMaxIterations: 8,
+        equalityTolerance: 1e-6,
+        inequalityTolerance: 1e-6,
+        stepSize: 0.002,
+        preferWVFIFallbackOnClip: true,
+        preferActiveLimitRetreat: true,
+        projectionOnly: true,
+        projectionPasses: 1,
+        restoreFn: () => {
+            restoreCalled = true;
+            throw new Error('restore_should_not_run_when_retreat_seed_projection_can_preserve_pose');
+        }
+    });
+
+    assert.equal(restoreCalled, false);
+    assert.equal(result.applied, true);
+    assert.equal(result.state, 'active');
+    assert.equal(result.refineResult?.reason, 'projected_correction');
+    assert.ok((result.refineResult?.qApplied?.[0] ?? 0) >= 0.0019);
+    assert.ok(Math.abs((result.refineResult?.qApplied?.[1] ?? 0) - 0.25 * (result.refineResult?.qApplied?.[0] ?? 0)) <= 1e-6);
+});
+
+test('RobotVisualizer mj_restore distance finalization reuses manipActiveLimits without throwing', () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer._writeHumanoidActiveJoints = (_qInitialFull, qActive) => qActive.slice();
+    visualizer._clampHumanoidActiveJoints = () => {};
+    visualizer._buildManipulabilityVFIConstraints = (_qApplied, _armStart, _activeCount, activeLimits) => [{
+        source: 'joint_limit',
+        distance: 0.05,
+        activeLimits
+    }];
+    visualizer._computeModeCCTSM = () => ({
+        w: 0.1,
+        w_vfi: 0.09,
+        w_abs: 0.11,
+        w_abs_arm: 0.08,
+        w_abs_vfi: 0.07,
+        w_cmd: 0.05
+    });
+    visualizer._computeHumanoidActiveJointDistance = () => 0.01;
+    visualizer._publishHumanoidJogDiagnostics = () => {};
+    visualizer._applyHumanoidJointSolution = () => {};
+
+    const finalProblem = {
+        equalities: {
+            blocks: {
+                command: { residual: [0] },
+                absolute: { residual: [0] },
+                relative: { residual: [0] }
+            }
+        },
+        inequalities: {
+            wvfiFloor: { violation: 0 },
+            waistXCorridor: { violation: 0 }
+        }
+    };
+
+    assert.doesNotThrow(() => {
+        visualizer._finalizeHumanoidMJDistanceResult({
+            qInitialFull: [0, 0],
+            armStart: 0,
+            activeCount: 2,
+            includeWaist: false,
+            enableJointLimitAvoidance: true,
+            hardLimits: [{ lower: -1, upper: 1 }, { lower: -1, upper: 1 }],
+            manipActiveLimits: [{ lower: -1, upper: 1 }, { lower: -1, upper: 1 }],
+            evaluateProblem: () => finalProblem,
+            effectiveResult: {
+                converged: true,
+                qApplied: [0.1, -0.1],
+                currentProblem: finalProblem
+            },
+            restorationResult: {
+                reason: 'converged',
+                iterations: 1,
+                timings: {}
+            },
+            mjPolishState: 'skipped',
+            mjPolishResult: null,
+            nullspaceResult: null,
+            nullspaceRefineResult: null,
+            resolvedJogMetric: {
+                metric: 'none'
+            },
+            jogMetricState: 'skipped(none)',
+            jogMetricBefore: Number.NaN,
+            jogMetricAfter: Number.NaN,
+            jogMetricApplied: false,
+            jogMetricAxis: '',
+            solverMode: 'mj_restore_pre_w',
+            preWState: 'disabled_for_mode',
+            preWMetric: 'w_abs_hier',
+            preWStart: 'q0',
+            referenceModel: {
+                absolute: { stiffness: 1, damping: 0.25 },
+                relative: { stiffness: 1, damping: 0.35 },
+                bodyZ: { stiffness: 0, damping: 0 }
+            },
+            hardCmdTol: 1e-8,
+            hardInvariantTol: 1e-8,
+            inequalityTol: 1e-8,
+            mjTimingStartMs: 0
+        });
+    });
+    assert.equal(visualizer.lastIKSolveStatus?.solver, 'mj_restore_pre_w');
+});
+
+test('RobotVisualizer mj_restore_pre_w distance early failures preserve solver identity in lastIKSolveStatus', async () => {
+    const visualizer = new RobotVisualizer(null);
+
+    const result = await visualizer._updateHumanoidJointsFromRelativeDistanceDeltaMJRestore(
+        0.01,
+        [],
+        true,
+        false,
+        {
+            solverMode: 'mj_restore_pre_w',
+            preWState: 'disabled_for_mode',
+            preWMetric: 'w_abs_hier_vfi',
+            preWStart: 'q0'
+        }
+    );
+
+    assert.equal(result, false);
+    assert.equal(visualizer.lastIKSolveStatus?.solver, 'mj_restore_pre_w');
+    assert.equal(visualizer.lastIKSolveStatus?.reason, 'invalid_state');
+});

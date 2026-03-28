@@ -49,7 +49,9 @@ export function switchToHumanoidUI() {
     if (controlModeSelect) {
         Array.from(controlModeSelect.options).forEach(opt => {
             if (opt.value === 'robot1') opt.textContent = '左臂';
+            else if (opt.value === 'robot1-waist') opt.textContent = '左臂+腰部';
             else if (opt.value === 'robot2') opt.textContent = '右臂';
+            else if (opt.value === 'robot2-waist') opt.textContent = '右臂+腰部';
             else if (opt.value === 'waist-body-link-xz') opt.hidden = false;
         });
         const modeLabelEl = document.getElementById('dual-arm-mode-label');
@@ -57,6 +59,7 @@ export function switchToHumanoidUI() {
             const mode = controlModeSelect.value;
             if (typeof window !== 'undefined') {
                 window.currentDualArmControlMode = mode;
+                window.refreshHumanoidJogMetricOptionLabels?.(mode);
             }
             // 控制按钮显示：相对距离模式只显示 d-/d+
             if (teachPendantControls && distanceControls) {
@@ -77,7 +80,9 @@ export function switchToHumanoidUI() {
             });
             if (!modeLabelEl) return;
             if (mode === 'robot1') modeLabelEl.textContent = '左臂模式：控制左臂末端';
+            else if (mode === 'robot1-waist') modeLabelEl.textContent = '左臂+腰部模式：控制左臂末端并允许腰部协同，保持右臂末端不变';
             else if (mode === 'robot2') modeLabelEl.textContent = '右臂模式：控制右臂末端';
+            else if (mode === 'robot2-waist') modeLabelEl.textContent = '右臂+腰部模式：控制右臂末端并允许腰部协同，保持左臂末端不变';
             else if (mode === 'relative') modeLabelEl.textContent = '相对位姿模式：控制相对位姿，保持绝对位姿不变';
             else if (mode === 'distance') modeLabelEl.textContent = '相对距离模式：控制两末端距离，保持绝对位姿与相对姿态不变';
             else if (mode === 'distance-fullbody') modeLabelEl.textContent = '全身相对距离：腰部+双臂联动，控制两末端距离，保持绝对位姿与相对姿态不变';
@@ -142,9 +147,27 @@ export function switchToDualArmUI() {
     const waistBodyOption = controlModeSelect
         ? Array.from(controlModeSelect.options).find(opt => opt.value === 'waist-body-link-xz')
         : null;
+    const robot1WaistOption = controlModeSelect
+        ? Array.from(controlModeSelect.options).find(opt => opt.value === 'robot1-waist')
+        : null;
+    const robot2WaistOption = controlModeSelect
+        ? Array.from(controlModeSelect.options).find(opt => opt.value === 'robot2-waist')
+        : null;
     if (waistBodyOption) {
         waistBodyOption.hidden = true;
         if (controlModeSelect.value === 'waist-body-link-xz') {
+            controlModeSelect.value = 'absolute';
+        }
+    }
+    if (robot1WaistOption) {
+        robot1WaistOption.hidden = true;
+        if (controlModeSelect.value === 'robot1-waist') {
+            controlModeSelect.value = 'absolute';
+        }
+    }
+    if (robot2WaistOption) {
+        robot2WaistOption.hidden = true;
+        if (controlModeSelect.value === 'robot2-waist') {
             controlModeSelect.value = 'absolute';
         }
     }
@@ -153,6 +176,7 @@ export function switchToDualArmUI() {
             const mode = controlModeSelect.value;
             if (typeof window !== 'undefined') {
                 window.currentDualArmControlMode = mode;
+                window.refreshHumanoidJogMetricOptionLabels?.(mode);
             }
             // 控制按钮显示：相对距离模式只显示 distance-/distance+
             if (teachPendantControls && distanceControls) {
@@ -170,8 +194,14 @@ export function switchToDualArmUI() {
                 case 'robot1':
                     modeLabel.textContent = '机器人1模式：控制机器人1的末端执行器';
                     break;
+                case 'robot1-waist':
+                    modeLabel.textContent = '左臂+腰部模式：控制左臂末端并允许腰部协同，保持右臂末端不变';
+                    break;
                 case 'robot2':
                     modeLabel.textContent = '机器人2模式：控制机器人2的末端执行器';
+                    break;
+                case 'robot2-waist':
+                    modeLabel.textContent = '右臂+腰部模式：控制右臂末端并允许腰部协同，保持左臂末端不变';
                     break;
                 case 'relative':
                     modeLabel.textContent = '相对位姿模式：控制相对位姿，保持绝对位姿不变';
@@ -216,7 +246,9 @@ export function switchToDualArmUI() {
     if (controlModeSelectDual) {
         Array.from(controlModeSelectDual.options).forEach(opt => {
             if (opt.value === 'robot1') opt.textContent = '机器人1';
+            else if (opt.value === 'robot1-waist') opt.hidden = true;
             else if (opt.value === 'robot2') opt.textContent = '机器人2';
+            else if (opt.value === 'robot2-waist') opt.hidden = true;
         });
     }
     // 更新标签页，确保显示正确的标签内容

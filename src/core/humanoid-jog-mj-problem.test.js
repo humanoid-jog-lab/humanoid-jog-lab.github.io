@@ -1,0 +1,66 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+
+import { buildHumanoidJogMJProblem } from './humanoid-jog-mj-problem.js';
+
+function assertCloseArray(actual, expected, tolerance = 1e-12) {
+    assert.equal(actual.length, expected.length);
+    for (let i = 0; i < actual.length; i++) {
+        assert.ok(Math.abs(actual[i] - expected[i]) <= tolerance, `index ${i}: ${actual[i]} != ${expected[i]}`);
+    }
+}
+
+test('buildHumanoidJogMJProblem assembles equality blocks and reference coefficients', () => {
+    const problem = buildHumanoidJogMJProblem({
+        q: [0.1, -0.2],
+        qCurrent: [0, 0],
+        absoluteTarget: [1],
+        relativeTarget: [2],
+        absolutePose: () => [0.7],
+        relativePose: () => [1.5],
+        absoluteJacobian: () => [[1, 0]],
+        relativeJacobian: () => [[0, 1]],
+        includeBodyZ: true,
+        bodyZConstraint: () => ({
+            residual: [0.25],
+            jacobian: [[0.3, 0.4]]
+        }),
+        lowerBounds: [-1, -1],
+        upperBounds: [1, 1],
+        stepBounds: [0.3, 0.4],
+        wvfiState: () => ({ value: 0.01, gradient: [0.5, -0.2] }),
+        wvfiLowerBound: 0.02,
+        referenceModel: {
+            absolute: { stiffness: 1.0, damping: 0.25 },
+            relative: { stiffness: 1.0, damping: 0.35 },
+            bodyZ: { stiffness: 0.6, damping: 0.45 }
+        }
+    });
+
+    assertCloseArray(problem.equalities.residual, [0.3, 0.5, 0.25]);
+    assert.equal(problem.referenceModel.absolute.offset, 0);
+    assert.equal(problem.referenceModel.relative.offset, 1);
+    assert.equal(problem.referenceModel.bodyZ.offset, 2);
+    assert.deepEqual(problem.referenceModel.stiffnessRows, [1.0, 1.0, 0.6]);
+    assert.deepEqual(problem.referenceModel.dampingRows, [0.25, 0.35, 0.45]);
+    assert.equal(problem.inequalities.wvfiFloor.enabled, true);
+    assert.equal(problem.bounds.effectiveUpper[0], 0.3);
+});
+
+test('buildHumanoidJogMJProblem disables the w_vfi floor when lower bound is zero', () => {
+    const problem = buildHumanoidJogMJProblem({
+        q: [0.1, -0.2],
+        qCurrent: [0, 0],
+        absoluteTarget: [1],
+        relativeTarget: [2],
+        absolutePose: () => [0.7],
+        relativePose: () => [1.5],
+        absoluteJacobian: () => [[1, 0]],
+        relativeJacobian: () => [[0, 1]],
+        wvfiState: () => ({ value: 0.01, gradient: [0.5, -0.2] }),
+        wvfiLowerBound: 0
+    });
+
+    assert.equal(problem.inequalities.wvfiFloor.enabled, false);
+    assert.equal(problem.inequalities.wvfiFloor.violation, 0);
+});

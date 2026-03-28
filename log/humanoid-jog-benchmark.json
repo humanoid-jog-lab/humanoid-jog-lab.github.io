@@ -1,0 +1,424 @@
+{
+  "baseUrl": "http://127.0.0.1:4173",
+  "generatedAt": "2026-03-14T14:20:56.212Z",
+  "holdScenario": [
+    {
+      "methodId": "tp-ik",
+      "method": "TP-IK",
+      "episodes": 2,
+      "successRate": 1,
+      "meanTicks": 12,
+      "meanRuntimeMs": 15.81583333387971,
+      "meanMargin": 0.01939871605918119,
+      "meanProgress": 0.05999987472041432,
+      "meanHorizon": 0,
+      "meanReserve": 0,
+      "meanSwitches": 0,
+      "labels": {
+        "step-ok": 2
+      }
+    },
+    {
+      "methodId": "reactive-qp",
+      "method": "Reactive-QP",
+      "episodes": 2,
+      "successRate": 0,
+      "meanTicks": 0,
+      "meanRuntimeMs": 23.47499999962747,
+      "meanMargin": 0.03111877823075538,
+      "meanProgress": 0.004995971001100413,
+      "meanHorizon": 0,
+      "meanReserve": 0,
+      "meanSwitches": 0,
+      "labels": {
+        "step-fail": 2
+      }
+    },
+    {
+      "methodId": "reactive-qp-mb",
+      "method": "Reactive-QP+MB",
+      "episodes": 2,
+      "successRate": 0,
+      "meanTicks": 0,
+      "meanRuntimeMs": 54.71000000089407,
+      "meanMargin": 0.03111877823075538,
+      "meanProgress": 0.004995971001100413,
+      "meanHorizon": 0,
+      "meanReserve": 0,
+      "meanSwitches": 0,
+      "labels": {
+        "step-fail": 2
+      }
+    },
+    {
+      "methodId": "predictive-qp",
+      "method": "Predictive-QP",
+      "episodes": 2,
+      "successRate": 1,
+      "meanTicks": 12,
+      "meanRuntimeMs": 33.68500000036632,
+      "meanMargin": 0.031035534264400415,
+      "meanProgress": 0.029924249259743574,
+      "meanHorizon": 3,
+      "meanReserve": 9.999999999725414e-9,
+      "meanSwitches": 0.5,
+      "labels": {
+        "reachable": 2
+      }
+    },
+    {
+      "methodId": "predictive-qp-fta",
+      "method": "Predictive-QP+FTA",
+      "episodes": 2,
+      "successRate": 1,
+      "meanTicks": 12,
+      "meanRuntimeMs": 82.13354166659215,
+      "meanMargin": 0.03195570044760578,
+      "meanProgress": 0.029890466628766377,
+      "meanHorizon": 3,
+      "meanReserve": 9.999999999477374e-9,
+      "meanSwitches": 1.5,
+      "labels": {
+        "reachable": 2
+      }
+    }
+  ],
+  "transitionScenario": [
+    {
+      "methodId": "tp-ik",
+      "method": "TP-IK",
+      "episodes": 2,
+      "task1SuccessRate": 1,
+      "task1Progress": 0.03999987156138804,
+      "task1RuntimeMs": 16.56906249956228,
+      "task1TerminalReadiness": 301.07717909847014,
+      "task2SuccessRate": 1,
+      "task2FirstClosing": 0.005000443124018594,
+      "task2DistanceReduction": 0.04000332696803377,
+      "task2RuntimeMs": 63.486562500242144,
+      "task1Labels": {
+        "step-ok": 2
+      },
+      "task2Labels": {
+        "step-ok": 2
+      }
+    },
+    {
+      "methodId": "reactive-qp",
+      "method": "Reactive-QP",
+      "episodes": 2,
+      "task1SuccessRate": 0,
+      "task1Progress": 0.0049887583790241274,
+      "task1RuntimeMs": 8.690000001341105,
+      "task1TerminalReadiness": 100.97046490369081,
+      "task2SuccessRate": 0.5,
+      "task2FirstClosing": 0.0049966879361621475,
+      "task2DistanceReduction": 0.02248509144224209,
+      "task2RuntimeMs": 8.452812499832362,
+      "task1Labels": {
+        "step-fail": 2
+      },
+      "task2Labels": {
+        "step-fail": 1,
+        "step-ok": 1
+      }
+    },
+    {
+      "methodId": "reactive-qp-mb",
+      "method": "Reactive-QP+MB",
+      "episodes": 2,
+      "task1SuccessRate": 0,
+      "task1Progress": 0.004990604377817176,
+      "task1RuntimeMs": 111.80250000022352,
+      "task1TerminalReadiness": 301.07707735746226,
+      "task2SuccessRate": 0.5,
+      "task2FirstClosing": 0.004996688061909171,
+      "task2DistanceReduction": 0.022485091567989113,
+      "task2RuntimeMs": 92.15031249867752,
+      "task1Labels": {
+        "step-fail": 2
+      },
+      "task2Labels": {
+        "step-fail": 1,
+        "step-ok": 1
+      }
+    },
+    {
+      "methodId": "predictive-qp",
+      "method": "Predictive-QP",
+      "episodes": 2,
+      "task1SuccessRate": 0.5,
+      "task1Progress": 0.007107312377293118,
+      "task1RuntimeMs": 79.37281250068918,
+      "task1TerminalReadiness": 301.07686364930686,
+      "task2SuccessRate": 0.5,
+      "task2FirstClosing": 0.001446980852056745,
+      "task2DistanceReduction": 0.011607742041488067,
+      "task2RuntimeMs": 58.02125000115484,
+      "task1Labels": {
+        "unreachable": 1,
+        "reachable": 1
+      },
+      "task2Labels": {
+        "unreachable": 1,
+        "reachable": 1
+      }
+    },
+    {
+      "methodId": "predictive-qp-fta",
+      "method": "Predictive-QP+FTA",
+      "episodes": 2,
+      "task1SuccessRate": 0.5,
+      "task1Progress": 0.007077969580806448,
+      "task1RuntimeMs": 239.3509374994319,
+      "task1TerminalReadiness": 301.07717932441886,
+      "task2SuccessRate": 0.5,
+      "task2FirstClosing": 0.0014935957612128292,
+      "task2DistanceReduction": 0.011948064193885666,
+      "task2RuntimeMs": 51.16062500094995,
+      "task1Labels": {
+        "unreachable": 1,
+        "reachable": 1
+      },
+      "task2Labels": {
+        "unreachable": 1,
+        "reachable": 1
+      }
+    }
+  ],
+  "futureFocusedTransitionScenario": [
+    {
+      "methodId": "tp-ik",
+      "method": "TP-IK",
+      "episodes": 2,
+      "task1SuccessRate": 1,
+      "task1Progress": 0.02499993728632867,
+      "task1RuntimeMs": 9.923437499906868,
+      "task1TerminalReadiness": 301.0772390166108,
+      "task2SuccessRate": 1,
+      "task2FirstClosing": 0.004999999351008033,
+      "task2DistanceReduction": 0.03999999483203265,
+      "task2RuntimeMs": 40.283125000074506,
+      "task1Labels": {
+        "step-ok": 2
+      },
+      "task2Labels": {
+        "step-ok": 2
+      }
+    },
+    {
+      "methodId": "reactive-qp",
+      "method": "Reactive-QP",
+      "episodes": 2,
+      "task1SuccessRate": 0,
+      "task1Progress": 0.0049967221447995425,
+      "task1RuntimeMs": 19.34750000014901,
+      "task1TerminalReadiness": 301.0772391601986,
+      "task2SuccessRate": 0,
+      "task2FirstClosing": 0.004996711010634369,
+      "task2DistanceReduction": 0.004996711010634369,
+      "task2RuntimeMs": 8.775000000372529,
+      "task1Labels": {
+        "step-fail": 2
+      },
+      "task2Labels": {
+        "step-fail": 2
+      }
+    },
+    {
+      "methodId": "reactive-qp-mb",
+      "method": "Reactive-QP+MB",
+      "episodes": 2,
+      "task1SuccessRate": 0,
+      "task1Progress": 0.004983265036022991,
+      "task1RuntimeMs": 103.91000000014901,
+      "task1TerminalReadiness": 301.0772374207995,
+      "task2SuccessRate": 0,
+      "task2FirstClosing": 0.004996710338518451,
+      "task2DistanceReduction": 0.004996710338518451,
+      "task2RuntimeMs": 90.96000000275671,
+      "task1Labels": {
+        "step-fail": 2
+      },
+      "task2Labels": {
+        "step-fail": 2
+      }
+    },
+    {
+      "methodId": "predictive-qp",
+      "method": "Predictive-QP",
+      "episodes": 2,
+      "task1SuccessRate": 1,
+      "task1Progress": 0.014984370976546132,
+      "task1RuntimeMs": 133.94656249997206,
+      "task1TerminalReadiness": 301.07723800053964,
+      "task2SuccessRate": 1,
+      "task2FirstClosing": 0.0029954052388617702,
+      "task2DistanceReduction": 0.023962513433161137,
+      "task2RuntimeMs": 99.72562500019558,
+      "task1Labels": {
+        "reachable": 2
+      },
+      "task2Labels": {
+        "reachable": 2
+      }
+    },
+    {
+      "methodId": "predictive-qp-fta",
+      "method": "Predictive-QP+FTA",
+      "episodes": 2,
+      "task1SuccessRate": 1,
+      "task1Progress": 0.014995375860681781,
+      "task1RuntimeMs": 492.32624999969266,
+      "task1TerminalReadiness": 301.077238991229,
+      "task2SuccessRate": 1,
+      "task2FirstClosing": 0.002995542504572457,
+      "task2DistanceReduction": 0.02396360381946605,
+      "task2RuntimeMs": 101.65687499986961,
+      "task1Labels": {
+        "reachable": 2
+      },
+      "task2Labels": {
+        "reachable": 2
+      }
+    }
+  ],
+  "pregraspTransitionScenario": [
+    {
+      "methodId": "tp-ik",
+      "method": "TP-IK",
+      "episodes": 2,
+      "task1SuccessRate": 1,
+      "task1Progress": 0.004999987081604304,
+      "task1RuntimeMs": 10.112499998882413,
+      "task1TerminalReadiness": 301.07723916798477,
+      "task2SuccessRate": 1,
+      "task2FirstClosing": 0.004999999384376785,
+      "task2DistanceReduction": 0.029999996275762664,
+      "task2RuntimeMs": 38.842083333060145,
+      "task1Labels": {
+        "step-ok": 2
+      },
+      "task2Labels": {
+        "step-ok": 2
+      }
+    },
+    {
+      "methodId": "reactive-qp",
+      "method": "Reactive-QP",
+      "episodes": 2,
+      "task1SuccessRate": 0,
+      "task1Progress": 0.0049967221447995425,
+      "task1RuntimeMs": 29.66000000014901,
+      "task1TerminalReadiness": 301.0772391601986,
+      "task2SuccessRate": 0,
+      "task2FirstClosing": 0.004996711010634369,
+      "task2DistanceReduction": 0.004996711010634369,
+      "task2RuntimeMs": 7.335000002756715,
+      "task1Labels": {
+        "step-fail": 2
+      },
+      "task2Labels": {
+        "step-fail": 2
+      }
+    },
+    {
+      "methodId": "reactive-qp-mb",
+      "method": "Reactive-QP+MB",
+      "episodes": 2,
+      "task1SuccessRate": 0,
+      "task1Progress": 0.005004581439014361,
+      "task1RuntimeMs": 105.61749999783933,
+      "task1TerminalReadiness": 301.07723784539996,
+      "task2SuccessRate": 0,
+      "task2FirstClosing": 0.004996710502711665,
+      "task2DistanceReduction": 0.004996710502711665,
+      "task2RuntimeMs": 113.70250000059605,
+      "task1Labels": {
+        "step-fail": 2
+      },
+      "task2Labels": {
+        "step-fail": 2
+      }
+    },
+    {
+      "methodId": "predictive-qp",
+      "method": "Predictive-QP",
+      "episodes": 2,
+      "task1SuccessRate": 1,
+      "task1Progress": 0.0029970670020185858,
+      "task1RuntimeMs": 103.78999999910593,
+      "task1TerminalReadiness": 301.07723876805875,
+      "task2SuccessRate": 1,
+      "task2FirstClosing": 0.00299551309112267,
+      "task2DistanceReduction": 0.01797268963417098,
+      "task2RuntimeMs": 84.59541666600853,
+      "task1Labels": {
+        "reachable": 2
+      },
+      "task2Labels": {
+        "reachable": 2
+      }
+    },
+    {
+      "methodId": "predictive-qp-fta",
+      "method": "Predictive-QP+FTA",
+      "episodes": 2,
+      "task1SuccessRate": 1,
+      "task1Progress": 0.00299984751177447,
+      "task1RuntimeMs": 395.214999999851,
+      "task1TerminalReadiness": 301.07723852855815,
+      "task2SuccessRate": 1,
+      "task2FirstClosing": 0.002995568624713396,
+      "task2DistanceReduction": 0.017973017368910438,
+      "task2RuntimeMs": 88.6108333338052,
+      "task1Labels": {
+        "reachable": 2
+      },
+      "task2Labels": {
+        "reachable": 2
+      }
+    }
+  ],
+  "transitionCorrelation": {
+    "sampleCount": 6,
+    "readinessVsFirstClose": 0.23115207543913094,
+    "readinessVsTotalClose": -0.5281671900111978
+  },
+  "transitionSuccessfulCorrelation": {
+    "sampleCount": 2,
+    "readinessVsFirstClose": 1,
+    "readinessVsTotalClose": 1
+  },
+  "futureFocusedTransitionCorrelation": {
+    "sampleCount": 6,
+    "readinessVsFirstClose": -0.10136104227761111,
+    "readinessVsTotalClose": 0.10214916208294157
+  },
+  "futureFocusedSuccessfulTransitionCorrelation": {
+    "sampleCount": 4,
+    "readinessVsFirstClose": 0.9999208697916256,
+    "readinessVsTotalClose": 0.9998219442445084
+  },
+  "pregraspTransitionCorrelation": {
+    "sampleCount": 6,
+    "readinessVsFirstClose": -0.0702034808123098,
+    "readinessVsTotalClose": 0.07107386828405389
+  },
+  "pregraspSuccessfulTransitionCorrelation": {
+    "sampleCount": 4,
+    "readinessVsFirstClose": 0.9963457011731217,
+    "readinessVsTotalClose": 0.9966245743725631
+  },
+  "pregraspPairedDelta": {
+    "pairCount": 2,
+    "branchDivergenceRate": 0.5,
+    "meanDeltas": {
+      "task1SelectorReadiness": null,
+      "task1RolloutReadiness": 3.9290523545787437e-7,
+      "task1TerminalReadiness": -2.3950056515786855e-7,
+      "task2FirstStepClosing": 5.553359072596464e-8,
+      "task2DistanceReduction": 3.277347394581298e-7
+    }
+  }
+}

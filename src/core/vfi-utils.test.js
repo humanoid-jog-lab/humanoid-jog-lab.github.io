@@ -7,6 +7,7 @@ import {
     appendVFIErrorTubeConstraints,
     appendComponentBounds,
     appendJointLimitStepConstraints,
+    buildQPNumericSolveOptions,
     projectOntoHalfspaces,
     solveQPProjectedGradient,
     solveQPNumericActiveSet
@@ -213,4 +214,63 @@ test('solveQPNumericActiveSet respects inequality constraints', () => {
     assert.ok(result.x[0] <= 0.5 + 1e-9);
     assert.ok(Math.abs(result.x[0] - 0.5) < 1e-9);
     assert.ok(Math.abs(result.x[1]) < 1e-9);
+});
+
+test('solveQPNumericActiveSet accepts a feasible backend solution even when the backend emits a warning message', () => {
+    const H = [[2]];
+    const f = [0];
+    const A = [[1]];
+    const b = [0.5];
+
+    const result = solveQPNumericActiveSet(H, f, A, b, [0], {
+        solveQPBackend: () => ({
+            solution: [0.123456],
+            message: 'constraints are inconsistent, no solution!',
+            iterations: [7, 0]
+        })
+    });
+
+    assert.equal(result.converged, true);
+    assert.equal(result.iterations, 7);
+    assert.ok(Math.abs(result.x[0] - 0.123456) < 1e-12);
+    assert.equal(result.solverMessage, 'constraints are inconsistent, no solution!');
+});
+
+test('solveQPNumericActiveSet falls back to projected-gradient when the backend returns an infeasible warning solution', () => {
+    const H = [[2]];
+    const f = [-4];
+    const A = [[1]];
+    const b = [0.5];
+
+    const result = solveQPNumericActiveSet(H, f, A, b, [0], {
+        solveQPBackend: () => ({
+            solution: [10],
+            message: 'constraints are inconsistent, no solution!',
+            iterations: [15, 0]
+        }),
+        maxIter: 80,
+        stepTol: 1e-9,
+        gradTol: 1e-9,
+        solutionTolerance: 1e-8
+    });
+
+    assert.equal(result.converged, true);
+    assert.ok(Math.abs(result.x[0] - 0.5) < 1e-6, `expected fallback to recover feasible bound solution, got ${result.x[0]}`);
+    assert.match(result.solverMessage || '', /projected_gradient_fallback/);
+});
+
+test('buildQPNumericSolveOptions forwards configured qp tolerances and solution tolerance', () => {
+    const options = buildQPNumericSolveOptions({
+        qpMaxIter: 30,
+        qpStepTol: 1e-12,
+        qpGradTol: 1e-12,
+        qpSolutionTolerance: 1e-12
+    });
+
+    assert.deepEqual(options, {
+        maxIter: 30,
+        stepTol: 1e-12,
+        gradTol: 1e-12,
+        solutionTolerance: 1e-12
+    });
 });

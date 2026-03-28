@@ -95,7 +95,9 @@
                                     <option value="distance">相对距离</option>
                                     <option value="distance-fullbody">全身相对距离</option>
                                     <option value="robot1">机器人1</option>
+                                    <option value="robot1-waist">左臂+腰部</option>
                                     <option value="robot2">机器人2</option>
+                                    <option value="robot2-waist">右臂+腰部</option>
                                 </select>
                             </div>
                             <div style="font-size: 0.75rem; color: #94a3b8; margin-top: 0.25rem;">
@@ -114,36 +116,41 @@
                             <div style="margin-top: 0.6rem;">
                                 <label style="font-size: 0.85rem; color: #cbd5e1; display: block; margin-bottom: 0.25rem;">点动求解器：</label>
                                 <select id="humanoid-jog-solver-select" style="width: 100%; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;">
-                                    <option value="vfi">VFI（约束优先）</option>
-                                    <option value="priority">Priority（原零空间）</option>
+                                    <option value="vfi">new qpJ</option>
+                                    <option value="priority">零空间投影</option>
+                                    <option value="mj_restore">MuJoCo 风格恢复</option>
+                                    <option value="mj_restore_pre_w">MuJoCo 风格恢复 + w预优化</option>
                                 </select>
                                 <div style="font-size: 0.7rem; color: #64748b; margin-top: 0.2rem;">
                                     对人形协同点动模式生效，可随时切换。
                                 </div>
                             </div>
                             <div style="margin-top: 0.55rem;">
-                                <label style="font-size: 0.85rem; color: #cbd5e1; display: block; margin-bottom: 0.25rem;">VFI 步进后端：</label>
-                                <select id="humanoid-vfi-step-backend-select" style="width: 100%; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;">
-                                    <option value="projection">Projection（原实现）</option>
-                                    <option value="qp">QP（新）</option>
+                                <label style="font-size: 0.85rem; color: #cbd5e1; display: block; margin-bottom: 0.25rem;">w 指标：</label>
+                                <select id="humanoid-manifold-jog-metric-select" style="width: 100%; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;">
+                                    <option value="w_abs_hier">w_abs_hier</option>
+                                    <option value="w_abs_hier_vfi">w_abs_hier_vfi</option>
                                 </select>
+                                <div style="margin-top: 0.45rem;">
+                                    <button id="humanoid-w-metric-increase-btn" class="demo-btn" style="width: 100%;">w+</button>
+                                </div>
                                 <div style="font-size: 0.7rem; color: #64748b; margin-top: 0.2rem;">
-                                    仅在 VFI 模式生效，用于切换步进子求解器。
+                                    仅保留层级普通可操作度与层级 VFI 可操作度。
                                 </div>
                             </div>
                             <div style="margin-top: 0.6rem;">
                                 <label class="toggle-switch" style="font-size: 0.85rem;">
-                                    <input type="checkbox" id="humanoid-task-equivalent-branching-toggle">
+                                    <input type="checkbox" id="humanoid-test-dual-arm-lock-toggle">
                                     <span class="toggle-slider"></span>
-                                    <span class="toggle-label">任务等价多分支</span>
+                                    <span class="toggle-label">双臂测试锁</span>
                                 </label>
                                 <div style="font-size: 0.7rem; color: #64748b; margin-top: 0.2rem;">
-                                    生成多个关节限位回避候选姿态，投影回同一双臂末端任务后选优。
+                                    临时限制 ljoint2∈[-0.1,0.2], rjoint2∈[-0.2,0.1]
                                 </div>
                             </div>
                             <div id="humanoid-vfi-diagnostics-panel" class="vfi-diagnostics-panel">
                                 <div class="vfi-diagnostics-head">
-                                    <span>实时约束诊断</span>
+                                    <span>实时约束诊断（含 CCTSM §IV）</span>
                                     <code id="humanoid-vfi-diagnostics-timestamp">--:--:--.---</code>
                                 </div>
                                 <pre id="humanoid-vfi-diagnostics-text" class="vfi-diagnostics-text">等待点动命令...</pre>

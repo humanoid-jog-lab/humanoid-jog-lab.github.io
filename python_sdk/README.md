@@ -150,6 +150,10 @@ ros.destroy_node()
 rclpy.shutdown()
 ```
 
+说明：
+- `execute_timed_trajectory(...)` 在 `arm_run_time <= 0` 时会自动使用轨迹采样间隔作为机械臂执行周期，
+  这样机械臂不会默认“立刻到位”，与腰部速度型命令的节拍更一致。
+
 完整示例见：
 
 - [examples/basic_usage.py](/home/echoz/dq_vizlab/python_sdk/examples/basic_usage.py)

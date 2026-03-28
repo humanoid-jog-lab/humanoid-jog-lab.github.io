@@ -17,6 +17,14 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
+NLOPT_DIR="./third_party/nlopt"
+
+# NLopt 目前仍是可选的；只有显式要求 NLopt 构建时才会提前失败
+if [ "${NLOPT_REQUIRED:-0}" = "1" ] && [ ! -d "$NLOPT_DIR" ]; then
+    echo -e "${RED}错误: NLopt 源码不存在: $NLOPT_DIR${NC}"
+    echo -e "${YELLOW}提示: 先将 NLopt 源码放到 $NLOPT_DIR，或运行 'npm run build:wasm' 继续不含 NLopt 的构建。${NC}"
+    exit 1
+fi
 
 # 检查 Emscripten 是否安装
 if ! command -v emcc &> /dev/null; then
