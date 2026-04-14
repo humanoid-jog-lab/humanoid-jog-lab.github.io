@@ -109,14 +109,14 @@ export class HumanoidJogMJWorkerClient {
         return true;
     }
 
-    async solve({ modelSpec, request, secondaryMetricRequest = null } = {}) {
+    async solve({ modelSpec, solverMode = 'mj_restore', request, secondaryMetricRequest = null } = {}) {
         const worker = this._ensureWorker();
         if (!worker || !modelSpec || !request) return null;
         const ensureStartMs = nowMs();
         await this.ensureModel(modelSpec);
         const workerInitMs = nowMs() - ensureStartMs;
         const solveRoundTripStartMs = nowMs();
-        const payload = await this._post('solve', { request, secondaryMetricRequest });
+        const payload = await this._post('solve', { solverMode, request, secondaryMetricRequest });
         const solveRoundTripMs = nowMs() - solveRoundTripStartMs;
         if (payload && typeof payload === 'object') {
             return {

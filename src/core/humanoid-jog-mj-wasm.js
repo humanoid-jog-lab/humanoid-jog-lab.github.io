@@ -1,4 +1,5 @@
 export const HUMANOID_MJ_RESTORE_WASM_DEFAULTS = Object.freeze({
+    solverMode: 'mj_restore',
     keepBodyZVertical: false,
     bodyEqualityTolerance: 0,
     absoluteWeight: 1,
@@ -13,9 +14,20 @@ export const HUMANOID_MJ_RESTORE_WASM_DEFAULTS = Object.freeze({
     },
     maxIterations: 16,
     damping: 1e-6,
+    maxDampingRetries: 8,
+    dampingGrowthFactor: 10,
     initialScale: 1,
     minScale: 1e-6,
     reductionFactor: 0.5,
+    initialTrustRadius: 0.2,
+    minTrustRadius: 1e-6,
+    maxTrustRadius: 1.0,
+    maxTrustRegionRetries: 6,
+    trustRegionShrinkFactor: 0.5,
+    trustRegionExpandFactor: 1.75,
+    rhoAcceptanceThreshold: 0.05,
+    rhoShrinkThreshold: 0.05,
+    rhoExpandThreshold: 0.75,
     equalityTolerance: 1e-12,
     inequalityTolerance: 1e-12
 });
@@ -52,11 +64,22 @@ function buildReferenceAxisModel(axis = {}, fallback = {}) {
     };
 }
 
-export function canUseHumanoidJogMJRestoreWasm(humanoidModel) {
-    return typeof humanoidModel?.solveAbsoluteTargetMJRestore === 'function';
+function normalizeSolverMode(solverMode) {
+    return solverMode === 'mj_restore_tr' ? 'mj_restore_tr' : 'mj_restore';
+}
+
+function getHumanoidJogMJRestoreWasmSolveFunctionName(solverMode) {
+    return normalizeSolverMode(solverMode) === 'mj_restore_tr'
+        ? 'solveAbsoluteTargetMJRestoreTrustRegion'
+        : 'solveAbsoluteTargetMJRestore';
+}
+
+export function canUseHumanoidJogMJRestoreWasm(humanoidModel, solverMode = 'mj_restore') {
+    return typeof humanoidModel?.[getHumanoidJogMJRestoreWasmSolveFunctionName(solverMode)] === 'function';
 }
 
 export function buildHumanoidJogMJRestoreWasmRequest({
+    solverMode,
     qCurrent,
     activeStart,
     activeCount,
@@ -76,14 +99,27 @@ export function buildHumanoidJogMJRestoreWasmRequest({
     referenceModel,
     maxIterations,
     damping,
+    maxDampingRetries,
+    dampingGrowthFactor,
     initialScale,
     minScale,
     reductionFactor,
+    initialTrustRadius,
+    minTrustRadius,
+    maxTrustRadius,
+    maxTrustRegionRetries,
+    trustRegionShrinkFactor,
+    trustRegionExpandFactor,
+    rhoAcceptanceThreshold,
+    rhoShrinkThreshold,
+    rhoExpandThreshold,
+    regularizationWeights,
     equalityTolerance,
     inequalityTolerance
 } = {}) {
     const fallback = HUMANOID_MJ_RESTORE_WASM_DEFAULTS;
     return {
+        solverMode: normalizeSolverMode(solverMode || fallback.solverMode),
         qCurrent: cloneArray(qCurrent),
         activeStart: Number.isFinite(activeStart) ? Math.max(0, Math.floor(activeStart)) : 0,
         activeCount: Number.isFinite(activeCount) ? Math.max(0, Math.floor(activeCount)) : 0,
@@ -97,6 +133,7 @@ export function buildHumanoidJogMJRestoreWasmRequest({
         lowerBounds: cloneArray(lowerBounds),
         upperBounds: cloneArray(upperBounds),
         stepBounds: cloneArray(stepBounds),
+        regularizationWeights: cloneArray(regularizationWeights),
         wvfiLowerBound: Math.max(0, finiteOr(wvfiLowerBound, fallback.wvfiLowerBound)),
         jointLimitActivationThreshold: Math.max(
             0,
@@ -126,9 +163,23 @@ export function buildHumanoidJogMJRestoreWasmRequest({
         },
         maxIterations: Math.max(1, Math.floor(finiteOr(maxIterations, fallback.maxIterations))),
         damping: Math.max(1e-12, finiteOr(damping, fallback.damping)),
+        maxDampingRetries: Math.max(0, Math.floor(finiteOr(maxDampingRetries, fallback.maxDampingRetries))),
+        dampingGrowthFactor: Math.max(1.01, finiteOr(dampingGrowthFactor, fallback.dampingGrowthFactor)),
         initialScale: Math.max(1e-8, finiteOr(initialScale, fallback.initialScale)),
         minScale: Math.max(1e-8, finiteOr(minScale, fallback.minScale)),
         reductionFactor: Math.min(0.99, Math.max(0.01, finiteOr(reductionFactor, fallback.reductionFactor))),
+        initialTrustRadius: Math.max(1e-8, finiteOr(initialTrustRadius, fallback.initialTrustRadius)),
+        minTrustRadius: Math.max(1e-8, finiteOr(minTrustRadius, fallback.minTrustRadius)),
+        maxTrustRadius: Math.max(1e-8, finiteOr(maxTrustRadius, fallback.maxTrustRadius)),
+        maxTrustRegionRetries: Math.max(1, Math.floor(finiteOr(maxTrustRegionRetries, fallback.maxTrustRegionRetries))),
+        trustRegionShrinkFactor: Math.min(
+            0.99,
+            Math.max(0.01, finiteOr(trustRegionShrinkFactor, fallback.trustRegionShrinkFactor))
+        ),
+        trustRegionExpandFactor: Math.max(1.01, finiteOr(trustRegionExpandFactor, fallback.trustRegionExpandFactor)),
+        rhoAcceptanceThreshold: finiteOr(rhoAcceptanceThreshold, fallback.rhoAcceptanceThreshold),
+        rhoShrinkThreshold: finiteOr(rhoShrinkThreshold, fallback.rhoShrinkThreshold),
+        rhoExpandThreshold: finiteOr(rhoExpandThreshold, fallback.rhoExpandThreshold),
         equalityTolerance: Math.max(0, finiteOr(equalityTolerance, fallback.equalityTolerance)),
         inequalityTolerance: Math.max(0, finiteOr(inequalityTolerance, fallback.inequalityTolerance))
     };
@@ -147,6 +198,9 @@ export function normalizeHumanoidJogMJRestoreWasmResult(resultRaw, fallbackQAppl
         lastAcceptedScale: Number.isFinite(resultRaw?.lastAcceptedScale)
             ? resultRaw.lastAcceptedScale
             : 0,
+        lastAcceptedDamping: Number.isFinite(resultRaw?.lastAcceptedDamping)
+            ? resultRaw.lastAcceptedDamping
+            : Number.NaN,
         commandResidualNorm: Number.isFinite(resultRaw?.commandResidualNorm)
             ? resultRaw.commandResidualNorm
             : Number.POSITIVE_INFINITY,
@@ -159,6 +213,27 @@ export function normalizeHumanoidJogMJRestoreWasmResult(resultRaw, fallbackQAppl
         inequalityViolation: Number.isFinite(resultRaw?.inequalityViolation)
             ? resultRaw.inequalityViolation
             : Number.POSITIVE_INFINITY,
+        trustRadius: Number.isFinite(resultRaw?.trustRadius)
+            ? resultRaw.trustRadius
+            : Number.NaN,
+        lastAcceptedRho: Number.isFinite(resultRaw?.lastAcceptedRho)
+            ? resultRaw.lastAcceptedRho
+            : Number.NaN,
+        lastPredictedReduction: Number.isFinite(resultRaw?.lastPredictedReduction)
+            ? resultRaw.lastPredictedReduction
+            : Number.NaN,
+        lastActualReduction: Number.isFinite(resultRaw?.lastActualReduction)
+            ? resultRaw.lastActualReduction
+            : Number.NaN,
+        acceptedBy: typeof resultRaw?.acceptedBy === 'string' && resultRaw.acceptedBy.trim()
+            ? resultRaw.acceptedBy.trim()
+            : '',
+        bestConstraintViolation: Number.isFinite(resultRaw?.bestConstraintViolation)
+            ? resultRaw.bestConstraintViolation
+            : Number.POSITIVE_INFINITY,
+        filterSize: Number.isFinite(resultRaw?.filterSize)
+            ? resultRaw.filterSize
+            : 0,
         workerInitMs: Number.isFinite(resultRaw?.workerInitMs)
             ? resultRaw.workerInitMs
             : Number.NaN,
@@ -191,6 +266,7 @@ export function normalizeHumanoidJogMJRestoreWasmResult(resultRaw, fallbackQAppl
 
 export function attemptHumanoidJogMJRestoreWasm({
     humanoidModel,
+    solverMode = 'mj_restore',
     qInitial,
     evaluateProblem,
     activeStart,
@@ -213,10 +289,24 @@ export function attemptHumanoidJogMJRestoreWasm({
     initialScale,
     minScale,
     reductionFactor,
+    initialTrustRadius,
+    minTrustRadius,
+    maxTrustRadius,
+    maxTrustRegionRetries,
+    trustRegionShrinkFactor,
+    trustRegionExpandFactor,
+    rhoAcceptanceThreshold,
+    rhoShrinkThreshold,
+    rhoExpandThreshold,
+    maxDampingRetries,
+    dampingGrowthFactor,
+    regularizationWeights,
     equalityTolerance,
     inequalityTolerance
 } = {}) {
-    if (!canUseHumanoidJogMJRestoreWasm(humanoidModel) || typeof evaluateProblem !== 'function') {
+    const normalizedSolverMode = normalizeSolverMode(solverMode);
+    const solveFunctionName = getHumanoidJogMJRestoreWasmSolveFunctionName(normalizedSolverMode);
+    if (!canUseHumanoidJogMJRestoreWasm(humanoidModel, normalizedSolverMode) || typeof evaluateProblem !== 'function') {
         return null;
     }
 
@@ -228,6 +318,7 @@ export function attemptHumanoidJogMJRestoreWasm({
     }
 
     const request = buildHumanoidJogMJRestoreWasmRequest({
+        solverMode: normalizedSolverMode,
         qCurrent: cloneArray(initialProblem?.metadata?.qFull ?? initialProblem?.qCurrent ?? []),
         activeStart,
         activeCount,
@@ -247,16 +338,28 @@ export function attemptHumanoidJogMJRestoreWasm({
         referenceModel,
         maxIterations,
         damping,
+        maxDampingRetries,
+        dampingGrowthFactor,
         initialScale,
         minScale,
         reductionFactor,
+        initialTrustRadius,
+        minTrustRadius,
+        maxTrustRadius,
+        maxTrustRegionRetries,
+        trustRegionShrinkFactor,
+        trustRegionExpandFactor,
+        rhoAcceptanceThreshold,
+        rhoShrinkThreshold,
+        rhoExpandThreshold,
+        regularizationWeights,
         equalityTolerance,
         inequalityTolerance
     });
     const preMs = nowMs() - preStartMs;
 
     const solveStartMs = nowMs();
-    const rawResult = humanoidModel.solveAbsoluteTargetMJRestore(request);
+    const rawResult = humanoidModel[solveFunctionName](request);
     const measuredSolveMs = nowMs() - solveStartMs;
     const normalized = normalizeHumanoidJogMJRestoreWasmResult(rawResult, qInitialActive);
     const postStartMs = nowMs();
@@ -304,12 +407,28 @@ export function buildHumanoidJogMJRestoreWasmEnvelope({
         lastAcceptedScale: Number.isFinite(attempt.lastAcceptedScale)
             ? attempt.lastAcceptedScale
             : 0,
+        lastAcceptedDamping: Number.isFinite(attempt.lastAcceptedDamping)
+            ? attempt.lastAcceptedDamping
+            : Number.NaN,
         currentProblem,
         currentResidualNorm: Number.isFinite(attempt.currentResidualNorm)
             ? attempt.currentResidualNorm
             : (Number.isFinite(currentProblem?.equalities?.activeResidualNorm)
                 ? currentProblem.equalities.activeResidualNorm
                 : Number.POSITIVE_INFINITY),
+        trustRadius: Number.isFinite(attempt.trustRadius) ? attempt.trustRadius : Number.NaN,
+        lastAcceptedRho: Number.isFinite(attempt.lastAcceptedRho) ? attempt.lastAcceptedRho : Number.NaN,
+        lastPredictedReduction: Number.isFinite(attempt.lastPredictedReduction)
+            ? attempt.lastPredictedReduction
+            : Number.NaN,
+        lastActualReduction: Number.isFinite(attempt.lastActualReduction)
+            ? attempt.lastActualReduction
+            : Number.NaN,
+        acceptedBy: typeof attempt.acceptedBy === 'string' ? attempt.acceptedBy : '',
+        bestConstraintViolation: Number.isFinite(attempt.bestConstraintViolation)
+            ? attempt.bestConstraintViolation
+            : Number.POSITIVE_INFINITY,
+        filterSize: Number.isFinite(attempt.filterSize) ? attempt.filterSize : 0,
         lastReferenceResidual: Array.isArray(attempt.lastReferenceResidual)
             ? attempt.lastReferenceResidual.slice()
             : [],
@@ -328,6 +447,7 @@ export function buildHumanoidJogMJRestoreWasmEnvelope({
 export async function attemptHumanoidJogMJRestoreWasmWorker({
     workerClient,
     modelSpec,
+    solverMode = 'mj_restore',
     qInitial,
     evaluateProblem,
     activeStart,
@@ -347,9 +467,21 @@ export async function attemptHumanoidJogMJRestoreWasmWorker({
     referenceModel,
     maxIterations,
     damping,
+    maxDampingRetries,
+    dampingGrowthFactor,
     initialScale,
     minScale,
     reductionFactor,
+    initialTrustRadius,
+    minTrustRadius,
+    maxTrustRadius,
+    maxTrustRegionRetries,
+    trustRegionShrinkFactor,
+    trustRegionExpandFactor,
+    rhoAcceptanceThreshold,
+    rhoShrinkThreshold,
+    rhoExpandThreshold,
+    regularizationWeights,
     equalityTolerance,
     inequalityTolerance,
     secondaryMetricRequest = null
@@ -365,7 +497,9 @@ export async function attemptHumanoidJogMJRestoreWasmWorker({
         return null;
     }
 
+    const normalizedSolverMode = normalizeSolverMode(solverMode);
     const request = buildHumanoidJogMJRestoreWasmRequest({
+        solverMode: normalizedSolverMode,
         qCurrent: cloneArray(initialProblem?.metadata?.qFull ?? initialProblem?.qCurrent ?? []),
         activeStart,
         activeCount,
@@ -385,9 +519,21 @@ export async function attemptHumanoidJogMJRestoreWasmWorker({
         referenceModel,
         maxIterations,
         damping,
+        maxDampingRetries,
+        dampingGrowthFactor,
         initialScale,
         minScale,
         reductionFactor,
+        initialTrustRadius,
+        minTrustRadius,
+        maxTrustRadius,
+        maxTrustRegionRetries,
+        trustRegionShrinkFactor,
+        trustRegionExpandFactor,
+        rhoAcceptanceThreshold,
+        rhoShrinkThreshold,
+        rhoExpandThreshold,
+        regularizationWeights,
         equalityTolerance,
         inequalityTolerance
     });
@@ -396,6 +542,7 @@ export async function attemptHumanoidJogMJRestoreWasmWorker({
     const solveStartMs = nowMs();
     const rawResult = await workerClient.solve({
         modelSpec,
+        solverMode: normalizedSolverMode,
         request,
         secondaryMetricRequest
     });

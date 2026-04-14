@@ -11,27 +11,34 @@ import { formatBenchmarkMarkdownTable } from '../src/core/humanoid-jog-benchmark
 import {
     buildHumanoidControllerComparisonTasks,
     getHumanoidControllerComparisonColumns,
+    resolveHumanoidControllerComparisonControllerOptions,
     summarizeHumanoidControllerComparisonRows
 } from '../src/core/humanoid-jog-controller-comparison.js';
 
 const REPO_ROOT = '/home/echoz/dq_vizlab';
 const BASE_URL = process.env.BASE_URL || 'http://127.0.0.1:4173';
 const OUTPUT_JSON = process.env.COMPARISON_JSON
-    || path.join(REPO_ROOT, '2026_humanoid_robot', 'controller_comparison_x30cm.json');
+    || path.join(REPO_ROOT, '2026_humanoid_robot', 'figure', 'sim', 'controller_comparison_x30cm.json');
 const OUTPUT_MD = process.env.COMPARISON_MD
-    || path.join(REPO_ROOT, '2026_humanoid_robot', 'controller_comparison_x30cm.md');
+    || path.join(REPO_ROOT, '2026_humanoid_robot', 'figure', 'sim', 'controller_comparison_x30cm.md');
 const TARGET_X_METERS = Number.isFinite(Number(process.env.COMPARISON_TARGET_X_METERS))
     ? Math.max(0.01, Number(process.env.COMPARISON_TARGET_X_METERS))
     : 0.30;
 const MAX_TICKS = Number.isFinite(Number(process.env.COMPARISON_MAX_TICKS))
     ? Math.max(1, Math.floor(Number(process.env.COMPARISON_MAX_TICKS)))
-    : 200;
+    : 60;
 const MIN_EFFECTIVE_PROGRESS = Number.isFinite(Number(process.env.COMPARISON_MIN_PROGRESS))
     ? Math.max(1e-8, Number(process.env.COMPARISON_MIN_PROGRESS))
     : 1e-5;
 const MAX_STALL_TICKS = Number.isFinite(Number(process.env.COMPARISON_MAX_STALL_TICKS))
     ? Math.max(1, Math.floor(Number(process.env.COMPARISON_MAX_STALL_TICKS)))
     : 3;
+const COMMAND_TOLERANCE = Number.isFinite(Number(process.env.COMPARISON_COMMAND_TOLERANCE))
+    ? Math.max(0, Number(process.env.COMPARISON_COMMAND_TOLERANCE))
+    : 5e-4;
+const BODY_TOLERANCE = Number.isFinite(Number(process.env.COMPARISON_BODY_TOLERANCE))
+    ? Math.max(0, Number(process.env.COMPARISON_BODY_TOLERANCE))
+    : 5e-5;
 const NEAR_LIMIT_SEED = Number.isFinite(Number(process.env.COMPARISON_NEAR_LIMIT_SEED))
     ? Math.floor(Number(process.env.COMPARISON_NEAR_LIMIT_SEED))
     : 7;
@@ -134,17 +141,25 @@ function buildMarkdownRows(summaryRows = []) {
 async function writeBenchmarkOutputs(resultRuns) {
     const summaryRows = summarizeHumanoidControllerComparisonRows(resultRuns);
     const markdown = buildMarkdownRows(summaryRows);
+    await fs.mkdir(path.dirname(OUTPUT_JSON), { recursive: true });
     await fs.writeFile(OUTPUT_JSON, JSON.stringify({
         meta: {
             targetXMeters: TARGET_X_METERS,
             maxTicks: MAX_TICKS,
             minEffectiveProgress: MIN_EFFECTIVE_PROGRESS,
             maxStallTicks: MAX_STALL_TICKS,
-            nearLimitSeed: NEAR_LIMIT_SEED
+            commandTolerance: COMMAND_TOLERANCE,
+            bodyTolerance: BODY_TOLERANCE,
+            nearLimitSeed: NEAR_LIMIT_SEED,
+            scenarioTargets: {
+                absolute: 0.075,
+                'decoupled-upright': TARGET_X_METERS
+            }
         },
         rows: summaryRows,
         runs: resultRuns
     }, null, 2));
+    await fs.mkdir(path.dirname(OUTPUT_MD), { recursive: true });
     await fs.writeFile(OUTPUT_MD, `${markdown}\n`);
     return { summaryRows, markdown };
 }
@@ -170,7 +185,17 @@ try {
         if (PROFILE_FILTER.size > 0 && !PROFILE_FILTER.has(task.profile)) return false;
         if (SOLVER_FILTER.size > 0 && !SOLVER_FILTER.has(task.solverMode)) return false;
         return true;
-    });
+    }).map((task) => ({
+        ...task,
+        comparisonOptions: resolveHumanoidControllerComparisonControllerOptions({
+            controllerKey: task.key,
+            mode: task.mode,
+            includeWaist: task.includeWaist,
+            maxTicks: MAX_TICKS,
+            commandTolerance: COMMAND_TOLERANCE,
+            maxStallTicks: MAX_STALL_TICKS
+        })
+    }));
     if (tasks.length === 0) {
         throw new Error('No controller-comparison tasks matched the provided filters.');
     }
@@ -181,6 +206,8 @@ try {
             maxTicks,
             minEffectiveProgress,
             maxStallTicks,
+            commandTolerance,
+            bodyTolerance,
             nearLimitSeed
         }) => {
             const viz = window.visualizer;
@@ -206,6 +233,94 @@ try {
                 if (!element) return;
                 element.checked = checked;
                 element.dispatchEvent(new Event('change', { bubbles: true }));
+            };
+
+            const evaluateStep = (options = {}) => {
+                const stepProgress = Number(options.stepProgress);
+                const minEffectiveProgress = Number.isFinite(Number(options.minEffectiveProgress))
+                    ? Math.max(1e-8, Number(options.minEffectiveProgress))
+                    : 1e-5;
+                const stallTicks = Number.isFinite(Number(options.stallTicks))
+                    ? Math.max(0, Math.floor(Number(options.stallTicks)))
+                    : 0;
+                const maxStallTicks = Number.isFinite(Number(options.maxStallTicks))
+                    ? Math.max(1, Math.floor(Number(options.maxStallTicks)))
+                    : 3;
+                const status = options.status && typeof options.status === 'object' ? options.status : {};
+                const reason = typeof status.reason === 'string' && status.reason.length > 0
+                    ? status.reason
+                    : 'unknown';
+                const progressed = Number.isFinite(stepProgress) && stepProgress >= minEffectiveProgress;
+                const nextStallTicks = progressed ? 0 : stallTicks + 1;
+                const explicitFailure = (
+                    reason === 'fk_fail' ||
+                    reason === 'jacobian_fail' ||
+                    reason === 'body_task_fail' ||
+                    reason === 'solver_fail' ||
+                    reason === 'command_mismatch'
+                );
+                const ok = !explicitFailure;
+                const shouldStop = explicitFailure || nextStallTicks >= maxStallTicks;
+                return { reason, progressed, ok, shouldStop, nextStallTicks };
+            };
+
+            const evaluateCompletion = (options = {}) => {
+                const xProgress = Number(options.xProgress);
+                const target = Number.isFinite(Number(options.targetXMeters))
+                    ? Math.max(1e-8, Number(options.targetXMeters))
+                    : 0.30;
+                const targetReachTolerance = Number.isFinite(Number(options.targetReachTolerance))
+                    ? Math.max(0, Number(options.targetReachTolerance))
+                    : 5e-4;
+                const commandError = Number(options.commandError);
+                const bodyError = Number(options.bodyError);
+                const waistXViolation = Number(options.waistXViolation);
+                const commandTol = Number.isFinite(Number(options.commandTolerance))
+                    ? Math.max(0, Number(options.commandTolerance))
+                    : 5e-4;
+                const bodyTol = Number.isFinite(Number(options.bodyTolerance))
+                    ? Math.max(0, Number(options.bodyTolerance))
+                    : 5e-5;
+                const enforceBody = options.enforceBody === true;
+                const enforceWaist = options.enforceWaist === true;
+                const reachedTarget = Number.isFinite(xProgress) && xProgress + targetReachTolerance >= target;
+                const commandConverged = Number.isFinite(commandError) && commandError <= commandTol;
+                const bodyConverged = !enforceBody || (Number.isFinite(bodyError) && bodyError <= bodyTol);
+                const waistFeasible = !enforceWaist || (!Number.isFinite(waistXViolation) || waistXViolation <= 1e-12);
+                return {
+                    reachedTarget,
+                    commandConverged,
+                    bodyConverged,
+                    waistFeasible,
+                    completed: reachedTarget && commandConverged && bodyConverged && waistFeasible,
+                    progressRatio: Number.isFinite(xProgress) ? Math.max(0, Math.min(1, xProgress / target)) : Number.NaN
+                };
+            };
+
+                const meanOf = (values = []) => {
+                    const finite = values.filter((value) => Number.isFinite(value));
+                    if (finite.length === 0) return Number.NaN;
+                    return finite.reduce((sum, value) => sum + value, 0) / finite.length;
+                };
+
+                const vectorNorm = (values = []) => {
+                    if (!Array.isArray(values) || values.length === 0) return Number.NaN;
+                    let sumSquares = 0;
+                    let hasFiniteValue = false;
+                    for (const value of values) {
+                        const numericValue = Number(value);
+                        if (!Number.isFinite(numericValue)) continue;
+                        sumSquares += numericValue * numericValue;
+                        hasFiniteValue = true;
+                    }
+                    return hasFiniteValue ? Math.sqrt(sumSquares) : Number.NaN;
+                };
+
+            const percentileOf = (values = [], percentile = 0.95) => {
+                const finite = values.filter((value) => Number.isFinite(value)).sort((left, right) => left - right);
+                if (finite.length === 0) return Number.NaN;
+                const rank = Math.min(finite.length - 1, Math.max(0, Math.ceil(percentile * finite.length) - 1));
+                return finite[rank];
             };
 
             const createRng = (seed) => {
@@ -339,12 +454,22 @@ try {
 
             const runs = [];
 
-            setCheckbox('joint-limit-avoidance-toggle', true);
+            setCheckbox('humanoid-test-dual-arm-lock-toggle', false);
             dispatchSelectValue('humanoid-manifold-jog-metric-select', 'w_abs_hier_vfi');
+            viz.setHumanoidTestDualArmLockEnabled?.(false);
+            if (viz.vfiConfig) {
+                viz.vfiConfig.humanoidTestDualArmLockEnabled = false;
+            }
 
             for (const task of tasksInput) {
+                const controllerOptions = task.comparisonOptions || {};
                 dispatchSelectValue('humanoid-jog-solver-select', task.solverMode);
                 dispatchSelectValue('dual-arm-control-mode-select', task.controlMode);
+                setCheckbox('humanoid-waist-x-corridor-toggle', task.includeWaist === true && task.keepBodyZVertical === true);
+                setCheckbox('joint-limit-avoidance-toggle', controllerOptions.jointLimitAvoidanceEnabled);
+                if (viz.vfiConfig) {
+                    viz.vfiConfig.qpUseInvariantEquality = controllerOptions.qpUseInvariantEquality !== false;
+                }
                 await resetHumanoidState(task.profile);
                 await sleep(50);
 
@@ -353,13 +478,21 @@ try {
 
                 const startTranslation = getAbsoluteTranslation();
                 const startX = Number(startTranslation?.[0]) || 0;
+                const startRelativePose = viz._getHumanoidRelativePose(window.humanoidQ.slice());
                 let previousProgress = 0;
                 let sustainableTicks = 0;
                 let stallTicks = 0;
                 let reachedTarget = false;
+                let completed = false;
+                let completionTicks = Number.NaN;
+                let terminalReason = 'max_iter';
                 const steps = [];
 
-                for (let tick = 1; tick <= maxTicks; tick += 1) {
+                const tickBudget = Number.isFinite(Number(controllerOptions.maxTicks))
+                    ? Math.max(1, Math.floor(Number(controllerOptions.maxTicks)))
+                    : maxTicks;
+
+                for (let tick = 1; tick <= tickBudget; tick += 1) {
                     viz.lastIKSolveStatus = {};
                     viz.lastHumanoidJogDiagnostics = { modeTag: 'idle' };
                     const qBefore = Array.isArray(window.humanoidQ) ? window.humanoidQ.slice() : [];
@@ -372,42 +505,100 @@ try {
                     const xProgress = (Number(currentTranslation?.[0]) || 0) - startX;
                     const stepProgress = xProgress - previousProgress;
                     previousProgress = xProgress;
-                    const dmin = computeDmin(task.includeWaist);
                     const status = viz.lastIKSolveStatus || {};
                     const diagnostics = viz.lastHumanoidJogDiagnostics || {};
-                    const ok = status.converged !== false;
+                    const commandError = Number.isFinite(Number(diagnostics.commandError))
+                        ? Number(diagnostics.commandError)
+                        : (Number.isFinite(Number(status.finalResidual)) ? Number(status.finalResidual) : Number.NaN);
+                    const bodyError = Number.isFinite(Number(diagnostics.bodyResidualNorm))
+                        ? Number(diagnostics.bodyResidualNorm)
+                        : Number.NaN;
+                    const waistXViolation = Number.isFinite(Number(diagnostics.waistXViolation))
+                        ? Number(diagnostics.waistXViolation)
+                        : Number.NaN;
+                    const currentRelativePose = viz._getHumanoidRelativePose(window.humanoidQ.slice());
+                    const relativePoseChange = Array.isArray(startRelativePose) && Array.isArray(currentRelativePose)
+                        ? (() => {
+                            const signedError = viz._signedPoseError?.(startRelativePose, currentRelativePose);
+                            if (!Array.isArray(signedError)) return Number.NaN;
+                            const norm = typeof viz._computePoseErrorNorm === 'function'
+                                ? Number(viz._computePoseErrorNorm(signedError))
+                                : vectorNorm(signedError);
+                            return Number.isFinite(norm) ? norm : Number.NaN;
+                        })()
+                        : Number.NaN;
+                    const dmin = Number.isFinite(Number(diagnostics.vfiMinDistance))
+                        ? Number(diagnostics.vfiMinDistance)
+                        : computeDmin(task.includeWaist);
+                    const tickSolveMs = runtimeMs;
+                    const stepEvaluation = evaluateStep({
+                        stepProgress,
+                        minEffectiveProgress,
+                        stallTicks,
+                        maxStallTicks: controllerOptions.maxStallTicks,
+                        status
+                    });
+                    const scenarioTargetXMeters = Number.isFinite(Number(controllerOptions.targetXMeters))
+                        ? Math.max(1e-8, Number(controllerOptions.targetXMeters))
+                        : targetXMeters;
+                    const completionEvaluation = evaluateCompletion({
+                        xProgress,
+                        targetXMeters: scenarioTargetXMeters,
+                        commandError,
+                        commandTolerance: controllerOptions.commandTolerance,
+                        bodyError,
+                        bodyTolerance,
+                        waistXViolation,
+                        enforceBody: task.keepBodyZVertical === true,
+                        enforceWaist: task.includeWaist === true && task.keepBodyZVertical === true
+                    });
 
-                    if (stepProgress >= minEffectiveProgress) {
+                    if (stepEvaluation.progressed) {
                         sustainableTicks += 1;
-                        stallTicks = 0;
-                    } else {
-                        stallTicks += 1;
                     }
+                    stallTicks = stepEvaluation.nextStallTicks;
 
                     steps.push({
                         tick,
                         runtimeMs,
+                        tickSolveMs,
                         xProgress,
                         stepProgress,
+                        commandError,
+                        bodyError,
+                        waistXViolation,
+                        relativePoseChange,
+                        progressRatio: completionEvaluation.progressRatio,
                         dmin,
-                        ok,
+                        ok: stepEvaluation.ok,
                         solver: typeof status.solver === 'string' ? status.solver : task.solverMode,
-                        reason: typeof status.reason === 'string' ? status.reason : 'unknown',
+                        reason: stepEvaluation.reason,
                         message: typeof status.message === 'string' ? status.message : '',
                         diagnosticLabel: typeof diagnostics.diagnosticLabel === 'string' ? diagnostics.diagnosticLabel : '',
                         converged: status.converged !== false
                     });
 
-                    if (xProgress >= targetXMeters) {
+                    if (completionEvaluation.completed) {
                         reachedTarget = true;
+                        completed = true;
+                        completionTicks = tick;
+                        terminalReason = 'completed';
                         break;
                     }
-                    if (!ok || stallTicks >= maxStallTicks) {
+                    if (completionEvaluation.reachedTarget) {
+                        reachedTarget = true;
+                        terminalReason = 'target_not_converged';
+                        break;
+                    }
+                    if (stepEvaluation.shouldStop) {
+                        terminalReason = stepEvaluation.ok ? 'stall' : stepEvaluation.reason;
                         break;
                     }
                 }
 
                 const finalStep = steps[steps.length - 1] || {};
+                const meanSolveMs = meanOf(steps.map((step) => Number(step.tickSolveMs)));
+                const p95SolveMs = percentileOf(steps.map((step) => Number(step.tickSolveMs)), 0.95);
                 runs.push({
                     mode: task.mode,
                     profile: task.profile,
@@ -417,14 +608,27 @@ try {
                     controlMode: task.controlMode,
                     sustainableTicks,
                     reachedTarget,
+                    completed,
+                    completionTicks,
                     finalXProgress: Number.isFinite(finalStep.xProgress) ? finalStep.xProgress : 0,
-                    terminalReason: finalStep.reason || 'unknown',
+                    finalCommandError: Number.isFinite(finalStep.commandError) ? finalStep.commandError : Number.NaN,
+                    finalBodyError: Number.isFinite(finalStep.bodyError) ? finalStep.bodyError : Number.NaN,
+                    finalRelativePoseChange: Number.isFinite(finalStep.relativePoseChange) ? finalStep.relativePoseChange : Number.NaN,
+                    finalDmin: Number.isFinite(finalStep.dmin) ? finalStep.dmin : Number.NaN,
+                    progressRatio: Number.isFinite(finalStep.progressRatio) ? finalStep.progressRatio : Number.NaN,
+                    meanSolveMs,
+                    p95SolveMs,
+                    maxTicks: tickBudget,
+                    targetXMeters: Number.isFinite(Number(controllerOptions.targetXMeters))
+                        ? Number(controllerOptions.targetXMeters)
+                        : targetXMeters,
+                    terminalReason: terminalReason || finalStep.reason || 'unknown',
                     terminalLabel: finalStep.diagnosticLabel || 'unknown',
                     steps
                 });
                 console.log(
                     `[scenario] ${task.label} | ${task.profile} | ${task.label} | ${task.solverMode} `
-                    + `ticks=${sustainableTicks} progress=${((Number.isFinite(finalStep.xProgress) ? finalStep.xProgress : 0)).toFixed(4)}`
+                    + `completed=${completed ? 'yes' : 'no'} progress=${((Number.isFinite(finalStep.xProgress) ? finalStep.xProgress : 0)).toFixed(4)}`
                 );
             }
 
@@ -436,6 +640,8 @@ try {
             maxTicks: MAX_TICKS,
             minEffectiveProgress: MIN_EFFECTIVE_PROGRESS,
             maxStallTicks: MAX_STALL_TICKS,
+            commandTolerance: COMMAND_TOLERANCE,
+            bodyTolerance: BODY_TOLERANCE,
             nearLimitSeed: NEAR_LIMIT_SEED
         }
     );
@@ -443,7 +649,7 @@ try {
     for (const run of result.runs) {
         console.log(
             `[done] ${run.mode} | ${run.profile} | ${run.controllerLabel} `
-            + `ticks=${run.sustainableTicks} progress=${run.finalXProgress.toFixed(4)}`
+            + `completed=${run.completed ? 'yes' : 'no'} progress=${run.finalXProgress.toFixed(4)}`
         );
     }
 

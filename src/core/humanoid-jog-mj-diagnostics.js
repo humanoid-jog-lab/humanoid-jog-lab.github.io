@@ -55,8 +55,11 @@ export function buildHumanoidJogMJDiagnostics({
     waistXDlower = Number.NaN,
     waistXViolation = Number.NaN
 } = {}) {
+    const normalizedSolverMode = solverMode === 'mj_restore_pre_w'
+        ? 'mj_restore_pre_w'
+        : (solverMode === 'mj_restore_tr' ? 'mj_restore_tr' : 'mj_restore');
     return {
-        solverMode: solverMode === 'mj_restore_pre_w' ? 'mj_restore_pre_w' : 'mj_restore',
+        solverMode: normalizedSolverMode,
         modeTag,
         message: 'MuJoCo 风格恢复 诊断已更新。',
         includeWaist,

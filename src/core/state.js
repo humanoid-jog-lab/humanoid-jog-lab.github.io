@@ -47,6 +47,9 @@ export const appState = {
     humanoidModel: null,
     humanoidQ: [],
     humanoidJointNames: [],
+    humanoidInitialQProfileId: 'default1',
+    humanoidCooperativePolishingSurfaceSource: 'analytic',
+    humanoidCooperativePolishingObjectPose: null,
     humanoidBasePose: { x: 0, y: 0, yaw: 0 },
     humanoidBaseTargetPose: { x: 0, y: 0, yaw: 0 },
     humanoidBaseWheelVelocity: { left: 0, right: 0 },
@@ -246,6 +249,9 @@ export function updateWindowGlobals() {
     window.humanoidModel = appState.humanoidModel;
     window.humanoidQ = appState.humanoidQ;
     window.humanoidJointNames = appState.humanoidJointNames;
+    window.humanoidInitialQProfileId = appState.humanoidInitialQProfileId;
+    window.humanoidCooperativeRuledSurfaceSource = appState.humanoidCooperativePolishingSurfaceSource;
+    window.humanoidCooperativeRuledSurfaceObjectPose = appState.humanoidCooperativePolishingObjectPose;
     window.humanoidBasePose = appState.humanoidBasePose;
     window.humanoidBaseTargetPose = appState.humanoidBaseTargetPose;
     window.humanoidBaseWheelVelocity = appState.humanoidBaseWheelVelocity;

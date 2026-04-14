@@ -10,11 +10,19 @@ import {
     normalizeHumanoidJogMJRestoreWasmResult
 } from './humanoid-jog-mj-wasm.js';
 
-test('canUseHumanoidJogMJRestoreWasm checks for the dedicated wasm entry point', () => {
+test('canUseHumanoidJogMJRestoreWasm checks the solver-specific wasm entry point', () => {
     assert.equal(canUseHumanoidJogMJRestoreWasm(null), false);
     assert.equal(canUseHumanoidJogMJRestoreWasm({}), false);
     assert.equal(
         canUseHumanoidJogMJRestoreWasm({ solveAbsoluteTargetMJRestore: () => ({}) }),
+        true
+    );
+    assert.equal(
+        canUseHumanoidJogMJRestoreWasm({ solveAbsoluteTargetMJRestore: () => ({}) }, 'mj_restore_tr'),
+        false
+    );
+    assert.equal(
+        canUseHumanoidJogMJRestoreWasm({ solveAbsoluteTargetMJRestoreTrustRegion: () => ({}) }, 'mj_restore_tr'),
         true
     );
 });
@@ -94,10 +102,18 @@ test('normalizeHumanoidJogMJRestoreWasmResult safely fills restoration defaults'
         iterations: 4,
         acceptedIterations: 3,
         lastAcceptedScale: 0.5,
+        lastAcceptedDamping: 1e-4,
         commandResidualNorm: 1e-6,
         relativeResidualNorm: 2e-6,
         bodyResidualNorm: 3e-6,
         inequalityViolation: 0,
+        trustRadius: 0.2,
+        lastAcceptedRho: 0.8,
+        lastPredictedReduction: 0.5,
+        lastActualReduction: 0.4,
+        acceptedBy: 'filter',
+        bestConstraintViolation: 1e-7,
+        filterSize: 3,
         referenceResidual: [0.1, 0.2],
         constraintMotion: [0.3, 0.4],
         qApplied: [1, 2],
@@ -114,10 +130,18 @@ test('normalizeHumanoidJogMJRestoreWasmResult safely fills restoration defaults'
         iterations: 4,
         acceptedIterations: 3,
         lastAcceptedScale: 0.5,
+        lastAcceptedDamping: 1e-4,
         commandResidualNorm: 1e-6,
         relativeResidualNorm: 2e-6,
         bodyResidualNorm: 3e-6,
         inequalityViolation: 0,
+        trustRadius: 0.2,
+        lastAcceptedRho: 0.8,
+        lastPredictedReduction: 0.5,
+        lastActualReduction: 0.4,
+        acceptedBy: 'filter',
+        bestConstraintViolation: 1e-7,
+        filterSize: 3,
         workerInitMs: Number.NaN,
         solveRoundTripMs: Number.NaN,
         solveMs: Number.NaN,
@@ -141,10 +165,18 @@ test('normalizeHumanoidJogMJRestoreWasmResult falls back to the provided active 
         iterations: 0,
         acceptedIterations: 0,
         lastAcceptedScale: 0,
+        lastAcceptedDamping: Number.NaN,
         commandResidualNorm: Number.POSITIVE_INFINITY,
         relativeResidualNorm: Number.POSITIVE_INFINITY,
         bodyResidualNorm: 0,
         inequalityViolation: Number.POSITIVE_INFINITY,
+        trustRadius: Number.NaN,
+        lastAcceptedRho: Number.NaN,
+        lastPredictedReduction: Number.NaN,
+        lastActualReduction: Number.NaN,
+        acceptedBy: '',
+        bestConstraintViolation: Number.POSITIVE_INFINITY,
+        filterSize: 0,
         workerInitMs: Number.NaN,
         solveRoundTripMs: Number.NaN,
         solveMs: Number.NaN,
@@ -276,4 +308,49 @@ test('attemptHumanoidJogMJRestoreWasm prefers wasm and normalizes the restoratio
     assert.equal(result.currentResidualNorm, 0.4);
     assert.deepEqual(result.lastReferenceResidual, [0.1]);
     assert.deepEqual(result.lastConstraintMotion, [0.2]);
+});
+
+test('attemptHumanoidJogMJRestoreWasm dispatches trust-region requests to the dedicated wasm entry point', () => {
+    let lineSearchCalled = false;
+    let trustRegionCalled = false;
+    const humanoidModel = {
+        solveAbsoluteTargetMJRestore() {
+            lineSearchCalled = true;
+            return {};
+        },
+        solveAbsoluteTargetMJRestoreTrustRegion(request) {
+            trustRegionCalled = true;
+            assert.equal(request.solverMode, 'mj_restore_tr');
+            return {
+                converged: false,
+                reason: 'best_effort',
+                iterations: 6,
+                acceptedIterations: 2,
+                lastAcceptedScale: 1,
+                commandResidualNorm: 1e-3,
+                relativeResidualNorm: 2e-3,
+                bodyResidualNorm: 0,
+                inequalityViolation: 0.0,
+                qApplied: [0.1, -0.1]
+            };
+        }
+    };
+    const result = attemptHumanoidJogMJRestoreWasm({
+        humanoidModel,
+        solverMode: 'mj_restore_tr',
+        qInitial: [0, 0],
+        evaluateProblem: (q) => ({
+            q: q.slice(),
+            qCurrent: q.slice(),
+            equalities: { activeResidualNorm: Math.abs(q[0]) + Math.abs(q[1]) }
+        }),
+        activeStart: 0,
+        activeCount: 2,
+        absoluteTarget: new Array(8).fill(0),
+        relativeTarget: new Array(8).fill(0)
+    });
+
+    assert.equal(lineSearchCalled, false);
+    assert.equal(trustRegionCalled, true);
+    assert.equal(result?.reason, 'best_effort');
 });

@@ -335,6 +335,153 @@ test('buildHumanoidJogMJTaskDescriptor builds canonical special-mode descriptors
     );
 });
 
+test('buildHumanoidJogMJTaskDescriptor builds a first-stage surface-slide descriptor', () => {
+    const result = buildHumanoidJogMJTaskDescriptor({
+        controlMode: 'surface-slide',
+        commandTarget: {
+            arm: 'left',
+            surface: 'demo-surface',
+            u: 0.2,
+            v: -0.1,
+            normalOffset: 0.03
+        }
+    });
+
+    assert.equal(result.valid, true);
+    assert.equal(result.modeTag, 'surface-slide-target');
+    assert.equal(result.commandKind, 'surface_slide_pose');
+    assert.deepEqual(result.commandTarget, {
+        arm: 'left',
+        surface: 'demo-surface',
+        u: 0.2,
+        v: -0.1,
+        normalOffset: 0.03
+    });
+    assert.equal(result.commandDiagnosticLabel, 'command:surface_slide_pose');
+    assert.equal(result.activeJointScope, 'left-arm');
+    assert.equal(result.diagnosticLabel, 'mode:surface-slide-target');
+    assert.deepEqual(result.extraConstraints, []);
+    assert.equal(result.invariants.length, 2);
+    assertInvariant(result.invariants[0], {
+        kind: 'right_arm_fixed',
+        weight: 1,
+        priorityEquivalent: 100,
+        diagnosticLabel: 'invariant:right_arm_fixed'
+    });
+    assertInvariant(result.invariants[1], {
+        kind: 'waist_fixed',
+        weight: 0.5,
+        priorityEquivalent: 50,
+        diagnosticLabel: 'invariant:waist_fixed'
+    });
+});
+
+test('buildHumanoidJogMJTaskDescriptor builds a cooperative absolute surface-slide descriptor', () => {
+    const result = buildHumanoidJogMJTaskDescriptor({
+        controlMode: 'surface-slide-absolute',
+        commandTarget: {
+            surface: 'demo-surface',
+            u: 0.3,
+            v: 0.4,
+            normalOffset: 0.06
+        }
+    });
+
+    assert.equal(result.valid, true);
+    assert.equal(result.modeTag, 'absolute-target');
+    assert.equal(result.commandKind, 'absolute_pose');
+    assert.deepEqual(result.commandTarget, {
+        surface: 'demo-surface',
+        u: 0.3,
+        v: 0.4,
+        normalOffset: 0.06
+    });
+    assert.equal(result.commandDiagnosticLabel, 'command:absolute_pose');
+    assert.equal(result.activeJointScope, 'waist+arms');
+    assert.equal(result.diagnosticLabel, 'mode:absolute-target');
+    assert.equal(result.extraConstraints.length, 1);
+    assert.deepEqual(result.extraConstraints[0], {
+        kind: 'body_z',
+        target: { upright: true },
+        weight: 1,
+        priorityEquivalent: 100,
+        diagnosticLabel: 'extra-constraint:body_z/upright'
+    });
+    assert.equal(result.invariants.length, 1);
+    assertInvariant(result.invariants[0], {
+        kind: 'relative_pose',
+        weight: 1,
+        priorityEquivalent: 100,
+        diagnosticLabel: 'invariant:relative_pose'
+    });
+});
+
+test('buildHumanoidJogMJTaskDescriptor builds a dual independent surface-slide descriptor', () => {
+    const result = buildHumanoidJogMJTaskDescriptor({
+        controlMode: 'dual-independent-surface-slide',
+        commandTarget: {
+            left: { surface: 'demo-surface', u: 0.25, v: 0.5, normalOffset: 0.06 },
+            right: { surface: 'demo-surface', u: 0.75, v: 0.5, normalOffset: 0.06 }
+        }
+    });
+
+    assert.equal(result.valid, true);
+    assert.equal(result.modeTag, 'dual-independent-surface-slide-target');
+    assert.equal(result.commandKind, 'bimanual_surface_slide_pose');
+    assert.deepEqual(result.commandTarget, {
+        left: { surface: 'demo-surface', u: 0.25, v: 0.5, normalOffset: 0.06 },
+        right: { surface: 'demo-surface', u: 0.75, v: 0.5, normalOffset: 0.06 }
+    });
+    assert.equal(result.commandDiagnosticLabel, 'command:bimanual_surface_slide_pose');
+    assert.equal(result.activeJointScope, 'waist+arms');
+    assert.equal(result.diagnosticLabel, 'mode:dual-independent-surface-slide-target');
+    assert.deepEqual(result.invariants, []);
+    assert.equal(result.extraConstraints.length, 1);
+    assert.deepEqual(result.extraConstraints[0], {
+        kind: 'body_z',
+        target: { upright: true },
+        weight: 1,
+        priorityEquivalent: 100,
+        diagnosticLabel: 'extra-constraint:body_z/upright'
+    });
+});
+
+test('buildHumanoidJogMJTaskDescriptor builds a cooperative ruled-surface polishing descriptor', () => {
+    const result = buildHumanoidJogMJTaskDescriptor({
+        controlMode: 'cooperative-ruled-surface-polishing',
+        commandTarget: {
+            surface: 'demo-surface',
+            u: 0.35,
+            vCenter: 0.5,
+            stripSpacing: 0.24,
+            normalOffset: 0.06
+        }
+    });
+
+    assert.equal(result.valid, true);
+    assert.equal(result.modeTag, 'cooperative-ruled-surface-polishing-target');
+    assert.equal(result.commandKind, 'bimanual_surface_polishing_pose');
+    assert.deepEqual(result.commandTarget, {
+        surface: 'demo-surface',
+        u: 0.35,
+        vCenter: 0.5,
+        stripSpacing: 0.24,
+        normalOffset: 0.06
+    });
+    assert.equal(result.commandDiagnosticLabel, 'command:bimanual_surface_polishing_pose');
+    assert.equal(result.activeJointScope, 'waist+arms');
+    assert.equal(result.diagnosticLabel, 'mode:cooperative-ruled-surface-polishing-target');
+    assert.deepEqual(result.invariants, []);
+    assert.equal(result.extraConstraints.length, 1);
+    assert.deepEqual(result.extraConstraints[0], {
+        kind: 'body_z',
+        target: { upright: true },
+        weight: 1,
+        priorityEquivalent: 100,
+        diagnosticLabel: 'extra-constraint:body_z/upright'
+    });
+});
+
 test('buildHumanoidJogMJTaskDescriptor returns a valid:false result for unsupported modes', () => {
     const result = buildHumanoidJogMJTaskDescriptor({
         controlMode: 'unsupported-mode',

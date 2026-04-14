@@ -94,6 +94,10 @@
                                     <option value="relative-fullbody">全身相对位姿</option>
                                     <option value="distance">相对距离</option>
                                     <option value="distance-fullbody">全身相对距离</option>
+                                    <option value="surface-slide">曲面滑动</option>
+                                    <option value="surface-slide-absolute">绝对位姿曲面滑动</option>
+                                    <option value="dual-independent-surface-slide">双臂独立曲面滑动</option>
+                                    <option value="cooperative-ruled-surface-polishing">双臂协同擦面</option>
                                     <option value="robot1">机器人1</option>
                                     <option value="robot1-waist">左臂+腰部</option>
                                     <option value="robot2">机器人2</option>
@@ -119,6 +123,7 @@
                                     <option value="vfi">new qpJ</option>
                                     <option value="priority">零空间投影</option>
                                     <option value="mj_restore">MuJoCo 风格恢复</option>
+                                    <option value="mj_restore_tr">恢复优化(TR)</option>
                                     <option value="mj_restore_pre_w">MuJoCo 风格恢复 + w预优化</option>
                                 </select>
                                 <div style="font-size: 0.7rem; color: #64748b; margin-top: 0.2rem;">
@@ -128,14 +133,24 @@
                             <div style="margin-top: 0.55rem;">
                                 <label style="font-size: 0.85rem; color: #cbd5e1; display: block; margin-bottom: 0.25rem;">w 指标：</label>
                                 <select id="humanoid-manifold-jog-metric-select" style="width: 100%; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;">
-                                    <option value="w_abs_hier">w_abs_hier</option>
-                                    <option value="w_abs_hier_vfi">w_abs_hier_vfi</option>
+                                    <option value="w_abs_hier">w_abs</option>
+                                    <option value="w_abs_hier_vfi">w_abs_vfi</option>
                                 </select>
                                 <div style="margin-top: 0.45rem;">
                                     <button id="humanoid-w-metric-increase-btn" class="demo-btn" style="width: 100%;">w+</button>
                                 </div>
                                 <div style="font-size: 0.7rem; color: #64748b; margin-top: 0.2rem;">
-                                    仅保留层级普通可操作度与层级 VFI 可操作度。
+                                    仅保留普通可操作度与 VFI 可操作度。
+                                </div>
+                            </div>
+                            <div style="margin-top: 0.6rem;">
+                                <label class="toggle-switch" style="font-size: 0.85rem;">
+                                    <input type="checkbox" id="humanoid-waist-x-corridor-toggle">
+                                    <span class="toggle-slider"></span>
+                                    <span class="toggle-label">腰部 X 约束</span>
+                                </label>
+                                <div style="font-size: 0.7rem; color: #64748b; margin-top: 0.2rem;">
+                                    约束腰部 X 位置不超过当前走廊上界
                                 </div>
                             </div>
                             <div style="margin-top: 0.6rem;">
@@ -146,6 +161,49 @@
                                 </label>
                                 <div style="font-size: 0.7rem; color: #64748b; margin-top: 0.2rem;">
                                     临时限制 ljoint2∈[-0.1,0.2], rjoint2∈[-0.2,0.1]
+                                </div>
+                            </div>
+                            <div style="margin-top: 0.6rem;">
+                                <label style="font-size: 0.85rem; color: #cbd5e1; display: block; margin-bottom: 0.25rem;">默认关节角：</label>
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.45rem;">
+                                    <button id="humanoid-default-q-profile-1-btn" class="demo-btn" style="width: 100%;">默认1</button>
+                                    <button id="humanoid-default-q-profile-2-btn" class="demo-btn" style="width: 100%;">默认2</button>
+                                </div>
+                                <div style="font-size: 0.7rem; color: #64748b; margin-top: 0.2rem;">
+                                    切换 humanoid 全局默认启动姿态，并可立即应用到当前人形模型
+                                </div>
+                            </div>
+                            <div style="margin-top: 0.6rem;">
+                                <label style="font-size: 0.85rem; color: #cbd5e1; display: block; margin-bottom: 0.25rem;">协同擦面示例曲面：</label>
+                                <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.45rem;">
+                                    <button id="humanoid-cooperative-polishing-surface-source-analytic-btn" class="demo-btn" style="width: 100%;">解析曲面</button>
+                                    <button id="humanoid-cooperative-polishing-surface-source-cylinder-btn" class="demo-btn" style="width: 100%;">圆筒 Mesh</button>
+                                </div>
+                                <div style="font-size: 0.7rem; color: #64748b; margin-top: 0.2rem;">
+                                    仅影响“双臂协同擦面”模式，可在解析 ruled surface 与圆筒之间切换
+                                </div>
+                            </div>
+                            <div style="margin-top: 0.6rem;">
+                                <label style="font-size: 0.85rem; color: #cbd5e1; display: block; margin-bottom: 0.25rem;">物体位姿</label>
+                                <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.45rem;">
+                                    <input id="humanoid-cooperative-polishing-object-x-input" type="number" step="0.01" placeholder="x" style="width: 100%; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;">
+                                    <input id="humanoid-cooperative-polishing-object-y-input" type="number" step="0.01" placeholder="y" style="width: 100%; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;">
+                                    <input id="humanoid-cooperative-polishing-object-z-input" type="number" step="0.01" placeholder="z" style="width: 100%; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;">
+                                    <input id="humanoid-cooperative-polishing-object-yaw-input" type="number" step="1" placeholder="yaw (deg)" style="width: 100%; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;">
+                                </div>
+                                <div style="margin-top: 0.45rem;">
+                                    <label class="toggle-switch" style="font-size: 0.85rem;">
+                                        <input type="checkbox" id="humanoid-cooperative-polishing-object-flip-normal-toggle">
+                                        <span class="toggle-slider"></span>
+                                        <span class="toggle-label">法向反转</span>
+                                    </label>
+                                </div>
+                                <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.45rem; margin-top: 0.45rem;">
+                                    <button id="humanoid-cooperative-polishing-object-apply-btn" class="demo-btn" style="width: 100%;">应用位姿</button>
+                                    <button id="humanoid-cooperative-polishing-object-capture-btn" class="demo-btn" style="width: 100%;">捕捉当前双手</button>
+                                </div>
+                                <div style="font-size: 0.7rem; color: #64748b; margin-top: 0.2rem;">
+                                    将协同擦面工件固定在世界坐标中，或从当前双手工作区捕捉一次后冻结
                                 </div>
                             </div>
                             <div id="humanoid-vfi-diagnostics-panel" class="vfi-diagnostics-panel">

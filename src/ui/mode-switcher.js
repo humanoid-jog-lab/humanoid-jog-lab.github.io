@@ -8,6 +8,79 @@
 
 import { appState, callbacks } from '../core/state.js';
 
+function setTeachPendantSurfaceLabels(mode = 'none') {
+    const translationSchemas = {
+        none: {
+            x: { label: 'X轴', negative: 'X-', positive: 'X+' },
+            y: { label: 'Y轴', negative: 'Y-', positive: 'Y+' },
+            z: { label: 'Z轴', negative: 'Z-', positive: 'Z+' }
+        },
+        surface: {
+            x: { label: 'u', negative: 'u-', positive: 'u+' },
+            y: { label: 'v', negative: 'v-', positive: 'v+' },
+            z: { label: 'n', negative: 'n-', positive: 'n+' }
+        },
+        dual: {
+            x: { label: 'Lu', negative: 'Lu-', positive: 'Lu+' },
+            y: { label: 'Lv', negative: 'Lv-', positive: 'Lv+' },
+            z: { label: 'Ln', negative: 'Ln-', positive: 'Ln+' }
+        },
+        cooperative: {
+            x: { label: 'u', negative: 'u-', positive: 'u+' },
+            y: { label: 'vc', negative: 'vc-', positive: 'vc+' },
+            z: { label: 'n', negative: 'n-', positive: 'n+' }
+        }
+    };
+    const rotationSchemas = {
+        none: {
+            rx: { label: 'Rx', negative: 'Rx-', positive: 'Rx+' },
+            ry: { label: 'Ry', negative: 'Ry-', positive: 'Ry+' },
+            rz: { label: 'Rz', negative: 'Rz-', positive: 'Rz+' }
+        },
+        surface: {
+            rx: { label: 'Rx', negative: 'Rx-', positive: 'Rx+' },
+            ry: { label: 'Ry', negative: 'Ry-', positive: 'Ry+' },
+            rz: { label: 'Rz', negative: 'Rz-', positive: 'Rz+' }
+        },
+        dual: {
+            rx: { label: 'Ru', negative: 'Ru-', positive: 'Ru+' },
+            ry: { label: 'Rv', negative: 'Rv-', positive: 'Rv+' },
+            rz: { label: 'Rn', negative: 'Rn-', positive: 'Rn+' }
+        },
+        cooperative: {
+            rx: { label: 'Δv', negative: 'Δv-', positive: 'Δv+' },
+            ry: { label: 'Ry', negative: 'Ry-', positive: 'Ry+' },
+            rz: { label: 'Rz', negative: 'Rz-', positive: 'Rz+' }
+        }
+    };
+    const translationMode = mode === 'surface'
+        ? 'surface'
+        : (mode === 'dual'
+            ? 'dual'
+            : (mode === 'cooperative' ? 'cooperative' : 'none'));
+    const rotationMode = mode === 'dual'
+        ? 'dual'
+        : (mode === 'cooperative' ? 'cooperative' : 'none');
+
+    Object.entries(translationSchemas[translationMode]).forEach(([axis, schema]) => {
+        const negativeBtn = document.querySelector(`#teach-pendant-controls .teach-btn[data-axis="${axis}"][data-direction="negative"]:not([data-type="rotation"])`);
+        const positiveBtn = document.querySelector(`#teach-pendant-controls .teach-btn[data-axis="${axis}"][data-direction="positive"]:not([data-type="rotation"])`);
+        const axisLabel = negativeBtn?.closest('.axis-control-group')?.querySelector('.axis-label');
+        if (axisLabel) axisLabel.textContent = schema.label;
+        if (negativeBtn) negativeBtn.textContent = schema.negative;
+        if (positiveBtn) positiveBtn.textContent = schema.positive;
+    });
+
+    Object.entries(rotationSchemas[rotationMode]).forEach(([axis, schema]) => {
+        const negativeBtn = document.querySelector(`#teach-pendant-controls .teach-btn[data-axis="${axis}"][data-direction="negative"][data-type="rotation"]`);
+        const positiveBtn = document.querySelector(`#teach-pendant-controls .teach-btn[data-axis="${axis}"][data-direction="positive"][data-type="rotation"]`);
+        const axisLabel = negativeBtn?.closest('.axis-control-group')?.querySelector('.axis-label');
+        if (axisLabel) axisLabel.textContent = schema.label;
+        if (negativeBtn) negativeBtn.textContent = schema.negative;
+        if (positiveBtn) positiveBtn.textContent = schema.positive;
+    });
+}
+
 // ──────────────────────────────────────────────────────────────
 // switchToHumanoidUI
 // ──────────────────────────────────────────────────────────────
@@ -52,6 +125,22 @@ export function switchToHumanoidUI() {
             else if (opt.value === 'robot1-waist') opt.textContent = '左臂+腰部';
             else if (opt.value === 'robot2') opt.textContent = '右臂';
             else if (opt.value === 'robot2-waist') opt.textContent = '右臂+腰部';
+            else if (opt.value === 'surface-slide') {
+                opt.textContent = '曲面滑动';
+                opt.hidden = false;
+            }
+            else if (opt.value === 'surface-slide-absolute') {
+                opt.textContent = '绝对位姿曲面滑动';
+                opt.hidden = false;
+            }
+            else if (opt.value === 'dual-independent-surface-slide') {
+                opt.textContent = '双臂独立曲面滑动';
+                opt.hidden = false;
+            }
+            else if (opt.value === 'cooperative-ruled-surface-polishing') {
+                opt.textContent = '双臂协同擦面';
+                opt.hidden = false;
+            }
             else if (opt.value === 'waist-body-link-xz') opt.hidden = false;
         });
         const modeLabelEl = document.getElementById('dual-arm-mode-label');
@@ -71,18 +160,48 @@ export function switchToHumanoidUI() {
                     distanceControls.style.display = 'none';
                 }
             }
+            const isSurfaceMode = mode === 'surface-slide' || mode === 'surface-slide-absolute';
+            const isDualIndependentSurfaceMode = mode === 'dual-independent-surface-slide';
+            const isCooperativePolishingMode = mode === 'cooperative-ruled-surface-polishing';
+            setTeachPendantSurfaceLabels(
+                isDualIndependentSurfaceMode
+                    ? 'dual'
+                    : (isCooperativePolishingMode ? 'cooperative' : (isSurfaceMode ? 'surface' : 'none'))
+            );
             const teachButtons = document.querySelectorAll('#teach-pendant-controls .teach-btn');
             teachButtons.forEach(btn => {
                 const axis = btn.dataset.axis;
                 const type = btn.dataset.type || 'translation';
-                const enabled = mode !== 'waist-body-link-xz' || (type !== 'rotation' && (axis === 'x' || axis === 'z'));
+                const enabled = isDualIndependentSurfaceMode
+                    ? (
+                        ((type !== 'rotation') && (axis === 'x' || axis === 'y' || axis === 'z'))
+                        || ((type === 'rotation') && (axis === 'rx' || axis === 'ry' || axis === 'rz'))
+                    )
+                    : isCooperativePolishingMode
+                    ? (
+                        ((type !== 'rotation') && (axis === 'x' || axis === 'y' || axis === 'z'))
+                        || ((type === 'rotation') && axis === 'rx')
+                    )
+                    : isSurfaceMode
+                    ? (type !== 'rotation' && (axis === 'x' || axis === 'y' || axis === 'z'))
+                    : (mode !== 'waist-body-link-xz' || (type !== 'rotation' && (axis === 'x' || axis === 'z')));
                 btn.disabled = !enabled;
             });
+            if (isCooperativePolishingMode) {
+                appState.visualizer?.prepareHumanoidCooperativeRuledSurfacePolishingMode?.();
+            } else if (isSurfaceMode || isDualIndependentSurfaceMode) {
+                appState.visualizer?.resetHumanoidSurfaceSlideReference?.();
+            }
+            appState.visualizer?.refreshHumanoidSurfaceSlideVisualization?.();
             if (!modeLabelEl) return;
             if (mode === 'robot1') modeLabelEl.textContent = '左臂模式：控制左臂末端';
             else if (mode === 'robot1-waist') modeLabelEl.textContent = '左臂+腰部模式：控制左臂末端并允许腰部协同，保持右臂末端不变';
             else if (mode === 'robot2') modeLabelEl.textContent = '右臂模式：控制右臂末端';
             else if (mode === 'robot2-waist') modeLabelEl.textContent = '右臂+腰部模式：控制右臂末端并允许腰部协同，保持左臂末端不变';
+            else if (mode === 'surface-slide') modeLabelEl.textContent = '曲面滑动模式：用 u/v/n 参数点动左臂并沿参数面滑动';
+            else if (mode === 'surface-slide-absolute') modeLabelEl.textContent = '绝对位姿曲面滑动：用 u/v/n 参数点动协同 absolute pose，并保持相对位姿';
+            else if (mode === 'dual-independent-surface-slide') modeLabelEl.textContent = '双臂独立曲面滑动：平移按钮控制左臂 Lu/Lv/Ln，旋转按钮控制右臂 Ru/Rv/Rn，同时贴面滑动';
+            else if (mode === 'cooperative-ruled-surface-polishing') modeLabelEl.textContent = '双臂协同擦面：共享 u 前进、共享中心 vc、共享法向 n，并用 Δv 控制左右擦拭带宽';
             else if (mode === 'relative') modeLabelEl.textContent = '相对位姿模式：控制相对位姿，保持绝对位姿不变';
             else if (mode === 'distance') modeLabelEl.textContent = '相对距离模式：控制两末端距离，保持绝对位姿与相对姿态不变';
             else if (mode === 'distance-fullbody') modeLabelEl.textContent = '全身相对距离：腰部+双臂联动，控制两末端距离，保持绝对位姿与相对姿态不变';
@@ -153,6 +272,18 @@ export function switchToDualArmUI() {
     const robot2WaistOption = controlModeSelect
         ? Array.from(controlModeSelect.options).find(opt => opt.value === 'robot2-waist')
         : null;
+    const surfaceSlideOption = controlModeSelect
+        ? Array.from(controlModeSelect.options).find(opt => opt.value === 'surface-slide')
+        : null;
+    const surfaceSlideAbsoluteOption = controlModeSelect
+        ? Array.from(controlModeSelect.options).find(opt => opt.value === 'surface-slide-absolute')
+        : null;
+    const dualIndependentSurfaceSlideOption = controlModeSelect
+        ? Array.from(controlModeSelect.options).find(opt => opt.value === 'dual-independent-surface-slide')
+        : null;
+    const cooperativePolishingOption = controlModeSelect
+        ? Array.from(controlModeSelect.options).find(opt => opt.value === 'cooperative-ruled-surface-polishing')
+        : null;
     if (waistBodyOption) {
         waistBodyOption.hidden = true;
         if (controlModeSelect.value === 'waist-body-link-xz') {
@@ -171,6 +302,30 @@ export function switchToDualArmUI() {
             controlModeSelect.value = 'absolute';
         }
     }
+    if (surfaceSlideOption) {
+        surfaceSlideOption.hidden = true;
+        if (controlModeSelect.value === 'surface-slide') {
+            controlModeSelect.value = 'absolute';
+        }
+    }
+    if (surfaceSlideAbsoluteOption) {
+        surfaceSlideAbsoluteOption.hidden = true;
+        if (controlModeSelect.value === 'surface-slide-absolute') {
+            controlModeSelect.value = 'absolute';
+        }
+    }
+    if (dualIndependentSurfaceSlideOption) {
+        dualIndependentSurfaceSlideOption.hidden = true;
+        if (controlModeSelect.value === 'dual-independent-surface-slide') {
+            controlModeSelect.value = 'absolute';
+        }
+    }
+    if (cooperativePolishingOption) {
+        cooperativePolishingOption.hidden = true;
+        if (controlModeSelect.value === 'cooperative-ruled-surface-polishing') {
+            controlModeSelect.value = 'absolute';
+        }
+    }
     if (controlModeSelect && modeLabel) {
         const updateModeLabel = () => {
             const mode = controlModeSelect.value;
@@ -178,6 +333,7 @@ export function switchToDualArmUI() {
                 window.currentDualArmControlMode = mode;
                 window.refreshHumanoidJogMetricOptionLabels?.(mode);
             }
+            setTeachPendantSurfaceLabels('none');
             // 控制按钮显示：相对距离模式只显示 distance-/distance+
             if (teachPendantControls && distanceControls) {
                 if (mode === 'distance') {
@@ -249,6 +405,8 @@ export function switchToDualArmUI() {
             else if (opt.value === 'robot1-waist') opt.hidden = true;
             else if (opt.value === 'robot2') opt.textContent = '机器人2';
             else if (opt.value === 'robot2-waist') opt.hidden = true;
+            else if (opt.value === 'surface-slide') opt.hidden = true;
+            else if (opt.value === 'surface-slide-absolute') opt.hidden = true;
         });
     }
     // 更新标签页，确保显示正确的标签内容
@@ -296,6 +454,7 @@ export function switchToSingleArmUI() {
         window.currentDualArmControlMode = 'absolute';
     }
 
+    setTeachPendantSurfaceLabels(false);
     const teachButtons = document.querySelectorAll('#teach-pendant-controls .teach-btn');
     teachButtons.forEach(btn => { btn.disabled = false; });
 

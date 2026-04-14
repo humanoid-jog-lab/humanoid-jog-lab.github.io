@@ -23,6 +23,16 @@ function normalizeHumanoidTaskMetricContext(contextRaw = '') {
     if (context === 'waist-body-link-xz' || context === 'waist-body-link-xz-target') {
         return 'waist';
     }
+    if (
+        context === 'surface-slide'
+        || context === 'surface-slide-target'
+        || context === 'dual-independent-surface-slide'
+        || context === 'dual-independent-surface-slide-target'
+        || context === 'cooperative-ruled-surface-polishing'
+        || context === 'cooperative-ruled-surface-polishing-target'
+    ) {
+        return 'surface';
+    }
     return 'absolute';
 }
 
@@ -38,6 +48,8 @@ function getHumanoidTaskMetricPrefix(contextRaw = '') {
             return 'right';
         case 'waist':
             return 'waist';
+        case 'surface':
+            return 'surface';
         case 'absolute':
         default:
             return 'abs';
@@ -47,10 +59,10 @@ function getHumanoidTaskMetricPrefix(contextRaw = '') {
 export function getHumanoidTaskMetricDisplayName(metric = '', contextRaw = '') {
     const prefix = getHumanoidTaskMetricPrefix(contextRaw);
     if (metric === 'w_abs_hier_vfi') {
-        return `w_${prefix}_hier_vfi`;
+        return `w_${prefix}_vfi`;
     }
     if (metric === 'w_abs_hier') {
-        return `w_${prefix}_hier`;
+        return `w_${prefix}`;
     }
     return metric;
 }

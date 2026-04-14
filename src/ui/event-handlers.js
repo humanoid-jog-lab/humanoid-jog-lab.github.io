@@ -9,6 +9,11 @@ import { DEG_TO_RAD } from '../core/constants.js';
 import yaml from 'js-yaml';
 import { appState, callbacks } from '../core/state.js';
 import { DQ, SerialManipulator, FrankaPanda, getDQModule } from '../dqrobotics.js';
+import {
+    DEFAULT_HUMANOID_INITIAL_Q_PROFILE_ID,
+    normalizeHumanoidInitialQProfileId,
+    resolveHumanoidInitialQ
+} from '../core/humanoid-default-q-profiles.js';
 import { extractMDHFromURDF, createMDHTestSuite, formatMDHForDQ } from '../urdf-to-mdh.js';
 import { URDFPackageManager, loadURDFFromPackage } from '../urdf-loader.js';
 import { getActiveJointConfig, displayStep, angleToDisplay } from '../utils/math.js';
@@ -18,15 +23,323 @@ import { setupPlannedMotionListeners } from '../features/planned-motion.js';
 import { normalizeHumanoidJogSolverMode } from '../core/humanoid-jog-solver-presentation.js';
 import { getHumanoidTaskMetricOptionLabels } from '../core/humanoid-jog-task-metric-labels.js';
 
+export function setupHumanoidDefaultPoseControls() {
+    const profile1Btn = document.getElementById('humanoid-default-q-profile-1-btn');
+    const profile2Btn = document.getElementById('humanoid-default-q-profile-2-btn');
+    const HUMANOID_DEFAULT_Q_PROFILE_STORAGE_KEY = 'humanoid-default-q-profile';
+    const buttonByProfile = {
+        default1: profile1Btn,
+        default2: profile2Btn
+    };
+
+    const updateButtonState = (activeProfileId) => {
+        Object.entries(buttonByProfile).forEach(([profileId, button]) => {
+            if (!button) return;
+            const active = profileId === activeProfileId;
+            button.dataset.active = active ? 'true' : 'false';
+            if (button.classList?.toggle) button.classList.toggle('is-active', active);
+            if (button.setAttribute) button.setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
+    };
+
+    const applyHumanoidDefaultQProfile = (profileIdRaw, options = {}) => {
+        const { applyToCurrentHumanoid = true } = options;
+        const profileId = normalizeHumanoidInitialQProfileId(profileIdRaw);
+        appState.humanoidInitialQProfileId = profileId;
+        if (typeof window !== 'undefined') {
+            window.humanoidInitialQProfileId = profileId;
+        }
+        try {
+            localStorage.setItem(HUMANOID_DEFAULT_Q_PROFILE_STORAGE_KEY, profileId);
+        } catch (_) {}
+        updateButtonState(profileId);
+
+        if (applyToCurrentHumanoid && appState.humanoidMode && appState.humanoidJointNames.length > 0) {
+            appState.humanoidQ = resolveHumanoidInitialQ(
+                { initial_q_profile: profileId },
+                appState.humanoidJointNames.length,
+                profileId
+            );
+            callbacks.updateGlobalVariables?.();
+            callbacks.updateRobotPose?.();
+            appState.visualizer?.resetHumanoidSurfaceSlideReference?.();
+        }
+
+        return profileId;
+    };
+
+    const savedProfileId = (() => {
+        try { return localStorage.getItem(HUMANOID_DEFAULT_Q_PROFILE_STORAGE_KEY); } catch (_) { return null; }
+    })();
+    applyHumanoidDefaultQProfile(
+        savedProfileId ?? appState.humanoidInitialQProfileId ?? DEFAULT_HUMANOID_INITIAL_Q_PROFILE_ID,
+        { applyToCurrentHumanoid: false }
+    );
+
+    profile1Btn?.addEventListener('click', () => {
+        applyHumanoidDefaultQProfile('default1');
+    });
+    profile2Btn?.addEventListener('click', () => {
+        applyHumanoidDefaultQProfile('default2');
+    });
+
+    if (typeof window !== 'undefined') {
+        window.setHumanoidDefaultQProfile = applyHumanoidDefaultQProfile;
+    }
+
+    return {
+        applyHumanoidDefaultQProfile
+    };
+}
+
+export function setupHumanoidCooperativePolishingSurfaceControls() {
+    const analyticBtn = document.getElementById('humanoid-cooperative-polishing-surface-source-analytic-btn');
+    const cylinderBtn = document.getElementById('humanoid-cooperative-polishing-surface-source-cylinder-btn');
+    const STORAGE_KEY = 'humanoid-cooperative-polishing-surface-source';
+    const buttonBySource = {
+        analytic: analyticBtn,
+        'cylindrical-patch': cylinderBtn
+    };
+
+    const updateButtonState = (activeSource) => {
+        Object.entries(buttonBySource).forEach(([source, button]) => {
+            if (!button) return;
+            const active = source === activeSource;
+            button.dataset.active = active ? 'true' : 'false';
+            if (button.classList?.toggle) button.classList.toggle('is-active', active);
+            if (button.setAttribute) button.setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
+    };
+
+    const applyHumanoidCooperativePolishingSurfaceSource = async (sourceRaw) => {
+        const source = sourceRaw === 'cylindrical-patch' ? 'cylindrical-patch' : 'analytic';
+        appState.humanoidCooperativePolishingSurfaceSource = source;
+        if (typeof window !== 'undefined') {
+            window.humanoidCooperativeRuledSurfaceSource = source;
+        }
+        try {
+            localStorage.setItem(STORAGE_KEY, source);
+        } catch (_) {}
+        updateButtonState(source);
+        if (appState.visualizer?.setHumanoidCooperativeRuledSurfaceSurfaceSource) {
+            await appState.visualizer.setHumanoidCooperativeRuledSurfaceSurfaceSource(source);
+        }
+        return source;
+    };
+
+    const savedSource = (() => {
+        try { return localStorage.getItem(STORAGE_KEY); } catch (_) { return null; }
+    })();
+    void applyHumanoidCooperativePolishingSurfaceSource(
+        savedSource ?? appState.humanoidCooperativePolishingSurfaceSource ?? 'analytic'
+    );
+
+    analyticBtn?.addEventListener('click', () => {
+        void applyHumanoidCooperativePolishingSurfaceSource('analytic');
+    });
+    cylinderBtn?.addEventListener('click', () => {
+        void applyHumanoidCooperativePolishingSurfaceSource('cylindrical-patch');
+    });
+
+    if (typeof window !== 'undefined') {
+        window.setHumanoidCooperativePolishingSurfaceSource = applyHumanoidCooperativePolishingSurfaceSource;
+    }
+
+    return {
+        applyHumanoidCooperativePolishingSurfaceSource
+    };
+}
+
+export function setupHumanoidCooperativePolishingObjectPoseControls() {
+    const xInput = document.getElementById('humanoid-cooperative-polishing-object-x-input');
+    const yInput = document.getElementById('humanoid-cooperative-polishing-object-y-input');
+    const zInput = document.getElementById('humanoid-cooperative-polishing-object-z-input');
+    const yawInput = document.getElementById('humanoid-cooperative-polishing-object-yaw-input');
+    const flipNormalToggle = document.getElementById('humanoid-cooperative-polishing-object-flip-normal-toggle');
+    const applyBtn = document.getElementById('humanoid-cooperative-polishing-object-apply-btn');
+    const captureBtn = document.getElementById('humanoid-cooperative-polishing-object-capture-btn');
+    const STORAGE_KEY = 'humanoid-cooperative-polishing-object-pose';
+    let currentPose = null;
+
+    const asFiniteNumber = (value, fallback = 0) => {
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : fallback;
+    };
+    const buildYawQuaternion = (yawDegrees) => {
+        const yawRadians = asFiniteNumber(yawDegrees, 0) * DEG_TO_RAD;
+        const halfYaw = 0.5 * yawRadians;
+        return [Math.cos(halfYaw), 0, 0, Math.sin(halfYaw)];
+    };
+    const extractYawDegrees = (quaternionLike) => {
+        const w = asFiniteNumber(quaternionLike?.[0], 1);
+        const x = asFiniteNumber(quaternionLike?.[1], 0);
+        const y = asFiniteNumber(quaternionLike?.[2], 0);
+        const z = asFiniteNumber(quaternionLike?.[3], 0);
+        const sinyCosp = 2 * ((w * z) + (x * y));
+        const cosyCosp = 1 - (2 * ((y * y) + (z * z)));
+        return Math.atan2(sinyCosp, cosyCosp) / DEG_TO_RAD;
+    };
+    const multiplyQuaternions = (a, b) => {
+        const [aw, ax, ay, az] = a;
+        const [bw, bx, by, bz] = b;
+        return [
+            (aw * bw) - (ax * bx) - (ay * by) - (az * bz),
+            (aw * bx) + (ax * bw) + (ay * bz) - (az * by),
+            (aw * by) - (ax * bz) + (ay * bw) + (az * bx),
+            (aw * bz) + (ax * by) - (ay * bx) + (az * bw)
+        ];
+    };
+    const NORMAL_FLIP_QUATERNION = [0, 0, 1, 0];
+    const applyNormalFlipQuaternion = (quaternionLike) => {
+        const q = [
+            asFiniteNumber(quaternionLike?.[0], 1),
+            asFiniteNumber(quaternionLike?.[1], 0),
+            asFiniteNumber(quaternionLike?.[2], 0),
+            asFiniteNumber(quaternionLike?.[3], 0)
+        ];
+        return multiplyQuaternions(q, NORMAL_FLIP_QUATERNION);
+    };
+    const normalizePose = (poseLike) => {
+        if (!poseLike?.position || !poseLike?.quaternion) return null;
+        return {
+            position: [
+                asFiniteNumber(poseLike.position[0], 0),
+                asFiniteNumber(poseLike.position[1], 0),
+                asFiniteNumber(poseLike.position[2], 0)
+            ],
+            quaternion: [
+                asFiniteNumber(poseLike.quaternion[0], 1),
+                asFiniteNumber(poseLike.quaternion[1], 0),
+                asFiniteNumber(poseLike.quaternion[2], 0),
+                asFiniteNumber(poseLike.quaternion[3], 0)
+            ],
+            flipNormal: Boolean(poseLike.flipNormal),
+            normalFlipApplied: Boolean(poseLike.normalFlipApplied)
+        };
+    };
+    const syncInputsFromPose = (poseLike) => {
+        const pose = normalizePose(poseLike);
+        if (!pose) return null;
+        currentPose = {
+            position: pose.position.slice(),
+            quaternion: pose.quaternion.slice(),
+            flipNormal: Boolean(pose.flipNormal),
+            normalFlipApplied: Boolean(pose.normalFlipApplied)
+        };
+        if (xInput) xInput.value = String(pose.position[0]);
+        if (yInput) yInput.value = String(pose.position[1]);
+        if (zInput) zInput.value = String(pose.position[2]);
+        if (yawInput) yawInput.value = String(extractYawDegrees(pose.quaternion));
+        if (flipNormalToggle) flipNormalToggle.checked = Boolean(pose.flipNormal);
+        return pose;
+    };
+    const persistPose = (poseLike) => {
+        const pose = normalizePose(poseLike);
+        if (!pose) return null;
+        appState.humanoidCooperativePolishingObjectPose = {
+            position: pose.position.slice(),
+            quaternion: pose.quaternion.slice(),
+            flipNormal: Boolean(pose.flipNormal),
+            normalFlipApplied: Boolean(pose.normalFlipApplied)
+        };
+        if (typeof window !== 'undefined') {
+            window.humanoidCooperativeRuledSurfaceObjectPose = {
+                position: pose.position.slice(),
+                quaternion: pose.quaternion.slice(),
+                flipNormal: Boolean(pose.flipNormal),
+                normalFlipApplied: Boolean(pose.normalFlipApplied)
+            };
+        }
+        try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(pose));
+        } catch (_) {}
+        return pose;
+    };
+    const applyPose = (poseLike) => {
+        const pose = persistPose(poseLike);
+        if (!pose) return null;
+        const appliedPose = appState.visualizer?.setHumanoidCooperativeRuledSurfaceObjectPose
+            ? (appState.visualizer.setHumanoidCooperativeRuledSurfaceObjectPose(pose) || pose)
+            : pose;
+        syncInputsFromPose(appliedPose);
+        return appliedPose;
+    };
+
+    const savedPose = (() => {
+        try {
+            const raw = localStorage.getItem(STORAGE_KEY);
+            return raw ? normalizePose(JSON.parse(raw)) : null;
+        } catch (_) {
+            return null;
+        }
+    })() || normalizePose(
+        (typeof window !== 'undefined' ? window.humanoidCooperativeRuledSurfaceObjectPose : null)
+        || appState.humanoidCooperativePolishingObjectPose
+    );
+    if (savedPose) {
+        persistPose(savedPose);
+        syncInputsFromPose(savedPose);
+    }
+
+    applyBtn?.addEventListener('click', () => {
+        const flipNormal = Boolean(flipNormalToggle?.checked);
+        const baseQuaternion = buildYawQuaternion(yawInput?.value);
+        applyPose({
+            position: [
+                asFiniteNumber(xInput?.value, 0),
+                asFiniteNumber(yInput?.value, 0),
+                asFiniteNumber(zInput?.value, 0)
+            ],
+            quaternion: flipNormal ? applyNormalFlipQuaternion(baseQuaternion) : baseQuaternion,
+            flipNormal,
+            normalFlipApplied: flipNormal
+        });
+    });
+
+    captureBtn?.addEventListener('click', async () => {
+        const flipNormal = Boolean(flipNormalToggle?.checked);
+        const capturedPose = appState.visualizer?.captureHumanoidCooperativeRuledSurfaceObjectPoseFromCurrentHands
+            ? await Promise.resolve(appState.visualizer.captureHumanoidCooperativeRuledSurfaceObjectPoseFromCurrentHands({
+                flipNormal
+            }))
+            : null;
+        if (!capturedPose) return;
+        applyPose(capturedPose);
+    });
+
+    flipNormalToggle?.addEventListener('change', (event) => {
+        const nextFlipNormal = Boolean(event?.target?.checked);
+        const nextQuaternion = Array.isArray(currentPose?.quaternion)
+            ? applyNormalFlipQuaternion(currentPose.quaternion)
+            : applyNormalFlipQuaternion(buildYawQuaternion(yawInput?.value));
+        applyPose({
+            position: [
+                asFiniteNumber(xInput?.value, 0),
+                asFiniteNumber(yInput?.value, 0),
+                asFiniteNumber(zInput?.value, 0)
+            ],
+            quaternion: nextQuaternion,
+            flipNormal: nextFlipNormal,
+            normalFlipApplied: nextFlipNormal
+        });
+    });
+
+    return {
+        applyHumanoidCooperativePolishingObjectPose: applyPose
+    };
+}
+
 function setupHumanoidJogSolverControls() {
     // 人形点动求解器切换（new qpJ / 零空间投影 / MuJoCo 风格恢复）
     const humanoidJogSolverSelect = document.getElementById('humanoid-jog-solver-select');
     const humanoidJogMetricSelect = document.getElementById('humanoid-manifold-jog-metric-select');
     const humanoidWMetricIncreaseBtn = document.getElementById('humanoid-w-metric-increase-btn');
+    const humanoidWaistXCorridorToggle = document.getElementById('humanoid-waist-x-corridor-toggle');
     const humanoidTestDualArmLockToggle = document.getElementById('humanoid-test-dual-arm-lock-toggle');
     const dualArmControlModeSelect = document.getElementById('dual-arm-control-mode-select');
     const HUMANOID_JOG_SOLVER_STORAGE_KEY = 'humanoid-jog-solver-mode';
     const HUMANOID_JOG_METRIC_STORAGE_KEY = 'humanoid-manifold-jog-metric';
+    const HUMANOID_WAIST_X_CORRIDOR_STORAGE_KEY = 'humanoid-waist-x-corridor-enabled';
     const HUMANOID_TEST_DUAL_ARM_LOCK_STORAGE_KEY = 'humanoid-test-dual-arm-lock-enabled';
     const normalizeHumanoidJogMetric = (metricRaw) => {
         return metricRaw === 'w_abs_hier_vfi' ? 'w_abs_hier_vfi' : 'w_abs_hier';
@@ -83,6 +396,19 @@ function setupHumanoidJogSolverControls() {
             localStorage.setItem(HUMANOID_TEST_DUAL_ARM_LOCK_STORAGE_KEY, enabled ? '1' : '0');
         } catch (_) {}
     };
+    const applyHumanoidWaistXCorridor = (enabledRaw) => {
+        const enabled = Boolean(enabledRaw);
+        if (humanoidWaistXCorridorToggle) humanoidWaistXCorridorToggle.checked = enabled;
+        if (typeof window !== 'undefined') {
+            window.humanoidWaistXCorridorEnabled = enabled;
+        }
+        if (appState.visualizer?.setHumanoidWaistXCorridorEnabled) {
+            appState.visualizer.setHumanoidWaistXCorridorEnabled(enabled);
+        }
+        try {
+            localStorage.setItem(HUMANOID_WAIST_X_CORRIDOR_STORAGE_KEY, enabled ? '1' : '0');
+        } catch (_) {}
+    };
     const triggerHumanoidWMetricOptimization = (direction) => {
         if (!appState.visualizer) return;
         const metric = normalizeHumanoidJogMetric(
@@ -95,26 +421,15 @@ function setupHumanoidJogSolverControls() {
         }
         appState.visualizer.optimizeHumanoidHierarchicalAbsoluteManipulability?.(direction);
     };
-    const bindRepeatingMetricButton = (button, direction) => {
+    const bindSingleShotMetricButton = (button, direction) => {
         if (!button) return;
-        let intervalId = null;
         const fire = () => triggerHumanoidWMetricOptimization(direction);
-        const stop = () => {
-            if (intervalId) {
-                clearInterval(intervalId);
-                intervalId = null;
-            }
-        };
-        button.addEventListener('mousedown', () => {
-            fire();
-            intervalId = setInterval(fire, 20);
-        });
-        button.addEventListener('mouseup', stop);
-        button.addEventListener('mouseleave', stop);
+        button.addEventListener('mousedown', fire);
     };
     if (
         humanoidJogSolverSelect ||
         humanoidJogMetricSelect ||
+        humanoidWaistXCorridorToggle ||
         humanoidTestDualArmLockToggle ||
         humanoidWMetricIncreaseBtn
     ) {
@@ -127,9 +442,19 @@ function setupHumanoidJogSolverControls() {
         const savedTestDualArmLock = (() => {
             try { return localStorage.getItem(HUMANOID_TEST_DUAL_ARM_LOCK_STORAGE_KEY); } catch (_) { return null; }
         })();
+        const savedWaistXCorridor = (() => {
+            try { return localStorage.getItem(HUMANOID_WAIST_X_CORRIDOR_STORAGE_KEY); } catch (_) { return null; }
+        })();
         applyHumanoidJogSolverMode(saved ?? humanoidJogSolverSelect.value ?? 'vfi');
         applyHumanoidJogMetric(savedMetric ?? humanoidJogMetricSelect?.value ?? 'w_abs_hier');
         updateHumanoidJogMetricOptionLabels();
+        applyHumanoidWaistXCorridor(
+            savedWaistXCorridor != null
+                ? savedWaistXCorridor === '1'
+                : ((typeof window !== 'undefined' && typeof window.humanoidWaistXCorridorEnabled === 'boolean')
+                    ? window.humanoidWaistXCorridorEnabled
+                    : false)
+        );
         applyHumanoidTestDualArmLock(
             savedTestDualArmLock != null
                 ? savedTestDualArmLock === '1'
@@ -150,15 +475,21 @@ function setupHumanoidJogSolverControls() {
                 updateHumanoidJogMetricOptionLabels(e.target?.value);
             });
         }
+        if (humanoidWaistXCorridorToggle) {
+            humanoidWaistXCorridorToggle.addEventListener('change', (e) => {
+                applyHumanoidWaistXCorridor(Boolean(e.target?.checked));
+            });
+        }
         if (humanoidTestDualArmLockToggle) {
             humanoidTestDualArmLockToggle.addEventListener('change', (e) => {
                 applyHumanoidTestDualArmLock(Boolean(e.target?.checked));
             });
         }
-        bindRepeatingMetricButton(humanoidWMetricIncreaseBtn, 'increase');
+        bindSingleShotMetricButton(humanoidWMetricIncreaseBtn, 'increase');
         if (typeof window !== 'undefined') {
             window.setHumanoidJogSolverMode = applyHumanoidJogSolverMode;
             window.setHumanoidJogMetric = applyHumanoidJogMetric;
+            window.setHumanoidWaistXCorridorEnabled = applyHumanoidWaistXCorridor;
             window.setHumanoidTestDualArmLockEnabled = applyHumanoidTestDualArmLock;
             window.refreshHumanoidJogMetricOptionLabels = updateHumanoidJogMetricOptionLabels;
         }
@@ -167,6 +498,7 @@ function setupHumanoidJogSolverControls() {
     return {
         applyHumanoidJogSolverMode,
         applyHumanoidJogMetric,
+        applyHumanoidWaistXCorridor,
         applyHumanoidTestDualArmLock
     };
 }
@@ -441,6 +773,9 @@ function setupEventListeners() {
         });
     }
 
+    setupHumanoidDefaultPoseControls();
+    setupHumanoidCooperativePolishingSurfaceControls();
+    setupHumanoidCooperativePolishingObjectPoseControls();
     setupHumanoidJogSolverControls();
     
     // 示教器控制按钮（移除拖动末端执行器模式）
@@ -541,6 +876,53 @@ function setupEventListeners() {
                             appState.visualizer.moveHumanoidRightArmAlongAxis(axis, direction);
                         }, 20);
                     }
+                    return;
+                }
+                if (appState.visualizer.humanoidMode && controlMode === 'surface-slide') {
+                    if (type === 'rotation') return;
+                    if (axis !== 'x' && axis !== 'y' && axis !== 'z') return;
+                    appState.visualizer.moveHumanoidSurfaceAlongParameter(axis, direction);
+                    intervalId = setInterval(() => {
+                        appState.visualizer.moveHumanoidSurfaceAlongParameter(axis, direction);
+                    }, 20);
+                    return;
+                }
+                if (appState.visualizer.humanoidMode && controlMode === 'surface-slide-absolute') {
+                    if (type === 'rotation') return;
+                    if (axis !== 'x' && axis !== 'y' && axis !== 'z') return;
+                    appState.visualizer.moveHumanoidSurfaceAbsoluteAlongParameter(axis, direction);
+                    intervalId = setInterval(() => {
+                        appState.visualizer.moveHumanoidSurfaceAbsoluteAlongParameter(axis, direction);
+                    }, 20);
+                    return;
+                }
+                if (appState.visualizer.humanoidMode && controlMode === 'dual-independent-surface-slide') {
+                    const parameterAxis = type === 'rotation'
+                        ? (axis === 'rx' ? 'x' : (axis === 'ry' ? 'y' : (axis === 'rz' ? 'z' : null)))
+                        : axis;
+                    if (parameterAxis !== 'x' && parameterAxis !== 'y' && parameterAxis !== 'z') return;
+                    if (type === 'rotation') {
+                        appState.visualizer.moveHumanoidDualIndependentRightSurfaceAlongParameter(parameterAxis, direction);
+                        intervalId = setInterval(() => {
+                            appState.visualizer.moveHumanoidDualIndependentRightSurfaceAlongParameter(parameterAxis, direction);
+                        }, 20);
+                    } else {
+                        appState.visualizer.moveHumanoidDualIndependentLeftSurfaceAlongParameter(parameterAxis, direction);
+                        intervalId = setInterval(() => {
+                            appState.visualizer.moveHumanoidDualIndependentLeftSurfaceAlongParameter(parameterAxis, direction);
+                        }, 20);
+                    }
+                    return;
+                }
+                if (appState.visualizer.humanoidMode && controlMode === 'cooperative-ruled-surface-polishing') {
+                    const parameterAxis = type === 'rotation'
+                        ? (axis === 'rx' ? 'rx' : null)
+                        : axis;
+                    if (parameterAxis !== 'x' && parameterAxis !== 'y' && parameterAxis !== 'z' && parameterAxis !== 'rx') return;
+                    appState.visualizer.moveHumanoidCooperativeRuledSurfacePolishingAlongParameter(parameterAxis, direction);
+                    intervalId = setInterval(() => {
+                        appState.visualizer.moveHumanoidCooperativeRuledSurfacePolishingAlongParameter(parameterAxis, direction);
+                    }, 20);
                     return;
                 }
                 if (controlMode === 'robot1') {

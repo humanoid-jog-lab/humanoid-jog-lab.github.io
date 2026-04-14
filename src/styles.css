@@ -531,6 +531,13 @@ body {
     transform: translateY(-1px);
 }
 
+.demo-btn.is-active,
+.demo-btn[data-active="true"] {
+    border-color: var(--primary-color);
+    background: rgba(59, 130, 246, 0.18);
+    box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.35);
+}
+
 .preset-btn:active,
 .demo-btn:active {
     transform: translateY(0);

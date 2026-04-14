@@ -757,6 +757,224 @@ private:
         return DQ(jsArrayToVectorXd(dq_js));
     }
 
+    static HumanoidAbsoluteMJRestoreRequest parseAbsoluteTargetMJRestoreRequest(const val& request_js) {
+        HumanoidAbsoluteMJRestoreRequest request;
+        request.q_current = jsArrayToStdVectorDouble(request_js["qCurrent"]);
+        request.active_start = getOptionalIntField(request_js, "activeStart", request.active_start);
+        request.active_count = getOptionalIntField(request_js, "activeCount", request.active_count);
+        request.absolute_target = jsArrayToStdVectorDouble(request_js["absoluteTarget"]);
+        request.relative_target = jsArrayToStdVectorDouble(request_js["relativeTarget"]);
+        request.keep_body_z_vertical =
+            request_js["keepBodyZVertical"].isUndefined()
+                ? request.keep_body_z_vertical
+                : request_js["keepBodyZVertical"].as<bool>();
+        request.body_equality_tolerance = getOptionalNumberField(
+            request_js,
+            "bodyEqualityTolerance",
+            request.body_equality_tolerance
+        );
+        request.absolute_weight = getOptionalNumberField(
+            request_js,
+            "absoluteWeight",
+            request.absolute_weight
+        );
+        request.relative_weight = getOptionalNumberField(
+            request_js,
+            "relativeWeight",
+            request.relative_weight
+        );
+        request.body_weight = getOptionalNumberField(
+            request_js,
+            "bodyWeight",
+            request.body_weight
+        );
+        request.lower_bounds = jsArrayToStdVectorDouble(request_js["lowerBounds"]);
+        request.upper_bounds = jsArrayToStdVectorDouble(request_js["upperBounds"]);
+        request.step_bounds = jsArrayToStdVectorDouble(request_js["stepBounds"]);
+        request.regularization_weights = jsArrayToStdVectorDouble(request_js["regularizationWeights"]);
+        request.wvfi_lower_bound = getOptionalNumberField(
+            request_js,
+            "wvfiLowerBound",
+            request.wvfi_lower_bound
+        );
+        request.joint_limit_activation_threshold = getOptionalNumberField(
+            request_js,
+            "jointLimitActivationThreshold",
+            request.joint_limit_activation_threshold
+        );
+
+        const val waist_corridor_js = request_js["waistXCorridor"];
+        request.waist_x_corridor.enabled =
+            waist_corridor_js.isUndefined()
+                ? request.waist_x_corridor.enabled
+                : waist_corridor_js["enabled"].as<bool>();
+        request.waist_x_corridor.min = getOptionalNumberField(
+            waist_corridor_js,
+            "min",
+            request.waist_x_corridor.min
+        );
+        request.waist_x_corridor.max = getOptionalNumberField(
+            waist_corridor_js,
+            "max",
+            request.waist_x_corridor.max
+        );
+        request.waist_x_corridor.tolerance = getOptionalNumberField(
+            waist_corridor_js,
+            "tolerance",
+            request.waist_x_corridor.tolerance
+        );
+        request.waist_x_corridor.rows = jsArrayToNestedStdVectorDouble(waist_corridor_js["rows"]);
+        request.waist_x_corridor.rhs = jsArrayToStdVectorDouble(waist_corridor_js["rhs"]);
+
+        const val reference_model_js = request_js["referenceModel"];
+        const val absolute_reference_js = reference_model_js["absolute"];
+        const val relative_reference_js = reference_model_js["relative"];
+        const val body_reference_js = reference_model_js["bodyZ"];
+        request.absolute_reference.stiffness = getOptionalNumberField(
+            absolute_reference_js,
+            "stiffness",
+            request.absolute_reference.stiffness
+        );
+        request.absolute_reference.damping = getOptionalNumberField(
+            absolute_reference_js,
+            "damping",
+            request.absolute_reference.damping
+        );
+        request.relative_reference.stiffness = getOptionalNumberField(
+            relative_reference_js,
+            "stiffness",
+            request.relative_reference.stiffness
+        );
+        request.relative_reference.damping = getOptionalNumberField(
+            relative_reference_js,
+            "damping",
+            request.relative_reference.damping
+        );
+        request.body_reference.stiffness = getOptionalNumberField(
+            body_reference_js,
+            "stiffness",
+            request.body_reference.stiffness
+        );
+        request.body_reference.damping = getOptionalNumberField(
+            body_reference_js,
+            "damping",
+            request.body_reference.damping
+        );
+
+        request.max_iterations = getOptionalIntField(
+            request_js,
+            "maxIterations",
+            request.max_iterations
+        );
+        request.damping = getOptionalNumberField(request_js, "damping", request.damping);
+        request.max_damping_retries = getOptionalIntField(
+            request_js,
+            "maxDampingRetries",
+            request.max_damping_retries
+        );
+        request.damping_growth_factor = getOptionalNumberField(
+            request_js,
+            "dampingGrowthFactor",
+            request.damping_growth_factor
+        );
+        request.initial_scale = getOptionalNumberField(
+            request_js,
+            "initialScale",
+            request.initial_scale
+        );
+        request.min_scale = getOptionalNumberField(
+            request_js,
+            "minScale",
+            request.min_scale
+        );
+        request.reduction_factor = getOptionalNumberField(
+            request_js,
+            "reductionFactor",
+            request.reduction_factor
+        );
+        request.initial_trust_radius = getOptionalNumberField(
+            request_js,
+            "initialTrustRadius",
+            request.initial_trust_radius
+        );
+        request.min_trust_radius = getOptionalNumberField(
+            request_js,
+            "minTrustRadius",
+            request.min_trust_radius
+        );
+        request.max_trust_radius = getOptionalNumberField(
+            request_js,
+            "maxTrustRadius",
+            request.max_trust_radius
+        );
+        request.max_trust_region_retries = getOptionalIntField(
+            request_js,
+            "maxTrustRegionRetries",
+            request.max_trust_region_retries
+        );
+        request.trust_region_shrink_factor = getOptionalNumberField(
+            request_js,
+            "trustRegionShrinkFactor",
+            request.trust_region_shrink_factor
+        );
+        request.trust_region_expand_factor = getOptionalNumberField(
+            request_js,
+            "trustRegionExpandFactor",
+            request.trust_region_expand_factor
+        );
+        request.rho_acceptance_threshold = getOptionalNumberField(
+            request_js,
+            "rhoAcceptanceThreshold",
+            request.rho_acceptance_threshold
+        );
+        request.rho_shrink_threshold = getOptionalNumberField(
+            request_js,
+            "rhoShrinkThreshold",
+            request.rho_shrink_threshold
+        );
+        request.rho_expand_threshold = getOptionalNumberField(
+            request_js,
+            "rhoExpandThreshold",
+            request.rho_expand_threshold
+        );
+        request.equality_tolerance = getOptionalNumberField(
+            request_js,
+            "equalityTolerance",
+            request.equality_tolerance
+        );
+        request.inequality_tolerance = getOptionalNumberField(
+            request_js,
+            "inequalityTolerance",
+            request.inequality_tolerance
+        );
+        return request;
+    }
+
+    static val absoluteTargetMJRestoreResultToJs(const HumanoidAbsoluteMJRestoreResult& result) {
+        val out = val::object();
+        out.set("converged", result.converged);
+        out.set("reason", result.reason);
+        out.set("iterations", result.iterations);
+        out.set("acceptedIterations", result.accepted_iterations);
+        out.set("lastAcceptedScale", result.last_accepted_scale);
+        out.set("lastAcceptedDamping", result.last_accepted_damping);
+        out.set("commandResidualNorm", result.command_residual_norm);
+        out.set("relativeResidualNorm", result.relative_residual_norm);
+        out.set("bodyResidualNorm", result.body_residual_norm);
+        out.set("inequalityViolation", result.inequality_violation);
+        out.set("trustRadius", result.trust_radius);
+        out.set("lastAcceptedRho", result.last_accepted_rho);
+        out.set("lastPredictedReduction", result.last_predicted_reduction);
+        out.set("lastActualReduction", result.last_actual_reduction);
+        out.set("acceptedBy", result.accepted_by);
+        out.set("bestConstraintViolation", result.best_constraint_violation);
+        out.set("filterSize", result.filter_size);
+        out.set("referenceResidual", stdVectorToJsArray(result.reference_residual));
+        out.set("constraintMotion", stdVectorToJsArray(result.constraint_motion));
+        out.set("qApplied", stdVectorToJsArray(result.q_applied));
+        return out;
+    }
+
 public:
     // base_frame_dq: 8 元素；waist/left/right/head_chain_js: 每链为 { joint_type, axis, origin } 数组
     // effector frames: 可选的 8 元素 DQ 数组，用于末端固定关节的变换
@@ -942,156 +1160,19 @@ public:
     }
 
     val solveAbsoluteTargetMJRestore(const val& request_js) {
-        HumanoidAbsoluteMJRestoreRequest request;
-        request.q_current = jsArrayToStdVectorDouble(request_js["qCurrent"]);
-        request.active_start = getOptionalIntField(request_js, "activeStart", request.active_start);
-        request.active_count = getOptionalIntField(request_js, "activeCount", request.active_count);
-        request.absolute_target = jsArrayToStdVectorDouble(request_js["absoluteTarget"]);
-        request.relative_target = jsArrayToStdVectorDouble(request_js["relativeTarget"]);
-        request.keep_body_z_vertical =
-            request_js["keepBodyZVertical"].isUndefined()
-                ? request.keep_body_z_vertical
-                : request_js["keepBodyZVertical"].as<bool>();
-        request.body_equality_tolerance = getOptionalNumberField(
-            request_js,
-            "bodyEqualityTolerance",
-            request.body_equality_tolerance
-        );
-        request.absolute_weight = getOptionalNumberField(
-            request_js,
-            "absoluteWeight",
-            request.absolute_weight
-        );
-        request.relative_weight = getOptionalNumberField(
-            request_js,
-            "relativeWeight",
-            request.relative_weight
-        );
-        request.body_weight = getOptionalNumberField(
-            request_js,
-            "bodyWeight",
-            request.body_weight
-        );
-        request.lower_bounds = jsArrayToStdVectorDouble(request_js["lowerBounds"]);
-        request.upper_bounds = jsArrayToStdVectorDouble(request_js["upperBounds"]);
-        request.step_bounds = jsArrayToStdVectorDouble(request_js["stepBounds"]);
-        request.wvfi_lower_bound = getOptionalNumberField(
-            request_js,
-            "wvfiLowerBound",
-            request.wvfi_lower_bound
-        );
-        request.joint_limit_activation_threshold = getOptionalNumberField(
-            request_js,
-            "jointLimitActivationThreshold",
-            request.joint_limit_activation_threshold
-        );
-        const val waist_corridor_js = request_js["waistXCorridor"];
-        request.waist_x_corridor.enabled =
-            waist_corridor_js.isUndefined()
-                ? request.waist_x_corridor.enabled
-                : waist_corridor_js["enabled"].as<bool>();
-        request.waist_x_corridor.min = getOptionalNumberField(
-            waist_corridor_js,
-            "min",
-            request.waist_x_corridor.min
-        );
-        request.waist_x_corridor.max = getOptionalNumberField(
-            waist_corridor_js,
-            "max",
-            request.waist_x_corridor.max
-        );
-        request.waist_x_corridor.tolerance = getOptionalNumberField(
-            waist_corridor_js,
-            "tolerance",
-            request.waist_x_corridor.tolerance
-        );
-        request.waist_x_corridor.rows = jsArrayToNestedStdVectorDouble(waist_corridor_js["rows"]);
-        request.waist_x_corridor.rhs = jsArrayToStdVectorDouble(waist_corridor_js["rhs"]);
-
-        const val reference_model_js = request_js["referenceModel"];
-        const val absolute_reference_js = reference_model_js["absolute"];
-        const val relative_reference_js = reference_model_js["relative"];
-        const val body_reference_js = reference_model_js["bodyZ"];
-        request.absolute_reference.stiffness = getOptionalNumberField(
-            absolute_reference_js,
-            "stiffness",
-            request.absolute_reference.stiffness
-        );
-        request.absolute_reference.damping = getOptionalNumberField(
-            absolute_reference_js,
-            "damping",
-            request.absolute_reference.damping
-        );
-        request.relative_reference.stiffness = getOptionalNumberField(
-            relative_reference_js,
-            "stiffness",
-            request.relative_reference.stiffness
-        );
-        request.relative_reference.damping = getOptionalNumberField(
-            relative_reference_js,
-            "damping",
-            request.relative_reference.damping
-        );
-        request.body_reference.stiffness = getOptionalNumberField(
-            body_reference_js,
-            "stiffness",
-            request.body_reference.stiffness
-        );
-        request.body_reference.damping = getOptionalNumberField(
-            body_reference_js,
-            "damping",
-            request.body_reference.damping
-        );
-
-        request.max_iterations = getOptionalIntField(
-            request_js,
-            "maxIterations",
-            request.max_iterations
-        );
-        request.damping = getOptionalNumberField(request_js, "damping", request.damping);
-        request.initial_scale = getOptionalNumberField(
-            request_js,
-            "initialScale",
-            request.initial_scale
-        );
-        request.min_scale = getOptionalNumberField(
-            request_js,
-            "minScale",
-            request.min_scale
-        );
-        request.reduction_factor = getOptionalNumberField(
-            request_js,
-            "reductionFactor",
-            request.reduction_factor
-        );
-        request.equality_tolerance = getOptionalNumberField(
-            request_js,
-            "equalityTolerance",
-            request.equality_tolerance
-        );
-        request.inequality_tolerance = getOptionalNumberField(
-            request_js,
-            "inequalityTolerance",
-            request.inequality_tolerance
-        );
-
+        const HumanoidAbsoluteMJRestoreRequest request =
+            parseAbsoluteTargetMJRestoreRequest(request_js);
         const HumanoidAbsoluteMJRestoreResult result =
             solveHumanoidAbsoluteTargetMJRestore(robot, request);
+        return absoluteTargetMJRestoreResultToJs(result);
+    }
 
-        val out = val::object();
-        out.set("converged", result.converged);
-        out.set("reason", result.reason);
-        out.set("iterations", result.iterations);
-        out.set("acceptedIterations", result.accepted_iterations);
-        out.set("lastAcceptedScale", result.last_accepted_scale);
-        out.set("commandResidualNorm", result.command_residual_norm);
-        out.set("relativeResidualNorm", result.relative_residual_norm);
-        out.set("bodyResidualNorm", result.body_residual_norm);
-        out.set("inequalityViolation", result.inequality_violation);
-        out.set("referenceResidual", stdVectorToJsArray(result.reference_residual));
-        out.set("constraintMotion", stdVectorToJsArray(result.constraint_motion));
-        out.set("qApplied", stdVectorToJsArray(result.q_applied));
-        return out;
+    val solveAbsoluteTargetMJRestoreTrustRegion(const val& request_js) {
+        const HumanoidAbsoluteMJRestoreRequest request =
+            parseAbsoluteTargetMJRestoreRequest(request_js);
+        const HumanoidAbsoluteMJRestoreResult result =
+            solveHumanoidAbsoluteTargetMJRestoreTrustRegion(robot, request);
+        return absoluteTargetMJRestoreResultToJs(result);
     }
 };
 
@@ -1514,7 +1595,8 @@ EMSCRIPTEN_BINDINGS(dqrobotics_module) {
         .function("relativePoseJacobianDualArm", &HumanoidURDF_Wrapper::relativePoseJacobianDualArm)
         .function("absolutePoseJacobianDualArm", &HumanoidURDF_Wrapper::absolutePoseJacobianDualArm)
         .function("solveAbsoluteTargetNlopt", &HumanoidURDF_Wrapper::solveAbsoluteTargetNlopt)
-        .function("solveAbsoluteTargetMJRestore", &HumanoidURDF_Wrapper::solveAbsoluteTargetMJRestore);
+        .function("solveAbsoluteTargetMJRestore", &HumanoidURDF_Wrapper::solveAbsoluteTargetMJRestore)
+        .function("solveAbsoluteTargetMJRestoreTrustRegion", &HumanoidURDF_Wrapper::solveAbsoluteTargetMJRestoreTrustRegion);
 
     // 差速底盘
     class_<DifferentialDriveRobot_Wrapper>("DifferentialDriveRobot")

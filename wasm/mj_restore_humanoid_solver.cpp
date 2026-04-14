@@ -25,8 +25,6 @@ using Eigen::MatrixXd;
 using Eigen::VectorXd;
 
 constexpr double kBoundTolerance = 1e-12;
-constexpr int kMaxDampingRetries = 8;
-constexpr double kDampingGrowthFactor = 10.0;
 
 bool isFiniteValue(double value) {
     return std::isfinite(value);
@@ -181,11 +179,173 @@ double dotStd(const std::vector<double>& a, const std::vector<double>& b) {
     return sum;
 }
 
+double vectorNormStd(const std::vector<double>& values) {
+    return std::sqrt(dotStd(values, values));
+}
+
+std::vector<double> normalizeRegularizationWeights(
+    const std::vector<double>& regularization_weights,
+    int width
+) {
+    if (width <= 0) return {};
+    if (regularization_weights.empty()) return {};
+
+    std::vector<double> weights(static_cast<std::size_t>(width), 1.0);
+    bool has_custom_weight = false;
+    for (int i = 0; i < width; ++i) {
+        const double weight = std::max(
+            1e-12,
+            i < static_cast<int>(regularization_weights.size())
+                ? regularization_weights[static_cast<std::size_t>(i)]
+                : 1.0
+        );
+        weights[static_cast<std::size_t>(i)] = weight;
+        if (std::abs(weight - 1.0) > 1e-12) has_custom_weight = true;
+    }
+    return has_custom_weight ? weights : std::vector<double>{};
+}
+
 double clipDamping(double residual, double damping_term) {
     if (std::abs(residual) <= 1e-18) return 0.0;
     if ((residual < 0.0) != (damping_term < 0.0)) return damping_term;
     const double max_magnitude = std::abs(residual) * 0.8;
     return std::copysign(std::min(std::abs(damping_term), max_magnitude), damping_term);
+}
+
+double computeRestorationMerit(double phi, double theta, double penalty) {
+    return phi + penalty * theta;
+}
+
+struct TrustRegionStep {
+    std::vector<double> dq;
+    double step_norm = 0.0;
+    bool clipped = false;
+};
+
+TrustRegionStep clipStepToTrustRegion(
+    const std::vector<double>& step,
+    double trust_radius
+) {
+    const double radius = std::max(1e-12, trust_radius);
+    const double step_norm = vectorNormStd(step);
+    if (!std::isfinite(radius) || step_norm <= radius) {
+        return { step, step_norm, false };
+    }
+    const double scale = radius / std::max(step_norm, 1e-18);
+    std::vector<double> clipped(step.size(), 0.0);
+    for (std::size_t i = 0; i < step.size(); ++i) clipped[i] = step[i] * scale;
+    return { clipped, radius, true };
+}
+
+struct FilterEntry {
+    double phi = std::numeric_limits<double>::infinity();
+    double theta = std::numeric_limits<double>::infinity();
+};
+
+bool dominatesFilterEntry(
+    const FilterEntry& lhs,
+    const FilterEntry& rhs,
+    double phi_tolerance,
+    double theta_tolerance
+) {
+    const bool phi_better = lhs.phi <= rhs.phi + phi_tolerance;
+    const bool theta_better = lhs.theta <= rhs.theta + theta_tolerance;
+    const bool strictly_better =
+        lhs.phi < rhs.phi - phi_tolerance || lhs.theta < rhs.theta - theta_tolerance;
+    return phi_better && theta_better && strictly_better;
+}
+
+bool isDominatedByFilter(
+    const std::vector<FilterEntry>& filter,
+    const FilterEntry& candidate,
+    double phi_tolerance,
+    double theta_tolerance
+) {
+    for (const auto& entry : filter) {
+        if (dominatesFilterEntry(entry, candidate, phi_tolerance, theta_tolerance)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::vector<FilterEntry> insertFilterEntry(
+    const std::vector<FilterEntry>& filter,
+    const FilterEntry& candidate,
+    double phi_tolerance,
+    double theta_tolerance
+) {
+    std::vector<FilterEntry> next;
+    next.reserve(filter.size() + 1);
+    for (const auto& entry : filter) {
+        if (!dominatesFilterEntry(candidate, entry, phi_tolerance, theta_tolerance)) {
+            next.push_back(entry);
+        }
+    }
+    next.push_back(candidate);
+    return next;
+}
+
+struct FilterAcceptance {
+    bool accepted = false;
+    std::string reason;
+    std::vector<FilterEntry> next_filter;
+};
+
+FilterAcceptance acceptRestorationCandidateByFilter(
+    const std::vector<FilterEntry>& filter,
+    double current_phi,
+    double current_theta,
+    double candidate_phi,
+    double candidate_theta,
+    double predicted_reduction,
+    double actual_reduction,
+    double rho,
+    double rho_acceptance_threshold,
+    double phi_tolerance,
+    double theta_tolerance
+) {
+    const FilterEntry candidate{ candidate_phi, candidate_theta };
+    if (isDominatedByFilter(filter, candidate, phi_tolerance, theta_tolerance)) {
+        return { false, "dominated", filter };
+    }
+
+    const bool phi_improved = candidate_phi + phi_tolerance < current_phi;
+    const bool theta_improved = candidate_theta + theta_tolerance < current_theta;
+    const bool rho_accepted = predicted_reduction <= 1e-12 || rho >= rho_acceptance_threshold;
+
+    if (!phi_improved && !theta_improved) {
+        return { false, "not_improved", filter };
+    }
+    if (!rho_accepted && !theta_improved) {
+        return { false, "poor_ratio", filter };
+    }
+    return {
+        true,
+        (theta_improved && !rho_accepted) || (theta_improved && !phi_improved) ? "filter" : "rho",
+        insertFilterEntry(filter, candidate, phi_tolerance, theta_tolerance)
+    };
+}
+
+double updateTrustRegionRadius(
+    double radius,
+    double rho,
+    double step_norm,
+    bool clipped,
+    double min_trust_radius,
+    double max_trust_radius,
+    double shrink_factor,
+    double expand_factor,
+    double rho_shrink_threshold,
+    double rho_expand_threshold
+) {
+    double next_radius = radius;
+    if (!std::isfinite(rho) || rho < rho_shrink_threshold) {
+        next_radius = std::max(min_trust_radius, radius * shrink_factor);
+    } else if (clipped && rho > rho_expand_threshold && step_norm >= radius * 0.99) {
+        next_radius = std::min(max_trust_radius, radius * expand_factor);
+    }
+    return next_radius;
 }
 
 struct ActiveCorridorRows {
@@ -276,12 +436,18 @@ bool validateRequest(
         reason = "lowerBounds, upperBounds, and stepBounds must match activeCount";
         return false;
     }
+    if (!request.regularization_weights.empty() &&
+        static_cast<int>(request.regularization_weights.size()) != request.active_count) {
+        reason = "regularizationWeights must be empty or match activeCount";
+        return false;
+    }
     if (!isFiniteVector(request.q_current) ||
         !isFiniteVector(request.absolute_target) ||
         !isFiniteVector(request.relative_target) ||
         !isFiniteVector(request.lower_bounds) ||
         !isFiniteVector(request.upper_bounds) ||
         !isFiniteVector(request.step_bounds) ||
+        !isFiniteVector(request.regularization_weights) ||
         !isFiniteRows(request.waist_x_corridor.rows) ||
         !isFiniteVector(request.waist_x_corridor.rhs)) {
         reason = "request vectors must contain only finite values";
@@ -300,9 +466,18 @@ bool validateRequest(
         !isFiniteValue(request.body_reference.stiffness) ||
         !isFiniteValue(request.body_reference.damping) ||
         !isFiniteValue(request.damping) ||
+        !isFiniteValue(request.damping_growth_factor) ||
         !isFiniteValue(request.initial_scale) ||
         !isFiniteValue(request.min_scale) ||
         !isFiniteValue(request.reduction_factor) ||
+        !isFiniteValue(request.initial_trust_radius) ||
+        !isFiniteValue(request.min_trust_radius) ||
+        !isFiniteValue(request.max_trust_radius) ||
+        !isFiniteValue(request.trust_region_shrink_factor) ||
+        !isFiniteValue(request.trust_region_expand_factor) ||
+        !isFiniteValue(request.rho_acceptance_threshold) ||
+        !isFiniteValue(request.rho_shrink_threshold) ||
+        !isFiniteValue(request.rho_expand_threshold) ||
         !isFiniteValue(request.equality_tolerance) ||
         !isFiniteValue(request.inequality_tolerance) ||
         !isFiniteValue(request.waist_x_corridor.tolerance)) {
@@ -325,12 +500,34 @@ bool validateRequest(
         reason = "maxIterations must be positive";
         return false;
     }
+    if (request.max_damping_retries < 0 || request.max_trust_region_retries <= 0) {
+        reason = "retry counts must be non-negative";
+        return false;
+    }
     if (request.damping < 0.0 || request.initial_scale <= 0.0 || request.min_scale <= 0.0) {
         reason = "damping and line-search scales must be non-negative";
         return false;
     }
+    if (request.damping_growth_factor <= 1.0) {
+        reason = "dampingGrowthFactor must exceed 1";
+        return false;
+    }
     if (request.reduction_factor <= 0.0 || request.reduction_factor >= 1.0) {
         reason = "reductionFactor must be between 0 and 1";
+        return false;
+    }
+    if (request.initial_trust_radius <= 0.0 ||
+        request.min_trust_radius <= 0.0 ||
+        request.max_trust_radius < request.min_trust_radius) {
+        reason = "trust-region radii must be positive and ordered";
+        return false;
+    }
+    if (request.trust_region_shrink_factor <= 0.0 || request.trust_region_shrink_factor >= 1.0) {
+        reason = "trustRegionShrinkFactor must be between 0 and 1";
+        return false;
+    }
+    if (request.trust_region_expand_factor <= 1.0) {
+        reason = "trustRegionExpandFactor must exceed 1";
         return false;
     }
     if (request.waist_x_corridor.enabled &&
@@ -381,6 +578,37 @@ struct Evaluation {
     double waist_state_violation = 0.0;
     double inequality_violation = std::numeric_limits<double>::infinity();
 };
+
+double computeModelObjective(
+    const Evaluation& evaluation,
+    const std::vector<double>& dq_step,
+    double damping,
+    const std::vector<double>& regularization_weights,
+    const std::vector<double>& reference_residual
+) {
+    double residual_cost = 0.0;
+    for (Eigen::Index row_index = 0; row_index < evaluation.weighted_jacobian.rows(); ++row_index) {
+        double predicted = 0.0;
+        for (Eigen::Index col_index = 0; col_index < evaluation.weighted_jacobian.cols(); ++col_index) {
+            predicted += evaluation.weighted_jacobian(row_index, col_index) *
+                dq_step[static_cast<std::size_t>(col_index)];
+        }
+        const double target = row_index < static_cast<Eigen::Index>(reference_residual.size())
+            ? reference_residual[static_cast<std::size_t>(row_index)]
+            : 0.0;
+        const double diff = predicted - target;
+        residual_cost += diff * diff;
+    }
+
+    double regularization_cost = 0.0;
+    for (std::size_t i = 0; i < dq_step.size(); ++i) {
+        const double weight = i < regularization_weights.size()
+            ? std::max(1e-12, regularization_weights[i])
+            : 1.0;
+        regularization_cost += weight * dq_step[i] * dq_step[i];
+    }
+    return 0.5 * residual_cost + 0.5 * std::max(1e-12, damping) * regularization_cost;
+}
 
 Evaluation evaluateConfiguration(
     const ProblemContext& context,
@@ -578,6 +806,7 @@ bool solveRestorationStep(
     const Evaluation& evaluation,
     const std::vector<double>& previous_step,
     double damping,
+    const std::vector<double>& regularization_weights,
     std::vector<double>& dq_out,
     std::vector<double>& reference_residual_out,
     std::vector<double>& constraint_motion_out
@@ -598,7 +827,13 @@ bool solveRestorationStep(
     );
     MatrixXd H =
         evaluation.weighted_jacobian.transpose() * evaluation.weighted_jacobian;
-    H.diagonal().array() += std::max(1e-12, damping);
+    const double damping_floor = std::max(1e-12, damping);
+    for (Eigen::Index i = 0; i < H.rows(); ++i) {
+        const double weight = i < static_cast<Eigen::Index>(regularization_weights.size())
+            ? std::max(1e-12, regularization_weights[static_cast<std::size_t>(i)])
+            : 1.0;
+        H(i, i) += damping_floor * weight;
+    }
     const VectorXd g = evaluation.weighted_jacobian.transpose() * reference_residual;
     const Eigen::LDLT<MatrixXd> factorization(H);
     if (factorization.info() != Eigen::Success) {
@@ -704,12 +939,14 @@ HumanoidAbsoluteMJRestoreResult solveHumanoidAbsoluteTargetMJRestore(
 
     HumanoidAbsoluteMJRestoreResult result;
     result.q_applied = context.q_initial_active;
+    result.best_constraint_violation = std::numeric_limits<double>::infinity();
 
     Evaluation current = evaluateConfiguration(context, context.q_initial_active);
     result.command_residual_norm = current.absolute_residual_norm;
     result.relative_residual_norm = current.relative_residual_norm;
     result.body_residual_norm = current.body_residual_norm;
     result.inequality_violation = current.inequality_violation;
+    result.best_constraint_violation = current.inequality_violation;
 
     if (current.active_residual_norm <= request.equality_tolerance &&
         current.inequality_violation <= request.inequality_tolerance) {
@@ -723,6 +960,10 @@ HumanoidAbsoluteMJRestoreResult solveHumanoidAbsoluteTargetMJRestore(
     Evaluation accepted = current;
     bool has_accepted = false;
     std::vector<double> previous_accepted_step(static_cast<std::size_t>(request.active_count), 0.0);
+    const std::vector<double> normalized_regularization_weights = normalizeRegularizationWeights(
+        request.regularization_weights,
+        request.active_count
+    );
     const double improvement_tolerance = std::max(
         1e-15,
         std::min(1e-12, std::max(0.0, request.equality_tolerance) * 1e-3)
@@ -742,16 +983,18 @@ HumanoidAbsoluteMJRestoreResult solveHumanoidAbsoluteTargetMJRestore(
         std::vector<double> accepted_q_trial;
         Evaluation accepted_trial_evaluation;
         double accepted_scale = 0.0;
+        double accepted_damping = std::numeric_limits<double>::quiet_NaN();
         bool accepted_trial = false;
         const double scale0 = std::max(request.min_scale, request.initial_scale);
 
-        for (int damping_attempt = 0; damping_attempt <= kMaxDampingRetries; ++damping_attempt) {
-            const double attempt_damping = request.damping * std::pow(kDampingGrowthFactor, damping_attempt);
+        for (int damping_attempt = 0; damping_attempt <= request.max_damping_retries; ++damping_attempt) {
+            const double attempt_damping = request.damping * std::pow(request.damping_growth_factor, damping_attempt);
             if (!solveRestorationStep(
                     request,
                     current,
                     previous_accepted_step,
                     attempt_damping,
+                    normalized_regularization_weights,
                     dq,
                     reference_residual,
                     constraint_motion
@@ -787,6 +1030,7 @@ HumanoidAbsoluteMJRestoreResult solveHumanoidAbsoluteTargetMJRestore(
                     if (should_replace) {
                         accepted_trial = true;
                         accepted_scale = scale;
+                        accepted_damping = attempt_damping;
                         accepted_q_trial = q_trial;
                         accepted_dq_trial = dq_trial;
                         accepted_trial_evaluation = trial;
@@ -819,10 +1063,12 @@ HumanoidAbsoluteMJRestoreResult solveHumanoidAbsoluteTargetMJRestore(
         has_accepted = true;
         result.accepted_iterations += 1;
         result.last_accepted_scale = accepted_scale;
+        result.last_accepted_damping = accepted_damping;
         result.command_residual_norm = current.absolute_residual_norm;
         result.relative_residual_norm = current.relative_residual_norm;
         result.body_residual_norm = current.body_residual_norm;
         result.inequality_violation = current.inequality_violation;
+        result.best_constraint_violation = std::min(result.best_constraint_violation, current.inequality_violation);
 
         if (current.active_residual_norm <= request.equality_tolerance &&
             current.inequality_violation <= request.inequality_tolerance) {
@@ -839,5 +1085,299 @@ HumanoidAbsoluteMJRestoreResult solveHumanoidAbsoluteTargetMJRestore(
     result.relative_residual_norm = has_accepted ? accepted.relative_residual_norm : current.relative_residual_norm;
     result.body_residual_norm = has_accepted ? accepted.body_residual_norm : current.body_residual_norm;
     result.inequality_violation = has_accepted ? accepted.inequality_violation : current.inequality_violation;
+    result.best_constraint_violation = std::min(
+        result.best_constraint_violation,
+        has_accepted ? accepted.inequality_violation : current.inequality_violation
+    );
+    return result;
+}
+
+HumanoidAbsoluteMJRestoreResult solveHumanoidAbsoluteTargetMJRestoreTrustRegion(
+    const DQ_HumanoidURDF& robot,
+    const HumanoidAbsoluteMJRestoreRequest& request
+) {
+    std::string validation_reason;
+    if (!validateRequest(robot, request, validation_reason)) {
+        return makeFailure(request, validation_reason);
+    }
+
+    ProblemContext context{
+        robot,
+        request,
+        toEigenVector(request.absolute_target),
+        toEigenVector(request.relative_target),
+        sliceActiveConfiguration(request),
+        std::vector<double>(static_cast<std::size_t>(request.active_count), 0.0),
+        std::vector<double>(static_cast<std::size_t>(request.active_count), 0.0)
+    };
+
+    for (int i = 0; i < request.active_count; ++i) {
+        const double q0 = context.q_initial_active[static_cast<std::size_t>(i)];
+        const double step = request.step_bounds[static_cast<std::size_t>(i)];
+        const double lower = request.lower_bounds[static_cast<std::size_t>(i)];
+        const double upper = request.upper_bounds[static_cast<std::size_t>(i)];
+        context.effective_lower_bounds[static_cast<std::size_t>(i)] = std::max(lower, q0 - step);
+        context.effective_upper_bounds[static_cast<std::size_t>(i)] = std::min(upper, q0 + step);
+        if (context.effective_lower_bounds[static_cast<std::size_t>(i)] >
+            context.effective_upper_bounds[static_cast<std::size_t>(i)] + kBoundTolerance) {
+            return makeFailure(request, "joint limits and step bounds produce an empty active interval");
+        }
+    }
+
+    HumanoidAbsoluteMJRestoreResult result;
+    result.q_applied = context.q_initial_active;
+    result.trust_radius = std::max(request.min_trust_radius, request.initial_trust_radius);
+    result.filter_size = 1;
+
+    Evaluation current = evaluateConfiguration(context, context.q_initial_active);
+    double current_phi = current.active_residual_norm;
+    double current_theta = current.inequality_violation;
+    double current_penalty = std::max(1.0, current_phi + 1.0);
+    double current_merit = computeRestorationMerit(current_phi, current_theta, current_penalty);
+    result.command_residual_norm = current.absolute_residual_norm;
+    result.relative_residual_norm = current.relative_residual_norm;
+    result.body_residual_norm = current.body_residual_norm;
+    result.inequality_violation = current.inequality_violation;
+    result.best_constraint_violation = current_theta;
+
+    if (current_phi <= request.equality_tolerance &&
+        current_theta <= request.inequality_tolerance) {
+        result.converged = true;
+        result.reason = "converged";
+        return result;
+    }
+
+    const std::vector<double> normalized_regularization_weights = normalizeRegularizationWeights(
+        request.regularization_weights,
+        request.active_count
+    );
+    const double phi_tolerance = std::max(1e-12, std::max(0.0, request.equality_tolerance) * 1e-3);
+    const double theta_tolerance = std::max(1e-12, std::max(0.0, request.inequality_tolerance) * 1e-3);
+    const double min_radius = std::max(1e-8, request.min_trust_radius);
+    const double max_radius = std::max(min_radius, request.max_trust_radius);
+    const double shrink_factor = std::min(0.99, std::max(0.1, request.trust_region_shrink_factor));
+    const double expand_factor = std::max(1.01, request.trust_region_expand_factor);
+
+    std::vector<double> q_current = context.q_initial_active;
+    std::vector<double> q_accepted = context.q_initial_active;
+    Evaluation accepted = current;
+    bool has_accepted = false;
+    std::vector<double> previous_accepted_step(static_cast<std::size_t>(request.active_count), 0.0);
+    const double start_phi = current_phi;
+    const double start_theta = current_theta;
+
+    double trust_radius = result.trust_radius;
+    std::vector<FilterEntry> filter = { { current_phi, current_theta } };
+
+    for (int iter = 0; iter < request.max_iterations; ++iter) {
+        result.iterations = iter + 1;
+
+        struct AcceptedTrial {
+            std::vector<double> q_trial;
+            Evaluation trial_evaluation;
+            double phi = std::numeric_limits<double>::infinity();
+            double theta = std::numeric_limits<double>::infinity();
+            double merit = std::numeric_limits<double>::infinity();
+            std::vector<double> dq_trial;
+            double damping = std::numeric_limits<double>::quiet_NaN();
+            double rho = std::numeric_limits<double>::quiet_NaN();
+            double predicted_reduction = std::numeric_limits<double>::quiet_NaN();
+            double actual_reduction = std::numeric_limits<double>::quiet_NaN();
+            std::string accepted_by;
+            std::vector<FilterEntry> next_filter;
+            double next_radius = std::numeric_limits<double>::quiet_NaN();
+            std::vector<double> reference_residual;
+            std::vector<double> constraint_motion;
+        };
+
+        bool accepted_trial = false;
+        AcceptedTrial accepted_trial_state;
+        std::vector<double> last_reference_residual;
+        std::vector<double> last_constraint_motion;
+        double candidate_radius = trust_radius;
+
+        for (int damping_attempt = 0;
+             damping_attempt <= request.max_damping_retries && !accepted_trial;
+             ++damping_attempt) {
+            const double attempt_damping =
+                request.damping * std::pow(request.damping_growth_factor, damping_attempt);
+            std::vector<double> dq;
+            std::vector<double> reference_residual;
+            std::vector<double> constraint_motion;
+            if (!solveRestorationStep(
+                    request,
+                    current,
+                    previous_accepted_step,
+                    attempt_damping,
+                    normalized_regularization_weights,
+                    dq,
+                    reference_residual,
+                    constraint_motion
+                )) {
+                continue;
+            }
+
+            last_reference_residual = reference_residual;
+            last_constraint_motion = constraint_motion;
+            if (!(vectorNormStd(dq) > 1e-18)) continue;
+
+            for (int radius_attempt = 0; radius_attempt < request.max_trust_region_retries; ++radius_attempt) {
+                const TrustRegionStep clipped_step = clipStepToTrustRegion(dq, candidate_radius);
+                if (!(clipped_step.step_norm > 1e-18)) break;
+
+                const std::vector<double> q_trial = clampToEffectiveBounds(
+                    addScaledStep(q_current, clipped_step.dq, 1.0),
+                    context
+                );
+                Evaluation trial = evaluateConfiguration(context, q_trial);
+                const double trial_phi = trial.active_residual_norm;
+                const double trial_theta = trial.inequality_violation;
+                const double trial_penalty = std::max(current_penalty, trial_phi + 1.0);
+                const double trial_merit = computeRestorationMerit(trial_phi, trial_theta, trial_penalty);
+                const double predicted_reduction =
+                    computeModelObjective(
+                        current,
+                        std::vector<double>(static_cast<std::size_t>(request.active_count), 0.0),
+                        attempt_damping,
+                        normalized_regularization_weights,
+                        reference_residual
+                    ) -
+                    computeModelObjective(
+                        current,
+                        clipped_step.dq,
+                        attempt_damping,
+                        normalized_regularization_weights,
+                        reference_residual
+                    );
+                const double actual_reduction = current_merit - trial_merit;
+                const double rho = predicted_reduction > 1e-12
+                    ? actual_reduction / predicted_reduction
+                    : std::numeric_limits<double>::infinity();
+
+                const FilterAcceptance acceptance = acceptRestorationCandidateByFilter(
+                    filter,
+                    current_phi,
+                    current_theta,
+                    trial_phi,
+                    trial_theta,
+                    predicted_reduction,
+                    actual_reduction,
+                    rho,
+                    request.rho_acceptance_threshold,
+                    phi_tolerance,
+                    theta_tolerance
+                );
+                const double next_radius = updateTrustRegionRadius(
+                    candidate_radius,
+                    rho,
+                    clipped_step.step_norm,
+                    clipped_step.clipped,
+                    min_radius,
+                    max_radius,
+                    shrink_factor,
+                    expand_factor,
+                    request.rho_shrink_threshold,
+                    request.rho_expand_threshold
+                );
+                if (acceptance.accepted) {
+                    accepted_trial = true;
+                    accepted_trial_state.q_trial = q_trial;
+                    accepted_trial_state.trial_evaluation = trial;
+                    accepted_trial_state.phi = trial_phi;
+                    accepted_trial_state.theta = trial_theta;
+                    accepted_trial_state.merit = trial_merit;
+                    accepted_trial_state.dq_trial = clipped_step.dq;
+                    accepted_trial_state.damping = attempt_damping;
+                    accepted_trial_state.rho = rho;
+                    accepted_trial_state.predicted_reduction = predicted_reduction;
+                    accepted_trial_state.actual_reduction = actual_reduction;
+                    accepted_trial_state.accepted_by = acceptance.reason;
+                    accepted_trial_state.next_filter = acceptance.next_filter;
+                    accepted_trial_state.next_radius = next_radius;
+                    accepted_trial_state.reference_residual = reference_residual;
+                    accepted_trial_state.constraint_motion = constraint_motion;
+                    break;
+                }
+                candidate_radius = next_radius;
+                if (candidate_radius <= min_radius + 1e-12) break;
+            }
+        }
+
+        result.reference_residual = accepted_trial
+            ? accepted_trial_state.reference_residual
+            : last_reference_residual;
+        result.constraint_motion = accepted_trial
+            ? accepted_trial_state.constraint_motion
+            : last_constraint_motion;
+
+        if (!accepted_trial) {
+            result.reason = has_accepted ? "best_effort" : "line_search_failed";
+            result.q_applied = has_accepted ? q_accepted : context.q_initial_active;
+            result.command_residual_norm = has_accepted ? accepted.absolute_residual_norm : current.absolute_residual_norm;
+            result.relative_residual_norm = has_accepted ? accepted.relative_residual_norm : current.relative_residual_norm;
+            result.body_residual_norm = has_accepted ? accepted.body_residual_norm : current.body_residual_norm;
+            result.inequality_violation = has_accepted ? accepted.inequality_violation : current.inequality_violation;
+            result.best_constraint_violation = std::min(
+                result.best_constraint_violation,
+                has_accepted ? accepted.inequality_violation : current.inequality_violation
+            );
+            result.trust_radius = trust_radius;
+            result.filter_size = static_cast<int>(filter.size());
+            return result;
+        }
+
+        q_current = accepted_trial_state.q_trial;
+        current = accepted_trial_state.trial_evaluation;
+        current_phi = accepted_trial_state.phi;
+        current_theta = accepted_trial_state.theta;
+        current_penalty = std::max(current_penalty, current_phi + 1.0);
+        current_merit = accepted_trial_state.merit;
+        q_accepted = q_current;
+        accepted = current;
+        has_accepted = true;
+        previous_accepted_step = accepted_trial_state.dq_trial;
+        trust_radius = accepted_trial_state.next_radius;
+        filter = accepted_trial_state.next_filter;
+
+        result.accepted_iterations += 1;
+        result.last_accepted_scale = 1.0;
+        result.last_accepted_damping = accepted_trial_state.damping;
+        result.command_residual_norm = current.absolute_residual_norm;
+        result.relative_residual_norm = current.relative_residual_norm;
+        result.body_residual_norm = current.body_residual_norm;
+        result.inequality_violation = current.inequality_violation;
+        result.trust_radius = trust_radius;
+        result.last_accepted_rho = accepted_trial_state.rho;
+        result.last_predicted_reduction = accepted_trial_state.predicted_reduction;
+        result.last_actual_reduction = accepted_trial_state.actual_reduction;
+        result.accepted_by = accepted_trial_state.accepted_by;
+        result.best_constraint_violation = std::min(result.best_constraint_violation, current_theta);
+        result.filter_size = static_cast<int>(filter.size());
+
+        if (current_phi <= request.equality_tolerance &&
+            current_theta <= request.inequality_tolerance) {
+            result.converged = true;
+            result.reason = "converged";
+            result.q_applied = q_accepted;
+            return result;
+        }
+    }
+
+    result.reason = (
+        has_accepted &&
+        (accepted.active_residual_norm + phi_tolerance < start_phi ||
+            accepted.inequality_violation + theta_tolerance < start_theta)
+    ) ? "best_effort" : "max_iter";
+    result.q_applied = has_accepted ? q_accepted : context.q_initial_active;
+    result.command_residual_norm = has_accepted ? accepted.absolute_residual_norm : current.absolute_residual_norm;
+    result.relative_residual_norm = has_accepted ? accepted.relative_residual_norm : current.relative_residual_norm;
+    result.body_residual_norm = has_accepted ? accepted.body_residual_norm : current.body_residual_norm;
+    result.inequality_violation = has_accepted ? accepted.inequality_violation : current.inequality_violation;
+    result.best_constraint_violation = std::min(
+        result.best_constraint_violation,
+        has_accepted ? accepted.inequality_violation : current.inequality_violation
+    );
+    result.trust_radius = trust_radius;
+    result.filter_size = static_cast<int>(filter.size());
     return result;
 }

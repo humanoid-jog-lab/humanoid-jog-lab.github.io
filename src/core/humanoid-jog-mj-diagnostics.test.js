@@ -146,3 +146,31 @@ test('buildHumanoidJogMJDiagnostics derives task-aware metric labels for jog and
     assert.equal(payload.taskMetricLabel, 'w_rel_hier_vfi');
     assert.equal(payload.taskPreWMetricLabel, 'w_rel_hier');
 });
+
+test('buildHumanoidJogMJDiagnostics preserves the trust-region restoration solver id and diagnostics', () => {
+    const payload = buildHumanoidJogMJDiagnostics({
+        solverMode: 'mj_restore_tr',
+        modeTag: 'absolute-target',
+        restorationResult: {
+            converged: false,
+            reason: 'best_effort',
+            trustRadius: 0.25,
+            lastAcceptedRho: 0.82,
+            lastPredictedReduction: 0.6,
+            lastActualReduction: 0.49,
+            acceptedBy: 'filter'
+        }
+    });
+
+    assert.equal(payload.solverMode, 'mj_restore_tr');
+    assert.equal(payload.stopReason, 'best_effort');
+});
+
+test('buildHumanoidJogMJDiagnostics falls back to the supported mj_restore solver id for removed variants', () => {
+    const payload = buildHumanoidJogMJDiagnostics({
+        solverMode: 'torso_seed_upright_vfi',
+        modeTag: 'absolute-target'
+    });
+
+    assert.equal(payload.solverMode, 'mj_restore');
+});

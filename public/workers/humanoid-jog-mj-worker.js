@@ -11,6 +11,16 @@ function nowMs() {
     return Date.now();
 }
 
+function normalizeSolverMode(solverMode) {
+    return solverMode === 'mj_restore_tr' ? 'mj_restore_tr' : 'mj_restore';
+}
+
+function getRestoreSolveFunctionName(solverMode) {
+    return normalizeSolverMode(solverMode) === 'mj_restore_tr'
+        ? 'solveAbsoluteTargetMJRestoreTrustRegion'
+        : 'solveAbsoluteTargetMJRestore';
+}
+
 function normalizeBaseUrl(baseUrl) {
     const raw = typeof baseUrl === 'string' && baseUrl.length > 0 ? baseUrl : '/';
     return raw.endsWith('/') ? raw : `${raw}/`;
@@ -818,7 +828,8 @@ function runRestoreFromActive(model, request, qActive, restoreMaxIterations) {
             ? Math.max(1, Math.floor(restoreMaxIterations))
             : request.maxIterations
     };
-    return model.solveAbsoluteTargetMJRestore(restoreRequest);
+    const solveFunctionName = getRestoreSolveFunctionName(request?.solverMode);
+    return model[solveFunctionName](restoreRequest);
 }
 
 function attemptSecondaryMetricRefinement(model, dqModule, request, secondaryMetricRequest, baseProblem, metric) {
@@ -1109,12 +1120,13 @@ self.onmessage = async (event) => {
             return;
         }
         if (data.type === 'solve') {
-            if (!currentModel || typeof currentModel.solveAbsoluteTargetMJRestore !== 'function') {
+            const payload = data.payload ?? {};
+            const solveFunctionName = getRestoreSolveFunctionName(payload.solverMode);
+            if (!currentModel || typeof currentModel[solveFunctionName] !== 'function') {
                 throw new Error('mj_restore_worker_model_uninitialized');
             }
-            const payload = data.payload ?? {};
             const solveStartMs = nowMs();
-            const baseResult = currentModel.solveAbsoluteTargetMJRestore(payload.request ?? {});
+            const baseResult = currentModel[solveFunctionName](payload.request ?? {});
             const secondaryResult = applySecondaryMetric(
                 currentModel,
                 currentDQModule,

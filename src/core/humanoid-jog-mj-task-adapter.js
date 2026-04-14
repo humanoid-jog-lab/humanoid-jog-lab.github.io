@@ -134,6 +134,44 @@ const MODE_CONFIGS = {
             createInvariant('left_arm_fixed', null, 1, 100),
             createInvariant('right_arm_fixed', null, 1, 100)
         ]
+    },
+    'surface-slide': {
+        modeTag: 'surface-slide-target',
+        commandKind: 'surface_slide_pose',
+        activeJointScope: 'left-arm',
+        invariants: () => [
+            createInvariant('right_arm_fixed', null, 1, 100),
+            createInvariant('waist_fixed', null, 0.5, 50)
+        ]
+    },
+    'surface-slide-absolute': {
+        modeTag: 'absolute-target',
+        commandKind: 'absolute_pose',
+        activeJointScope: 'waist+arms',
+        invariants: () => [
+            createInvariant('relative_pose')
+        ],
+        extraConstraints: () => [
+            createExtraConstraint('body_z', { upright: true }, 1, 100, 'body_z/upright')
+        ]
+    },
+    'dual-independent-surface-slide': {
+        modeTag: 'dual-independent-surface-slide-target',
+        commandKind: 'bimanual_surface_slide_pose',
+        activeJointScope: 'waist+arms',
+        invariants: () => [],
+        extraConstraints: () => [
+            createExtraConstraint('body_z', { upright: true }, 1, 100, 'body_z/upright')
+        ]
+    },
+    'cooperative-ruled-surface-polishing': {
+        modeTag: 'cooperative-ruled-surface-polishing-target',
+        commandKind: 'bimanual_surface_polishing_pose',
+        activeJointScope: 'waist+arms',
+        invariants: () => [],
+        extraConstraints: () => [
+            createExtraConstraint('body_z', { upright: true }, 1, 100, 'body_z/upright')
+        ]
     }
 };
 

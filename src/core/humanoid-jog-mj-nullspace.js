@@ -18,6 +18,68 @@ export function shouldUseHumanoidJogMJProjectionOnlyMetricStep({
     return stage === 'w_abs_arm_vfi' || stage === 'w_abs_hier_vfi';
 }
 
+export function resolveHumanoidJogMJProjectionPasses({
+    isMetricOnlyJogRequest = false,
+    requestedMetric = 'none',
+    configuredPasses = 4
+} = {}) {
+    const normalizedPasses = Number.isFinite(configuredPasses)
+        ? Math.max(1, Math.floor(configuredPasses))
+        : 4;
+    const requested = typeof requestedMetric === 'string' ? requestedMetric.trim() : '';
+    if (isMetricOnlyJogRequest === true && requested === 'w_abs_hier_vfi') {
+        return 1;
+    }
+    return normalizedPasses;
+}
+
+export function resolveHumanoidJogMJProjectionRetreatRestoreConfig({
+    projectionMetric = 'none',
+    configuredMaxIterations = 8
+} = {}) {
+    const normalizedIterations = Number.isFinite(configuredMaxIterations)
+        ? Math.max(1, Math.floor(configuredMaxIterations))
+        : 8;
+    const metric = typeof projectionMetric === 'string' ? projectionMetric.trim() : '';
+    if (metric === 'w_abs_arm_vfi' || metric === 'w_abs_hier_vfi') {
+        return {
+            useManifoldRestore: true,
+            maxIterations: Math.min(normalizedIterations, 2)
+        };
+    }
+    return {
+        useManifoldRestore: false,
+        maxIterations: normalizedIterations
+    };
+}
+
+export function shouldBypassHumanoidJogMJMetricOnlyRestoreSolve({
+    isMetricOnlyJogRequest = false,
+    workerAvailable = false,
+    activeResidualNorm = Number.POSITIVE_INFINITY,
+    inequalityViolation = Number.POSITIVE_INFINITY,
+    equalityTolerance = 1e-12,
+    inequalityTolerance = 1e-12
+} = {}) {
+    if (isMetricOnlyJogRequest !== true) return false;
+    if (workerAvailable === true) return false;
+    return Number.isFinite(activeResidualNorm) &&
+        activeResidualNorm <= Math.max(0, equalityTolerance) &&
+        Number.isFinite(inequalityViolation) &&
+        inequalityViolation <= Math.max(0, inequalityTolerance);
+}
+
+export function shouldUseHumanoidJogMJMetricOnlyVfiFallbackHeuristics({
+    isMetricOnlyJogRequest = false,
+    requestedMetric = 'none'
+} = {}) {
+    const requested = typeof requestedMetric === 'string' ? requestedMetric.trim() : '';
+    if (isMetricOnlyJogRequest === true && requested === 'w_abs_hier_vfi') {
+        return false;
+    }
+    return true;
+}
+
 export function shouldRetryHumanoidJogMJLocalRefineAfterWorkerMetricAttempt({
     metric = 'none',
     isMetricOnlyJogRequest = false,

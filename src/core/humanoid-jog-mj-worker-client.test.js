@@ -56,6 +56,7 @@ test('HumanoidJogMJWorkerClient initializes a model once and reuses it for solve
         id: 2,
         type: 'solve',
         payload: {
+            solverMode: 'mj_restore',
             request,
             secondaryMetricRequest: null
         }
@@ -77,6 +78,7 @@ test('HumanoidJogMJWorkerClient initializes a model once and reuses it for solve
         id: 3,
         type: 'solve',
         payload: {
+            solverMode: 'mj_restore',
             request: { qCurrent: [1, 2] },
             secondaryMetricRequest: null
         }
@@ -87,6 +89,35 @@ test('HumanoidJogMJWorkerClient initializes a model once and reuses it for solve
     assert.equal(secondResult.solveMs, 0.75);
     assert.ok(Number.isFinite(secondResult.workerInitMs));
     assert.ok(Number.isFinite(secondResult.solveRoundTripMs));
+});
+
+test('HumanoidJogMJWorkerClient forwards solverMode for trust-region solves', async () => {
+    const worker = new FakeWorker();
+    const client = new HumanoidJogMJWorkerClient({
+        workerFactory: () => worker
+    });
+
+    const solvePromise = client.solve({
+        modelSpec: { waistChain: [] },
+        solverMode: 'mj_restore_tr',
+        request: { qCurrent: [0, 0] }
+    });
+    worker.replyOk(1, { initialized: true });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.deepEqual(worker.messages[1], {
+        id: 2,
+        type: 'solve',
+        payload: {
+            solverMode: 'mj_restore_tr',
+            request: { qCurrent: [0, 0] },
+            secondaryMetricRequest: null
+        }
+    });
+
+    worker.replyOk(2, { reason: 'best_effort' });
+    const result = await solvePromise;
+    assert.equal(result.reason, 'best_effort');
 });
 
 test('HumanoidJogMJWorkerClient reinitializes when the model spec changes', async () => {

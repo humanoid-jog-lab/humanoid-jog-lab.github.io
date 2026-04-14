@@ -4,9 +4,13 @@ import assert from 'node:assert/strict';
 import {
     buildHumanoidJogMJWorkerSecondaryMetricRequest,
     computeHumanoidJogMJNullspaceRefine,
+    resolveHumanoidJogMJProjectionPasses,
+    resolveHumanoidJogMJProjectionRetreatRestoreConfig,
+    shouldBypassHumanoidJogMJMetricOnlyRestoreSolve,
     shouldComputeHumanoidJogMJInitialManipData,
     shouldComputeHumanoidJogMJTrialManipData,
     shouldEnableHumanoidJogMJNullspaceRefine,
+    shouldUseHumanoidJogMJMetricOnlyVfiFallbackHeuristics,
     shouldRetryHumanoidJogMJLocalRefineAfterWorkerMetricAttempt,
     shouldUseHumanoidJogMJProjectionOnlyMetricStep
 } from './humanoid-jog-mj-nullspace.js';
@@ -192,6 +196,98 @@ test('shouldUseHumanoidJogMJProjectionOnlyMetricStep stays off for non-hierarchi
         requestedMetric: 'w_abs_hier_vfi',
         stageMetric: 'w_abs'
     }), false);
+});
+
+test('resolveHumanoidJogMJProjectionPasses collapses metric-only hierarchical VFI local fallback to a single projection pass', () => {
+    assert.equal(resolveHumanoidJogMJProjectionPasses({
+        isMetricOnlyJogRequest: true,
+        requestedMetric: 'w_abs_hier_vfi',
+        configuredPasses: 4
+    }), 1);
+
+    assert.equal(resolveHumanoidJogMJProjectionPasses({
+        isMetricOnlyJogRequest: false,
+        requestedMetric: 'w_abs_hier_vfi',
+        configuredPasses: 4
+    }), 4);
+
+    assert.equal(resolveHumanoidJogMJProjectionPasses({
+        isMetricOnlyJogRequest: true,
+        requestedMetric: 'w_abs_hier',
+        configuredPasses: 4
+    }), 4);
+});
+
+test('resolveHumanoidJogMJProjectionRetreatRestoreConfig uses a lightweight manifold micro-restore for hierarchical VFI projection fallback', () => {
+    assert.deepEqual(resolveHumanoidJogMJProjectionRetreatRestoreConfig({
+        projectionMetric: 'w_abs_hier_vfi',
+        configuredMaxIterations: 8
+    }), {
+        useManifoldRestore: true,
+        maxIterations: 2
+    });
+
+    assert.deepEqual(resolveHumanoidJogMJProjectionRetreatRestoreConfig({
+        projectionMetric: 'w_abs_arm_vfi',
+        configuredMaxIterations: 6
+    }), {
+        useManifoldRestore: true,
+        maxIterations: 2
+    });
+
+    assert.deepEqual(resolveHumanoidJogMJProjectionRetreatRestoreConfig({
+        projectionMetric: 'w_abs_hier',
+        configuredMaxIterations: 8
+    }), {
+        useManifoldRestore: false,
+        maxIterations: 8
+    });
+});
+
+test('shouldBypassHumanoidJogMJMetricOnlyRestoreSolve skips the local restore solve when a metric-only request is already satisfied and no worker path is active', () => {
+    assert.equal(shouldBypassHumanoidJogMJMetricOnlyRestoreSolve({
+        isMetricOnlyJogRequest: true,
+        workerAvailable: false,
+        activeResidualNorm: 0,
+        inequalityViolation: 0,
+        equalityTolerance: 1e-12,
+        inequalityTolerance: 1e-12
+    }), true);
+
+    assert.equal(shouldBypassHumanoidJogMJMetricOnlyRestoreSolve({
+        isMetricOnlyJogRequest: true,
+        workerAvailable: true,
+        activeResidualNorm: 0,
+        inequalityViolation: 0,
+        equalityTolerance: 1e-12,
+        inequalityTolerance: 1e-12
+    }), false);
+
+    assert.equal(shouldBypassHumanoidJogMJMetricOnlyRestoreSolve({
+        isMetricOnlyJogRequest: true,
+        workerAvailable: false,
+        activeResidualNorm: 1e-3,
+        inequalityViolation: 0,
+        equalityTolerance: 1e-12,
+        inequalityTolerance: 1e-12
+    }), false);
+});
+
+test('shouldUseHumanoidJogMJMetricOnlyVfiFallbackHeuristics disables extra retreat heuristics for local metric-only hierarchical VFI buttons', () => {
+    assert.equal(shouldUseHumanoidJogMJMetricOnlyVfiFallbackHeuristics({
+        isMetricOnlyJogRequest: true,
+        requestedMetric: 'w_abs_hier_vfi'
+    }), false);
+
+    assert.equal(shouldUseHumanoidJogMJMetricOnlyVfiFallbackHeuristics({
+        isMetricOnlyJogRequest: false,
+        requestedMetric: 'w_abs_hier_vfi'
+    }), true);
+
+    assert.equal(shouldUseHumanoidJogMJMetricOnlyVfiFallbackHeuristics({
+        isMetricOnlyJogRequest: true,
+        requestedMetric: 'w_abs_hier'
+    }), true);
 });
 
 test('shouldRetryHumanoidJogMJLocalRefineAfterWorkerMetricAttempt only retries metric-only hierarchical VFI requests after a hard-constraint worker rejection', () => {

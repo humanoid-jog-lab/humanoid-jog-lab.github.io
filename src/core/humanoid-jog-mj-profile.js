@@ -17,7 +17,8 @@ function asPositive(value, fallback) {
 export function resolveHumanoidJogMJRestoreProfile({
     includeWaist = false,
     fallbackReason = '',
-    config = {}
+    config = {},
+    controlMode = ''
 } = {}) {
     const baseProfile = {
         maxIterations: asPositiveInteger(config?.mjRestoreMaxIter, 120),
@@ -29,6 +30,46 @@ export function resolveHumanoidJogMJRestoreProfile({
         polishDamping: asPositive(config?.mjRestorePolishDamping, 1e-6),
         tag: 'default'
     };
+
+    if (controlMode === 'cooperative-ruled-surface-polishing') {
+        return {
+            ...baseProfile,
+            maxIterations: asPositiveInteger(
+                config?.mjRestoreCooperativeSurfacePolishingMaxIter,
+                baseProfile.maxIterations
+            ),
+            damping: Math.max(
+                baseProfile.damping,
+                asPositive(config?.mjRestoreCooperativeSurfacePolishingDamping, 1e-4)
+            ),
+            referenceDamping: Math.min(
+                baseProfile.referenceDamping,
+                asNonNegative(config?.mjRestoreCooperativeSurfacePolishingReferenceDamping, 0.3)
+            ),
+            tag: 'cooperative_surface_polishing'
+        };
+    }
+
+    const surfaceSlideMode = controlMode === 'surface-slide'
+        || controlMode === 'dual-independent-surface-slide';
+    if (surfaceSlideMode) {
+        return {
+            ...baseProfile,
+            maxIterations: Math.max(
+                baseProfile.maxIterations,
+                asPositiveInteger(config?.mjRestoreSurfaceSlideMaxIter, 160)
+            ),
+            damping: Math.min(
+                baseProfile.damping,
+                asPositive(config?.mjRestoreSurfaceSlideDamping, 5e-5)
+            ),
+            referenceDamping: Math.min(
+                baseProfile.referenceDamping,
+                asNonNegative(config?.mjRestoreSurfaceSlideReferenceDamping, 0.2)
+            ),
+            tag: 'surface_slide'
+        };
+    }
 
     const armOnlyFallback =
         includeWaist !== true &&

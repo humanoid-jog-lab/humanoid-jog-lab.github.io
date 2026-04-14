@@ -20,6 +20,7 @@ import { RobotVisualizer } from '../visualizer.js';
 import { extractMDHFromURDF, loadHumanoidChainsFromURDF } from '../urdf-to-mdh.js';
 import { URDFPackageManager, loadURDFFromPackage } from '../urdf-loader.js';
 import { computeEffectorPoseFromURDF } from '../features/joint-clipboard.js';
+import { resolveHumanoidInitialQ } from './humanoid-default-q-profiles.js';
 
 const ENABLE_SINGLE_ARM_FKM_LOG = false;
 
@@ -912,10 +913,7 @@ export async function loadHumanoidSystem(robot, config) {
         chains.waistEffector, chains.leftArmEffector, chains.rightArmEffector, chains.headEffector
     );
     appState.humanoidJointNames = [...chains.waistJointNames, ...chains.leftArmJointNames, ...chains.rightArmJointNames, ...chains.headJointNames];
-    appState.humanoidQ = new Array(appState.humanoidJointNames.length).fill(0);
-    if (config.initial_q && Array.isArray(config.initial_q) && config.initial_q.length === appState.humanoidQ.length) {
-        appState.humanoidQ = config.initial_q.slice();
-    }
+    appState.humanoidQ = resolveHumanoidInitialQ(config, appState.humanoidJointNames.length, appState.humanoidInitialQProfileId);
     appState.humanoidMode = true;
     appState.dualArmMode = false;
     appState.dualArmSystem = new HumanoidDualArmAdapter(appState.humanoidModel);

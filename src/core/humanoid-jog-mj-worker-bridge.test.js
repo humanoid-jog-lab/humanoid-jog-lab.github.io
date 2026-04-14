@@ -9,8 +9,8 @@ import {
 test('attemptHumanoidJogMJRestoreWasmWorker uses the worker result and re-evaluates the applied state', async () => {
     const observed = [];
     const workerClient = {
-        async solve({ modelSpec, request }) {
-            observed.push({ modelSpec, request });
+        async solve({ modelSpec, solverMode, request }) {
+            observed.push({ modelSpec, solverMode, request });
             return {
                 converged: true,
                 reason: 'converged',
@@ -66,6 +66,7 @@ test('attemptHumanoidJogMJRestoreWasmWorker uses the worker result and re-evalua
     });
 
     assert.equal(observed.length, 1);
+    assert.equal(observed[0].solverMode, 'mj_restore');
     assert.deepEqual(
         observed[0].request,
         buildHumanoidJogMJRestoreWasmRequest({
@@ -102,8 +103,8 @@ test('attemptHumanoidJogMJRestoreWasmWorker uses the worker result and re-evalua
 test('attemptHumanoidJogMJRestoreWasmWorker forwards secondary metric requests and normalizes worker secondary state', async () => {
     const observed = [];
     const workerClient = {
-        async solve({ modelSpec, request, secondaryMetricRequest }) {
-            observed.push({ modelSpec, request, secondaryMetricRequest });
+        async solve({ modelSpec, solverMode, request, secondaryMetricRequest }) {
+            observed.push({ modelSpec, solverMode, request, secondaryMetricRequest });
             return {
                 converged: true,
                 reason: 'converged',
@@ -155,6 +156,7 @@ test('attemptHumanoidJogMJRestoreWasmWorker forwards secondary metric requests a
     });
 
     assert.equal(observed.length, 1);
+    assert.equal(observed[0].solverMode, 'mj_restore');
     assert.deepEqual(observed[0].secondaryMetricRequest, {
         metric: 'w_abs_hier_vfi',
         metricMode: 'relative',
@@ -169,6 +171,49 @@ test('attemptHumanoidJogMJRestoreWasmWorker forwards secondary metric requests a
         after: 0.2,
         applied: true
     });
+});
+
+test('attemptHumanoidJogMJRestoreWasmWorker forwards trust-region solver mode to the worker bridge', async () => {
+    const observed = [];
+    const workerClient = {
+        async solve(payload) {
+            observed.push(payload);
+            return {
+                converged: false,
+                reason: 'best_effort',
+                iterations: 3,
+                acceptedIterations: 1,
+                lastAcceptedScale: 1,
+                commandResidualNorm: 1e-3,
+                relativeResidualNorm: 2e-3,
+                bodyResidualNorm: 0,
+                inequalityViolation: 0,
+                qApplied: [0, 0]
+            };
+        }
+    };
+    const evaluateProblem = (q) => ({
+        qCurrent: q.slice(),
+        equalities: { activeResidualNorm: Math.abs(q[0] ?? 0) + Math.abs(q[1] ?? 0) },
+        inequalities: {},
+        metadata: { qFull: q.slice() }
+    });
+
+    await attemptHumanoidJogMJRestoreWasmWorker({
+        workerClient,
+        modelSpec: { waistChain: [] },
+        solverMode: 'mj_restore_tr',
+        qInitial: [0, 0],
+        evaluateProblem,
+        activeStart: 0,
+        activeCount: 2,
+        absoluteTarget: new Array(8).fill(0),
+        relativeTarget: new Array(8).fill(0)
+    });
+
+    assert.equal(observed.length, 1);
+    assert.equal(observed[0].solverMode, 'mj_restore_tr');
+    assert.equal(observed[0].request.solverMode, 'mj_restore_tr');
 });
 
 test('attemptHumanoidJogMJRestoreWasmWorker preserves direct w_abs_arm worker metric state', async () => {

@@ -17,16 +17,19 @@ const REPO_ROOT = '/home/echoz/dq_vizlab';
 const BASE_URL = process.env.BASE_URL || 'http://127.0.0.1:4173';
 const REPEAT_COUNT = Number.isFinite(Number(process.env.METRIC_REPEAT))
     ? Math.max(1, Math.floor(Number(process.env.METRIC_REPEAT)))
-    : 100;
+    : 200;
 const METRIC_ACTIVITY_TIMEOUT_MS = Number.isFinite(Number(process.env.METRIC_ACTIVITY_TIMEOUT_MS))
     ? Math.max(100, Math.floor(Number(process.env.METRIC_ACTIVITY_TIMEOUT_MS)))
-    : 400;
+    : 160;
 const FULL_BODY_ABSOLUTE_MODE = process.env.FULL_BODY_ABSOLUTE_MODE || 'decoupled';
 const TASK_FILTER = process.env.TASK_FILTER || '';
+const STRUCTURE_FILTER = process.env.STRUCTURE_FILTER || '';
+const METRIC_FILTER = process.env.METRIC_FILTER || '';
+const LOCK_STATE_FILTER = process.env.LOCK_STATE_FILTER || '';
 const SOLVER_MODE = process.env.STATIC_SOLVER_MODE || 'mj_restore';
 const LOCKED_ONLY = ['1', 'true', 'yes', 'on'].includes(String(process.env.STATIC_LOCKED_ONLY || '').toLowerCase());
-const OUTPUT_JSON = process.env.STATIC_TABLE_JSON || path.join(REPO_ROOT, '2026_humanoid_robot', 'static_manip_table_rows.json');
-const OUTPUT_MD = process.env.STATIC_TABLE_MD || path.join(REPO_ROOT, '2026_humanoid_robot', 'static_manip_table_rows.md');
+const OUTPUT_JSON = process.env.STATIC_TABLE_JSON || path.join(REPO_ROOT, '2026_humanoid_robot', 'figure', 'sim', 'static_manip_table_rows_joint2lock.json');
+const OUTPUT_MD = process.env.STATIC_TABLE_MD || path.join(REPO_ROOT, '2026_humanoid_robot', 'figure', 'sim', 'static_manip_table_rows_joint2lock.md');
 const INPUT_Q_JSON = process.env.STATIC_HUMANOID_Q_JSON || '';
 const INPUT_DUAL_ARM_Q_JSON = process.env.STATIC_DUAL_ARM_Q_JSON || '';
 const INPUT_FULL_BODY_Q_JSON = process.env.STATIC_FULL_BODY_Q_JSON || '';
@@ -144,7 +147,25 @@ try {
     const tasks = buildHumanoidStaticManipTasks({
         fullBodyAbsoluteMode: FULL_BODY_ABSOLUTE_MODE,
         lockedOnly: LOCKED_ONLY
-    }).filter((task) => !TASK_FILTER || task.controlMode.includes(TASK_FILTER) || task.taskKind.includes(TASK_FILTER));
+    }).filter((task) => {
+        if (TASK_FILTER && !(task.controlMode.includes(TASK_FILTER) || task.taskKind.includes(TASK_FILTER))) {
+            return false;
+        }
+        if (STRUCTURE_FILTER && task.structure !== STRUCTURE_FILTER) {
+            return false;
+        }
+        if (METRIC_FILTER && task.metricKey !== METRIC_FILTER) {
+            return false;
+        }
+        if (LOCK_STATE_FILTER) {
+            const normalized = String(LOCK_STATE_FILTER).trim().toLowerCase();
+            const wantLocked = ['1', 'true', 'yes', 'on', 'locked'].includes(normalized);
+            const wantUnlocked = ['0', 'false', 'no', 'off', 'unlocked'].includes(normalized);
+            if (wantLocked && task.locked !== true) return false;
+            if (wantUnlocked && task.locked !== false) return false;
+        }
+        return true;
+    });
 
     const baseQEnv = parseHumanoidQEnv(INPUT_Q_JSON);
     const dualArmQEnv = parseHumanoidQEnv(INPUT_DUAL_ARM_Q_JSON);
@@ -168,24 +189,17 @@ try {
                 element.dispatchEvent(new Event('change', { bubbles: true }));
             };
 
-            const waitForSolveActivity = async (qBefore, timeoutMs = 4000) => {
-                const start = performance.now();
-                while (performance.now() - start < timeoutMs) {
-                    const currentQ = Array.isArray(window.humanoidQ) ? window.humanoidQ.slice() : [];
-                    const qChanged = currentQ.some((value, index) => Math.abs((value || 0) - (qBefore?.[index] || 0)) > 1e-12);
-                    const statusActive = Boolean(viz.lastIKSolveStatus && Object.keys(viz.lastIKSolveStatus).length > 0);
-                    const diagMode = viz.lastHumanoidJogDiagnostics?.modeTag || '';
-                    if (qChanged || statusActive || diagMode !== 'idle') {
-                        await sleep(80);
-                        return { timedOut: false, qChanged, statusActive, diagMode };
-                    }
-                    await sleep(40);
-                }
+            const waitForSolveActivity = async (qBefore, settleMs = 160) => {
+                await sleep(settleMs);
+                const currentQ = Array.isArray(window.humanoidQ) ? window.humanoidQ.slice() : [];
+                const qChanged = currentQ.some((value, index) => Math.abs((value || 0) - (qBefore?.[index] || 0)) > 1e-12);
+                const statusActive = Boolean(viz.lastIKSolveStatus && Object.keys(viz.lastIKSolveStatus).length > 0);
+                const diagMode = viz.lastHumanoidJogDiagnostics?.modeTag || '';
                 return {
-                    timedOut: true,
-                    qChanged: false,
-                    statusActive: Boolean(viz.lastIKSolveStatus && Object.keys(viz.lastIKSolveStatus).length > 0),
-                    diagMode: viz.lastHumanoidJogDiagnostics?.modeTag || ''
+                    timedOut: false,
+                    qChanged,
+                    statusActive,
+                    diagMode
                 };
             };
 
@@ -265,6 +279,9 @@ try {
                     }
                     await waitForSolveActivity(qBefore, metricActivityTimeoutMs);
                     await sleep(40);
+                    if ((repeatIndex + 1) % 50 === 0 || repeatIndex + 1 === repeatCount) {
+                        console.log(`[static-w-table] ${task.taskKind} | ${task.structure} | ${task.locked ? 'locked | ' : ''}${task.metricKey} step=${repeatIndex + 1}/${repeatCount}`);
+                    }
                 }
 
                 const after = snapshot(task.controlMode, task.includeWaist);
