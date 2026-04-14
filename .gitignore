@@ -36,6 +36,7 @@ yarn-error.log*
 *.tmp
 *.temp
 .em_cache/
+.worktrees/
 
 # Python 缓存
 __pycache__/
