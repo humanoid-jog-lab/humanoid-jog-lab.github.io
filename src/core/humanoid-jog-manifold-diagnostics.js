@@ -1,3 +1,5 @@
+import { t } from '../i18n.js';
+
 function asFinite(value, fallback = Number.NaN) {
     return Number.isFinite(value) ? value : fallback;
 }
@@ -107,7 +109,7 @@ export function buildHumanoidJogManifoldDiagnostics({
         solverMode: 'manifold',
         modeTag,
         active: true,
-        message: '约束流形 诊断已更新。',
+        message: t('Constraint manifold diagnostics updated.'),
         includeWaist,
         keepBodyZVertical,
         jointLimitAvoidance,

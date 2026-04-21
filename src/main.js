@@ -11,6 +11,7 @@
 
 // ── WASM 初始化 ──────────────────────────────
 import { initDQRobotics } from './dqrobotics.js';
+import { initializeI18n, t } from './i18n.js';
 
 // ── 核心模块 ──────────────────────────────────
 import { initVisualizer, initDefaultIARobot, registerRobotManagerCallbacks } from './core/robot-manager.js';
@@ -28,7 +29,6 @@ import { setupEventListeners } from './ui/event-handlers.js';
 import { registerIKControllerCallbacks } from './features/ik-controller.js';
 import { registerDQCalculatorCallbacks } from './features/dq-calculator.js';
 import { registerJointClipboardCallbacks } from './features/joint-clipboard.js';
-import { registerPlannedMotionCallbacks } from './features/planned-motion.js';
 
 // ── 人形机器人 ────────────────────────────────
 import { registerHumanoidBaseControlCallbacks } from './humanoid/base-control.js';
@@ -56,7 +56,6 @@ function registerAllCallbacks() {
     registerIKControllerCallbacks();
     registerDQCalculatorCallbacks();
     registerJointClipboardCallbacks();
-    registerPlannedMotionCallbacks();
 
     // 人形
     registerHumanoidBaseControlCallbacks();
@@ -71,6 +70,8 @@ function registerAllCallbacks() {
 
 async function init() {
     try {
+        initializeI18n();
+
         // 1. 初始化 WASM 模块（DQ Robotics）
         await initDQRobotics();
 
@@ -96,10 +97,10 @@ async function init() {
         console.error('初始化失败:', error);
         document.getElementById('loading').innerHTML = `
             <div style="color: #ef4444;">
-                <h2>❌ 加载失败</h2>
+                <h2>❌ ${t('Loading failed')}</h2>
                 <p>${error.message}</p>
                 <p style="font-size: 0.875rem; margin-top: 1rem;">
-                    请确保已正确构建 WASM 模块
+                    ${t('Please make sure the WASM module has been built correctly.')}
                 </p>
             </div>
         `;

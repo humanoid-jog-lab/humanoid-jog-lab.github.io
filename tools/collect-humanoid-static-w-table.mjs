@@ -210,6 +210,9 @@ try {
                 if (task?.structure === 'full-body' && Array.isArray(fullBodyQOverride) && fullBodyQOverride.length > 0) {
                     return fullBodyQOverride.slice();
                 }
+                if (Array.isArray(task?.defaultBaseQ) && task.defaultBaseQ.length > 0) {
+                    return task.defaultBaseQ.slice();
+                }
                 if (Array.isArray(baseQOverride) && baseQOverride.length > 0) {
                     return baseQOverride.slice();
                 }

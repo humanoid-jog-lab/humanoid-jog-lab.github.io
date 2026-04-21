@@ -93,6 +93,55 @@ VectorXd signedPoseError(const VectorXd& target, const VectorXd& current) {
     return target - sign * current;
 }
 
+VectorXd alignDualCoverTarget(const VectorXd& current, const VectorXd& target) {
+    return signedAlignment(target, current) < 0.0 ? -target : target;
+}
+
+MatrixXd buildRightMultiplicationMatrix(const VectorXd& right_target) {
+    MatrixXd out(8, 8);
+    for (Eigen::Index col = 0; col < 8; ++col) {
+        VectorXd basis = VectorXd::Zero(8);
+        basis(col) = 1.0;
+        const DQ basis_dq(basis);
+        const DQ right_dq(right_target);
+        out.col(col) = (basis_dq * right_dq).q;
+    }
+    return out;
+}
+
+struct DQSetpointErrorModel {
+    VectorXd aligned_target;
+    VectorXd error;
+    MatrixXd jacobian;
+};
+
+DQSetpointErrorModel buildDQSetpointErrorModel(
+    const DQ& current_pose,
+    const MatrixXd& pose_jacobian_active,
+    const VectorXd& raw_target
+) {
+    const VectorXd aligned_target = alignDualCoverTarget(current_pose.q, raw_target);
+    const DQ target_dq(aligned_target);
+    const DQ current_to_target = conj(current_pose) * target_dq;
+    VectorXd error = VectorXd::Zero(8);
+    error(0) = 1.0 - current_to_target.q(0);
+    for (Eigen::Index i = 1; i < 8; ++i) {
+        error(i) = -current_to_target.q(i);
+    }
+
+    MatrixXd d8 = MatrixXd::Identity(8, 8);
+    d8(1, 1) = -1.0;
+    d8(2, 2) = -1.0;
+    d8(3, 3) = -1.0;
+    d8(5, 5) = -1.0;
+    d8(6, 6) = -1.0;
+    d8(7, 7) = -1.0;
+
+    const MatrixXd constrained_jacobian =
+        -buildRightMultiplicationMatrix(aligned_target) * d8 * pose_jacobian_active;
+    return { aligned_target, error, constrained_jacobian };
+}
+
 MatrixXd computeTwistJacobian(const MatrixXd& pose_jacobian, const DQ& pose) {
     const MatrixXd transformed = 2.0 * hamiplus8(conj(pose)) * pose_jacobian;
     MatrixXd twist_jacobian(6, pose_jacobian.cols());
@@ -348,51 +397,72 @@ double updateTrustRegionRadius(
     return next_radius;
 }
 
-struct ActiveCorridorRows {
+struct ActiveLinearRows {
     MatrixXd rows;
     VectorXd rhs;
 };
 
-ActiveCorridorRows buildActiveCorridorRows(
+ActiveLinearRows buildLinearStepRows(
     const HumanoidAbsoluteMJRestoreRequest& request
 ) {
-    const std::size_t row_count = std::min(
-        request.waist_x_corridor.rows.size(),
-        request.waist_x_corridor.rhs.size()
-    );
-    if (!request.waist_x_corridor.enabled || row_count == 0) {
+    std::vector<std::vector<double>> combined_rows;
+    std::vector<double> combined_rhs;
+
+    if (request.joint_limit_vfi.enabled) {
+        const std::size_t row_count = std::min(
+            request.joint_limit_vfi.rows.size(),
+            request.joint_limit_vfi.rhs.size()
+        );
+        for (std::size_t i = 0; i < row_count; ++i) {
+            combined_rows.push_back(request.joint_limit_vfi.rows[i]);
+            combined_rhs.push_back(request.joint_limit_vfi.rhs[i]);
+        }
+    }
+
+    if (request.waist_x_corridor.enabled) {
+        const std::size_t row_count = std::min(
+            request.waist_x_corridor.rows.size(),
+            request.waist_x_corridor.rhs.size()
+        );
+        for (std::size_t i = 0; i < row_count; ++i) {
+            combined_rows.push_back(request.waist_x_corridor.rows[i]);
+            combined_rhs.push_back(request.waist_x_corridor.rhs[i]);
+        }
+    }
+
+    if (combined_rows.empty()) {
         return { MatrixXd(0, request.active_count), VectorXd(0) };
     }
 
-    MatrixXd rows(static_cast<Eigen::Index>(row_count), request.active_count);
-    VectorXd rhs(static_cast<Eigen::Index>(row_count));
-    for (std::size_t i = 0; i < row_count; ++i) {
+    MatrixXd rows(static_cast<Eigen::Index>(combined_rows.size()), request.active_count);
+    VectorXd rhs(static_cast<Eigen::Index>(combined_rows.size()));
+    for (std::size_t i = 0; i < combined_rows.size(); ++i) {
         for (int j = 0; j < request.active_count; ++j) {
-            rows(static_cast<Eigen::Index>(i), j) = request.waist_x_corridor.rows[i][static_cast<std::size_t>(j)];
+            rows(static_cast<Eigen::Index>(i), j) = combined_rows[i][static_cast<std::size_t>(j)];
         }
-        rhs(static_cast<Eigen::Index>(i)) = request.waist_x_corridor.rhs[i];
+        rhs(static_cast<Eigen::Index>(i)) = combined_rhs[i];
     }
     return { rows, rhs };
 }
 
-ActiveCorridorRows selectViolatedCorridorRows(
-    const ActiveCorridorRows& corridor,
+ActiveLinearRows selectViolatedLinearRows(
+    const ActiveLinearRows& inequalities,
     const VectorXd& step
 ) {
     std::vector<Eigen::Index> violated;
-    for (Eigen::Index i = 0; i < corridor.rows.rows(); ++i) {
-        if (corridor.rows.row(i).dot(step) > corridor.rhs(i) + 1e-12) {
+    for (Eigen::Index i = 0; i < inequalities.rows.rows(); ++i) {
+        if (inequalities.rows.row(i).dot(step) > inequalities.rhs(i) + 1e-12) {
             violated.push_back(i);
         }
     }
     if (violated.empty()) {
-        return { MatrixXd(0, corridor.rows.cols()), VectorXd(0) };
+        return { MatrixXd(0, inequalities.rows.cols()), VectorXd(0) };
     }
-    MatrixXd rows(static_cast<Eigen::Index>(violated.size()), corridor.rows.cols());
+    MatrixXd rows(static_cast<Eigen::Index>(violated.size()), inequalities.rows.cols());
     VectorXd rhs(static_cast<Eigen::Index>(violated.size()));
     for (std::size_t i = 0; i < violated.size(); ++i) {
-        rows.row(static_cast<Eigen::Index>(i)) = corridor.rows.row(violated[i]);
-        rhs(static_cast<Eigen::Index>(i)) = corridor.rhs(violated[i]);
+        rows.row(static_cast<Eigen::Index>(i)) = inequalities.rows.row(violated[i]);
+        rhs(static_cast<Eigen::Index>(i)) = inequalities.rhs(violated[i]);
     }
     return { rows, rhs };
 }
@@ -426,7 +496,13 @@ bool validateRequest(
         reason = "activeStart/activeCount must define a valid active slice";
         return false;
     }
-    if (request.absolute_target.size() != 8 || request.relative_target.size() != 8) {
+    const bool cooperative_dq_setpoint = request.solve_variant == "cooperative_dq_setpoint";
+    if (cooperative_dq_setpoint) {
+        if (request.left_target.size() != 8 || request.right_target.size() != 8) {
+            reason = "leftTarget and rightTarget must be 8-element dual quaternions";
+            return false;
+        }
+    } else if (request.absolute_target.size() != 8 || request.relative_target.size() != 8) {
         reason = "absoluteTarget and relativeTarget must be 8-element dual quaternions";
         return false;
     }
@@ -444,10 +520,14 @@ bool validateRequest(
     if (!isFiniteVector(request.q_current) ||
         !isFiniteVector(request.absolute_target) ||
         !isFiniteVector(request.relative_target) ||
+        !isFiniteVector(request.left_target) ||
+        !isFiniteVector(request.right_target) ||
         !isFiniteVector(request.lower_bounds) ||
         !isFiniteVector(request.upper_bounds) ||
         !isFiniteVector(request.step_bounds) ||
         !isFiniteVector(request.regularization_weights) ||
+        !isFiniteRows(request.joint_limit_vfi.rows) ||
+        !isFiniteVector(request.joint_limit_vfi.rhs) ||
         !isFiniteRows(request.waist_x_corridor.rows) ||
         !isFiniteVector(request.waist_x_corridor.rhs)) {
         reason = "request vectors must contain only finite values";
@@ -535,6 +615,17 @@ bool validateRequest(
         reason = "waistXCorridor rows/rhs size mismatch";
         return false;
     }
+    if (request.joint_limit_vfi.enabled &&
+        request.joint_limit_vfi.rows.size() != request.joint_limit_vfi.rhs.size()) {
+        reason = "jointLimitVFI rows/rhs size mismatch";
+        return false;
+    }
+    for (const auto& row : request.joint_limit_vfi.rows) {
+        if (static_cast<int>(row.size()) != request.active_count) {
+            reason = "jointLimitVFI rows must have activeCount columns";
+            return false;
+        }
+    }
     for (const auto& row : request.waist_x_corridor.rows) {
         if (static_cast<int>(row.size()) != request.active_count) {
             reason = "waistXCorridor rows must have activeCount columns";
@@ -557,8 +648,11 @@ bool validateRequest(
 struct ProblemContext {
     const DQ_HumanoidURDF& robot;
     const HumanoidAbsoluteMJRestoreRequest& request;
+    std::string solve_variant;
     VectorXd absolute_target;
     VectorXd relative_target;
+    VectorXd left_target;
+    VectorXd right_target;
     std::vector<double> q_initial_active;
     std::vector<double> effective_lower_bounds;
     std::vector<double> effective_upper_bounds;
@@ -569,6 +663,9 @@ struct Evaluation {
     std::vector<double> q_active;
     VectorXd weighted_residual;
     MatrixXd weighted_jacobian;
+    Eigen::Index absolute_row_count = 0;
+    Eigen::Index relative_row_count = 0;
+    Eigen::Index body_row_count = 0;
     double active_residual_norm = std::numeric_limits<double>::infinity();
     double absolute_residual_norm = std::numeric_limits<double>::infinity();
     double relative_residual_norm = std::numeric_limits<double>::infinity();
@@ -618,37 +715,105 @@ Evaluation evaluateConfiguration(
     evaluation.q_active = q_active;
     evaluation.q_full = buildFullConfiguration(context.request, q_active);
 
-    const DQ absolute_pose = context.robot.absolutePoseDualArm(evaluation.q_full);
-    const DQ relative_pose = context.robot.relativePoseDualArm(evaluation.q_full);
-    const VectorXd absolute_error = signedPoseError(context.absolute_target, absolute_pose.q);
-    const VectorXd relative_error = signedPoseError(context.relative_target, relative_pose.q);
+    std::vector<VectorXd> task_weighted_residual_blocks;
+    std::vector<MatrixXd> task_weighted_jacobian_blocks;
+    if (context.solve_variant == "cooperative_dq_setpoint") {
+        const DQ left_pose = context.robot.fkm(evaluation.q_full, 1);
+        const DQ right_pose = context.robot.fkm(evaluation.q_full, 2);
+        const MatrixXd left_pose_jacobian_active = sliceActiveColumns(
+            context.robot.pose_jacobian(evaluation.q_full, 1),
+            context.request.active_start,
+            context.request.active_count
+        );
+        const MatrixXd right_pose_jacobian_active = sliceActiveColumns(
+            context.robot.pose_jacobian(evaluation.q_full, 2),
+            context.request.active_start,
+            context.request.active_count
+        );
+        const DQSetpointErrorModel left_model = buildDQSetpointErrorModel(
+            left_pose,
+            left_pose_jacobian_active,
+            context.left_target
+        );
+        const DQSetpointErrorModel right_model = buildDQSetpointErrorModel(
+            right_pose,
+            right_pose_jacobian_active,
+            context.right_target
+        );
 
-    evaluation.absolute_residual_norm = absolute_error.norm();
-    evaluation.relative_residual_norm = relative_error.norm();
+        task_weighted_residual_blocks.push_back((-left_model.error) * context.request.absolute_weight);
+        task_weighted_jacobian_blocks.push_back(left_model.jacobian * context.request.absolute_weight);
+        task_weighted_residual_blocks.push_back((-right_model.error) * context.request.absolute_weight);
+        task_weighted_jacobian_blocks.push_back(right_model.jacobian * context.request.absolute_weight);
 
-    const MatrixXd absolute_pose_jacobian_full =
-        context.robot.absolutePoseJacobianDualArm(evaluation.q_full);
-    const MatrixXd relative_pose_jacobian_full =
-        context.robot.relativePoseJacobianDualArm(evaluation.q_full);
-    const MatrixXd absolute_pose_jacobian_active = sliceActiveColumns(
-        absolute_pose_jacobian_full,
-        context.request.active_start,
-        context.request.active_count
-    );
-    const MatrixXd relative_pose_jacobian_active = sliceActiveColumns(
-        relative_pose_jacobian_full,
-        context.request.active_start,
-        context.request.active_count
-    );
+        evaluation.absolute_row_count =
+            task_weighted_residual_blocks[0].size() + task_weighted_residual_blocks[1].size();
+        evaluation.absolute_residual_norm = std::sqrt(
+            left_model.error.squaredNorm() + right_model.error.squaredNorm()
+        );
+        evaluation.relative_residual_norm = 0.0;
+    } else if (context.solve_variant == "absolute_dq_setpoint") {
+        const DQ absolute_pose = context.robot.absolutePoseDualArm(evaluation.q_full);
+        const DQ relative_pose = context.robot.relativePoseDualArm(evaluation.q_full);
+        const MatrixXd absolute_pose_jacobian_active = sliceActiveColumns(
+            context.robot.absolutePoseJacobianDualArm(evaluation.q_full),
+            context.request.active_start,
+            context.request.active_count
+        );
+        const MatrixXd relative_pose_jacobian_active = sliceActiveColumns(
+            context.robot.relativePoseJacobianDualArm(evaluation.q_full),
+            context.request.active_start,
+            context.request.active_count
+        );
+        const DQSetpointErrorModel absolute_model = buildDQSetpointErrorModel(
+            absolute_pose,
+            absolute_pose_jacobian_active,
+            context.absolute_target
+        );
+        const VectorXd relative_error = signedPoseError(context.relative_target, relative_pose.q);
 
-    std::vector<VectorXd> weighted_residual_blocks;
-    std::vector<MatrixXd> weighted_jacobian_blocks;
+        evaluation.absolute_residual_norm = absolute_model.error.norm();
+        evaluation.relative_residual_norm = relative_error.norm();
 
-    weighted_residual_blocks.push_back(absolute_error * context.request.absolute_weight);
-    weighted_jacobian_blocks.push_back(absolute_pose_jacobian_active * context.request.absolute_weight);
+        task_weighted_residual_blocks.push_back((-absolute_model.error) * context.request.absolute_weight);
+        task_weighted_jacobian_blocks.push_back(absolute_model.jacobian * context.request.absolute_weight);
+        evaluation.absolute_row_count = task_weighted_residual_blocks.back().size();
 
-    weighted_residual_blocks.push_back(relative_error * context.request.relative_weight);
-    weighted_jacobian_blocks.push_back(relative_pose_jacobian_active * context.request.relative_weight);
+        task_weighted_residual_blocks.push_back(relative_error * context.request.relative_weight);
+        task_weighted_jacobian_blocks.push_back(relative_pose_jacobian_active * context.request.relative_weight);
+        evaluation.relative_row_count = task_weighted_residual_blocks.back().size();
+    } else {
+        const DQ absolute_pose = context.robot.absolutePoseDualArm(evaluation.q_full);
+        const DQ relative_pose = context.robot.relativePoseDualArm(evaluation.q_full);
+        const VectorXd absolute_error = signedPoseError(context.absolute_target, absolute_pose.q);
+        const VectorXd relative_error = signedPoseError(context.relative_target, relative_pose.q);
+
+        evaluation.absolute_residual_norm = absolute_error.norm();
+        evaluation.relative_residual_norm = relative_error.norm();
+
+        const MatrixXd absolute_pose_jacobian_full =
+            context.robot.absolutePoseJacobianDualArm(evaluation.q_full);
+        const MatrixXd relative_pose_jacobian_full =
+            context.robot.relativePoseJacobianDualArm(evaluation.q_full);
+        const MatrixXd absolute_pose_jacobian_active = sliceActiveColumns(
+            absolute_pose_jacobian_full,
+            context.request.active_start,
+            context.request.active_count
+        );
+        const MatrixXd relative_pose_jacobian_active = sliceActiveColumns(
+            relative_pose_jacobian_full,
+            context.request.active_start,
+            context.request.active_count
+        );
+
+        task_weighted_residual_blocks.push_back(absolute_error * context.request.absolute_weight);
+        task_weighted_jacobian_blocks.push_back(absolute_pose_jacobian_active * context.request.absolute_weight);
+        evaluation.absolute_row_count = task_weighted_residual_blocks.back().size();
+
+        task_weighted_residual_blocks.push_back(relative_error * context.request.relative_weight);
+        task_weighted_jacobian_blocks.push_back(relative_pose_jacobian_active * context.request.relative_weight);
+        evaluation.relative_row_count = task_weighted_residual_blocks.back().size();
+    }
 
     if (context.request.keep_body_z_vertical) {
         const DQ line_direction(0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0);
@@ -680,37 +845,53 @@ Evaluation evaluateConfiguration(
         }
         evaluation.body_residual_norm = std::abs(body_residual(0));
         if (evaluation.body_residual_norm > context.request.body_equality_tolerance + 1e-18) {
-            weighted_residual_blocks.push_back(body_residual * context.request.body_weight);
-            weighted_jacobian_blocks.push_back(body_jacobian * context.request.body_weight);
+            task_weighted_residual_blocks.push_back(body_residual * context.request.body_weight);
+            task_weighted_jacobian_blocks.push_back(body_jacobian * context.request.body_weight);
+            evaluation.body_row_count = body_residual.size();
         }
     }
 
-    const Eigen::Index total_rows = std::accumulate(
-        weighted_residual_blocks.begin(),
-        weighted_residual_blocks.end(),
+    const Eigen::Index task_rows = std::accumulate(
+        task_weighted_residual_blocks.begin(),
+        task_weighted_residual_blocks.end(),
         Eigen::Index(0),
         [](Eigen::Index sum, const VectorXd& block) { return sum + block.size(); }
     );
+    const Eigen::Index total_rows = task_rows;
 
     evaluation.weighted_residual = VectorXd::Zero(total_rows);
     evaluation.weighted_jacobian = MatrixXd::Zero(total_rows, context.request.active_count);
     Eigen::Index row_offset = 0;
-    for (std::size_t block_index = 0; block_index < weighted_residual_blocks.size(); ++block_index) {
-        const VectorXd& residual_block = weighted_residual_blocks[block_index];
-        const MatrixXd& jacobian_block = weighted_jacobian_blocks[block_index];
+    for (std::size_t block_index = 0; block_index < task_weighted_residual_blocks.size(); ++block_index) {
+        const VectorXd& residual_block = task_weighted_residual_blocks[block_index];
+        const MatrixXd& jacobian_block = task_weighted_jacobian_blocks[block_index];
         evaluation.weighted_residual.segment(row_offset, residual_block.size()) = residual_block;
         evaluation.weighted_jacobian.block(row_offset, 0, residual_block.size(), jacobian_block.cols()) = jacobian_block;
         row_offset += residual_block.size();
     }
-    evaluation.active_residual_norm = evaluation.weighted_residual.norm();
+    evaluation.active_residual_norm = task_rows > 0
+        ? evaluation.weighted_residual.head(task_rows).norm()
+        : 0.0;
 
+    const DQ absolute_pose_for_wvfi = context.robot.absolutePoseDualArm(evaluation.q_full);
+    const DQ relative_pose_for_wvfi = context.robot.relativePoseDualArm(evaluation.q_full);
+    const MatrixXd absolute_pose_jacobian_active_for_wvfi = sliceActiveColumns(
+        context.robot.absolutePoseJacobianDualArm(evaluation.q_full),
+        context.request.active_start,
+        context.request.active_count
+    );
+    const MatrixXd relative_pose_jacobian_active_for_wvfi = sliceActiveColumns(
+        context.robot.relativePoseJacobianDualArm(evaluation.q_full),
+        context.request.active_start,
+        context.request.active_count
+    );
     const MatrixXd absolute_twist_jacobian = computeTwistJacobian(
-        absolute_pose_jacobian_active,
-        absolute_pose
+        absolute_pose_jacobian_active_for_wvfi,
+        absolute_pose_for_wvfi
     );
     const MatrixXd relative_twist_jacobian = computeTwistJacobian(
-        relative_pose_jacobian_active,
-        relative_pose
+        relative_pose_jacobian_active_for_wvfi,
+        relative_pose_for_wvfi
     );
     MatrixXd full_twist_jacobian(
         absolute_twist_jacobian.rows() + relative_twist_jacobian.rows(),
@@ -752,16 +933,19 @@ double stepInequalityViolation(
     const HumanoidAbsoluteMJRestoreRequest& request,
     const std::vector<double>& dq_step
 ) {
-    if (!request.waist_x_corridor.enabled) return 0.0;
     double max_violation = 0.0;
-    const std::size_t row_count = std::min(
-        request.waist_x_corridor.rows.size(),
-        request.waist_x_corridor.rhs.size()
-    );
-    for (std::size_t i = 0; i < row_count; ++i) {
-        const double violation = dotStd(request.waist_x_corridor.rows[i], dq_step) -
-            request.waist_x_corridor.rhs[i];
-        if (violation > max_violation) max_violation = violation;
+    const auto accumulate_violation = [&](const std::vector<std::vector<double>>& rows, const std::vector<double>& rhs) {
+        const std::size_t row_count = std::min(rows.size(), rhs.size());
+        for (std::size_t i = 0; i < row_count; ++i) {
+            const double violation = dotStd(rows[i], dq_step) - rhs[i];
+            if (violation > max_violation) max_violation = violation;
+        }
+    };
+    if (request.joint_limit_vfi.enabled) {
+        accumulate_violation(request.joint_limit_vfi.rows, request.joint_limit_vfi.rhs);
+    }
+    if (request.waist_x_corridor.enabled) {
+        accumulate_violation(request.waist_x_corridor.rows, request.waist_x_corridor.rhs);
     }
     return max_violation;
 }
@@ -775,10 +959,9 @@ VectorXd buildReferenceResidual(
     constraint_motion_out = evaluation.weighted_jacobian * toEigenVector(previous_step);
     VectorXd reference = VectorXd::Zero(evaluation.weighted_residual.size());
 
-    const Eigen::Index absolute_rows = 8;
-    const Eigen::Index relative_rows = 8;
-    const Eigen::Index body_rows =
-        std::max<Eigen::Index>(0, evaluation.weighted_residual.size() - absolute_rows - relative_rows);
+    const Eigen::Index absolute_rows = evaluation.absolute_row_count;
+    const Eigen::Index relative_rows = evaluation.relative_row_count;
+    const Eigen::Index body_rows = evaluation.body_row_count;
 
     for (Eigen::Index i = 0; i < evaluation.weighted_residual.size(); ++i) {
         double stiffness = 1.0;
@@ -844,20 +1027,20 @@ bool solveRestorationStep(
         return false;
     }
 
-    const ActiveCorridorRows corridor = buildActiveCorridorRows(request);
-    const ActiveCorridorRows active_corridor = selectViolatedCorridorRows(corridor, dq);
-    if (active_corridor.rows.rows() > 0) {
+    const ActiveLinearRows linear_rows = buildLinearStepRows(request);
+    const ActiveLinearRows active_linear_rows = selectViolatedLinearRows(linear_rows, dq);
+    if (active_linear_rows.rows.rows() > 0) {
         MatrixXd kkt(
-            H.rows() + active_corridor.rows.rows(),
-            H.cols() + active_corridor.rows.rows()
+            H.rows() + active_linear_rows.rows.rows(),
+            H.cols() + active_linear_rows.rows.rows()
         );
         kkt.setZero();
         kkt.block(0, 0, H.rows(), H.cols()) = H;
-        kkt.block(0, H.cols(), H.rows(), active_corridor.rows.rows()) = active_corridor.rows.transpose();
-        kkt.block(H.rows(), 0, active_corridor.rows.rows(), H.cols()) = active_corridor.rows;
+        kkt.block(0, H.cols(), H.rows(), active_linear_rows.rows.rows()) = active_linear_rows.rows.transpose();
+        kkt.block(H.rows(), 0, active_linear_rows.rows.rows(), H.cols()) = active_linear_rows.rows;
 
-        VectorXd rhs(H.rows() + active_corridor.rows.rows());
-        rhs << g, active_corridor.rhs;
+        VectorXd rhs(H.rows() + active_linear_rows.rows.rows());
+        rhs << g, active_linear_rows.rhs;
 
         const VectorXd solution = kkt.fullPivLu().solve(rhs);
         if (solution.allFinite()) {
@@ -917,8 +1100,11 @@ HumanoidAbsoluteMJRestoreResult solveHumanoidAbsoluteTargetMJRestore(
     ProblemContext context{
         robot,
         request,
+        request.solve_variant,
         toEigenVector(request.absolute_target),
         toEigenVector(request.relative_target),
+        toEigenVector(request.left_target),
+        toEigenVector(request.right_target),
         sliceActiveConfiguration(request),
         std::vector<double>(static_cast<std::size_t>(request.active_count), 0.0),
         std::vector<double>(static_cast<std::size_t>(request.active_count), 0.0)
@@ -1104,8 +1290,11 @@ HumanoidAbsoluteMJRestoreResult solveHumanoidAbsoluteTargetMJRestoreTrustRegion(
     ProblemContext context{
         robot,
         request,
+        request.solve_variant,
         toEigenVector(request.absolute_target),
         toEigenVector(request.relative_target),
+        toEigenVector(request.left_target),
+        toEigenVector(request.right_target),
         sliceActiveConfiguration(request),
         std::vector<double>(static_cast<std::size_t>(request.active_count), 0.0),
         std::vector<double>(static_cast<std::size_t>(request.active_count), 0.0)
@@ -1298,6 +1487,10 @@ HumanoidAbsoluteMJRestoreResult solveHumanoidAbsoluteTargetMJRestoreTrustRegion(
                     accepted_trial_state.constraint_motion = constraint_motion;
                     break;
                 }
+                result.last_rejected_rho = rho;
+                result.last_rejected_predicted_reduction = predicted_reduction;
+                result.last_rejected_actual_reduction = actual_reduction;
+                result.last_rejected_reason = acceptance.reason;
                 candidate_radius = next_radius;
                 if (candidate_radius <= min_radius + 1e-12) break;
             }
@@ -1380,4 +1573,40 @@ HumanoidAbsoluteMJRestoreResult solveHumanoidAbsoluteTargetMJRestoreTrustRegion(
     result.trust_radius = trust_radius;
     result.filter_size = static_cast<int>(filter.size());
     return result;
+}
+
+HumanoidAbsoluteMJRestoreResult solveHumanoidCooperativeDQSetpointMJRestore(
+    const DQ_HumanoidURDF& robot,
+    const HumanoidAbsoluteMJRestoreRequest& request
+) {
+    HumanoidAbsoluteMJRestoreRequest effective_request = request;
+    effective_request.solve_variant = "cooperative_dq_setpoint";
+    return solveHumanoidAbsoluteTargetMJRestore(robot, effective_request);
+}
+
+HumanoidAbsoluteMJRestoreResult solveHumanoidCooperativeDQSetpointMJRestoreTrustRegion(
+    const DQ_HumanoidURDF& robot,
+    const HumanoidAbsoluteMJRestoreRequest& request
+) {
+    HumanoidAbsoluteMJRestoreRequest effective_request = request;
+    effective_request.solve_variant = "cooperative_dq_setpoint";
+    return solveHumanoidAbsoluteTargetMJRestoreTrustRegion(robot, effective_request);
+}
+
+HumanoidAbsoluteMJRestoreResult solveHumanoidAbsoluteDQSetpointMJRestore(
+    const DQ_HumanoidURDF& robot,
+    const HumanoidAbsoluteMJRestoreRequest& request
+) {
+    HumanoidAbsoluteMJRestoreRequest effective_request = request;
+    effective_request.solve_variant = "absolute_dq_setpoint";
+    return solveHumanoidAbsoluteTargetMJRestore(robot, effective_request);
+}
+
+HumanoidAbsoluteMJRestoreResult solveHumanoidAbsoluteDQSetpointMJRestoreTrustRegion(
+    const DQ_HumanoidURDF& robot,
+    const HumanoidAbsoluteMJRestoreRequest& request
+) {
+    HumanoidAbsoluteMJRestoreRequest effective_request = request;
+    effective_request.solve_variant = "absolute_dq_setpoint";
+    return solveHumanoidAbsoluteTargetMJRestoreTrustRegion(robot, effective_request);
 }

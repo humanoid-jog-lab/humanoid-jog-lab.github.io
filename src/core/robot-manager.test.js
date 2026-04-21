@@ -31,6 +31,12 @@ test('resolveHumanoidInitialQ supports the second default humanoid pose profile'
     const resolved = resolveHumanoidInitialQ({}, 20, 'default2');
     assert.deepEqual(resolved, DEFAULT_HUMANOID_INITIAL_Q_PROFILE_2);
     assert.notEqual(resolved, DEFAULT_HUMANOID_INITIAL_Q_PROFILE_2);
+    assert.deepEqual(resolved, [
+        -0.3, 0.9, -0.6, 0,
+        -0.51865, 0.66105, 0.90855, -1.5711, -0.93562, 0.67402, 1.40137,
+        0.56421, -0.68286, -0.98744, 1.58165, 1.00933, -0.71114, -1.35432,
+        0, 0
+    ]);
 });
 
 test('normalizeHumanoidInitialQProfileId falls back to default1 for unknown values', () => {

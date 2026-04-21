@@ -433,16 +433,16 @@ function createWalls() {
 export function getWarehouseInfo() {
     return {
         id: 'warehouse',
-        name: '仓储机器人环境',
-        description: '包含货架、货箱、托盘和导航标线的典型仓库场景',
+        name: 'Warehouse Robot Environment',
+        description: 'A typical warehouse scene with shelves, crates, pallets, and navigation markings',
         dimensions: `${WAREHOUSE.floorWidth}m × ${WAREHOUSE.floorDepth}m`,
         elements: [
-            `${WAREHOUSE.shelfRows}×${WAREHOUSE.shelfCols} 货架阵列`,
-            `${WAREHOUSE.shelfLevels} 层货架`,
-            '随机分布货箱',
-            '地面导航标线',
-            '托盘',
-            '墙壁与柱子',
+            `${WAREHOUSE.shelfRows}×${WAREHOUSE.shelfCols} shelf array`,
+            `${WAREHOUSE.shelfLevels} shelf levels`,
+            'Randomly distributed crates',
+            'Floor navigation markings',
+            'Pallets',
+            'Walls and pillars',
         ],
     };
 }

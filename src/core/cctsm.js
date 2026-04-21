@@ -144,6 +144,42 @@ export function hamiltonLeft8(x) {
 }
 
 /**
+ * 4×4 right Hamilton operator H4-(q) for quaternion q = [q0, q1, q2, q3].
+ * Satisfies: H4-(q) * vec4(p) = vec4(p * q).
+ */
+export function hamiltonRight4(q) {
+    const [q0, q1, q2, q3] = q.map((v) => asFinite(v));
+    return [
+        [q0, -q1, -q2, -q3],
+        [q1,  q0,  q3, -q2],
+        [q2, -q3,  q0,  q1],
+        [q3,  q2, -q1,  q0]
+    ];
+}
+
+/**
+ * 8×8 right Hamilton operator H8-(x) for dual quaternion x = [r0,r1,r2,r3,d0,d1,d2,d3].
+ * Block form: [[H4-(r), 0], [H4-(d), H4-(r)]]
+ */
+export function hamiltonRight8(x) {
+    const r = x.slice(0, 4);
+    const d = x.slice(4, 8);
+    const Hr = hamiltonRight4(r);
+    const Hd = hamiltonRight4(d);
+    const z = [0, 0, 0, 0];
+    return [
+        [...Hr[0], ...z],
+        [...Hr[1], ...z],
+        [...Hr[2], ...z],
+        [...Hr[3], ...z],
+        [...Hd[0], ...Hr[0]],
+        [...Hd[1], ...Hr[1]],
+        [...Hd[2], ...Hr[2]],
+        [...Hd[3], ...Hr[3]]
+    ];
+}
+
+/**
  * DQ conjugate: x^* = [r0, -r1, -r2, -r3, -d0, d1, d2, d3]
  */
 export function dqConjugate(x) {
@@ -164,7 +200,7 @@ export function dqConjugate(x) {
 /**
  * Compute the 6×n body-frame twist Jacobian from an 8×n DQ pose Jacobian.
  *
- *   J_xi = 2 * P6 * H8+(x^*) * J8
+ *   J_xi = 2 * P6 * H8-(x^*) * J8
  *
  * P6 selects imaginary-component rows {1,2,3,5,6,7} (0-indexed) of the
  * 8-vector, yielding [omega_x, omega_y, omega_z, v_x, v_y, v_z].
@@ -178,7 +214,7 @@ export function computeTwistJacobian(J8, x8) {
     if (!Array.isArray(J8) || J8.length < 8 || !Array.isArray(x8) || x8.length < 8) return null;
     const n = J8[0].length;
     if (n <= 0) return null;
-    const H = hamiltonLeft8(dqConjugate(x8));
+    const H = hamiltonRight8(dqConjugate(x8));
     const P6 = [1, 2, 3, 5, 6, 7]; // imaginary-component row indices
     const J_xi = Array.from({ length: 6 }, () => new Array(n).fill(0));
     for (let col = 0; col < n; col++) {
@@ -209,7 +245,7 @@ export function computeTwistJacobian(J8, x8) {
  * Compute the 3×n angular Jacobian from the 4×n quaternion (primary) Jacobian.
  * Used for the relative-rotation preserved quantity in distance-closing mode.
  *
- *   J_omega = 2 * P3 * H4+(r^*) * J_prim
+ *   J_omega = 2 * P3 * H4-(r^*) * J_prim
  *
  * @param {number[][]} J4  – 4×n primary (quaternion) Jacobian
  * @param {number[]}   r4  – 4-element rotation quaternion
@@ -220,7 +256,7 @@ export function computeAngularJacobian(J4, r4) {
     const n = J4[0].length;
     if (n <= 0) return null;
     const r_conj = [asFinite(r4[0]), -asFinite(r4[1]), -asFinite(r4[2]), -asFinite(r4[3])];
-    const H = hamiltonLeft4(r_conj);
+    const H = hamiltonRight4(r_conj);
     const J_omega = Array.from({ length: 3 }, () => new Array(n).fill(0));
     for (let col = 0; col < n; col++) {
         for (let ri = 0; ri < 3; ri++) {
@@ -323,13 +359,13 @@ export function directionalCCTSM(Gram, vHat) {
 /**
  * Build the joint-space VFI attenuation matrix W_vfi (n×n).
  *
- *   W_vfi = I - sum_{i in A_vfi} (1 - omega_i) * j_i^T j_i / ||j_i||^2
+ *   W_vfi = I - sum_i (1 - omega_i) * j_i^T j_i / ||j_i||^2
  *
- * where omega_i = d_i / d_bar_i in (0,1) for near-active constraints.
+ * where omega_i = d_i / (d_i + d_bar_i) in [0,1) for all monitored constraints.
  *
  * @param {Array<{row: number[], distance: number, threshold: number}>} constraints
- *   Each entry is one near-active VFI constraint with its Jacobian row (length n),
- *   current scalar distance, and activation threshold.
+ *   Each entry is one monitored VFI constraint with its Jacobian row (length n),
+ *   current scalar distance, and attenuation scale.
  * @param {number} n  joint-space dimension
  * @returns {number[][]}  n×n attenuation matrix
  */
@@ -343,9 +379,9 @@ export function computeVFIAttenuationMatrix(constraints, n) {
     for (const c of (Array.isArray(constraints) ? constraints : [])) {
         if (!Array.isArray(c.row) || !Number.isFinite(c.distance) || !Number.isFinite(c.threshold)) continue;
         if (c.threshold <= 0) continue;
-        const omega = c.distance / c.threshold;
-        if (omega >= 1 || omega < 0) continue; // outside activation zone or already violated
-        const baseScale = 1 - omega; // ∈ (0,1]
+        const distance = Math.max(0, c.distance);
+        const omega = distance / (distance + c.threshold);
+        const baseScale = 1 - omega; // = d_bar / (d + d_bar)
         const scale = baseScale;
         const jrow = c.row;
         const norm2 = jrow.reduce((s, v) => s + asFinite(v) ** 2, 0);

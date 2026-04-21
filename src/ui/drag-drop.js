@@ -5,6 +5,7 @@
  */
 
 import { appState, callbacks } from '../core/state.js';
+import { t } from '../i18n.js';
 import { URDFPackageManager, loadURDFFromPackage } from '../urdf-loader.js';
 
 // ═══════════════════════════════════════════
@@ -39,7 +40,7 @@ function setupGlobalDragAndDrop() {
         }
         event.preventDefault();
         dragCounter += 1;
-        updateDropOverlay('ready', '释放以加载 URDF 文件夹', '📁');
+        updateDropOverlay('ready', t('Drop to load a URDF folder'), '📁');
     });
 
     window.addEventListener('dragover', (event) => {
@@ -73,7 +74,7 @@ function setupGlobalDragAndDrop() {
             return;
         }
 
-        updateDropOverlay('loading', '正在加载 URDF 资源...', '⏳');
+        updateDropOverlay('loading', t('Loading URDF assets...'), '⏳');
         await handleDrop(items);
     });
 }
@@ -97,10 +98,10 @@ function updateDropOverlay(state, message, icon) {
         error: '⚠️'
     };
     const textFallback = {
-        ready: '释放以加载 URDF 文件夹',
-        loading: '正在加载 URDF 资源...',
-        success: '加载完成',
-        error: '加载失败'
+        ready: t('Drop to load a URDF folder'),
+        loading: t('Loading URDF assets...'),
+        success: t('Load complete'),
+        error: t('Load failed')
     };
 
     appState.dropOverlayElement.classList.remove('hidden');
@@ -165,7 +166,7 @@ async function handleDrop(items) {
         console.log('\n3️⃣ 读取配置...');
         appState.customRobotConfig = appState.packageManager.getConfig();
         if (!appState.customRobotConfig) {
-            throw new Error('未找到 robot_config.yaml 配置文件');
+            throw new Error(t('robot_config.yaml was not found'));
         }
         console.log('✓ 配置:', appState.customRobotConfig.robot_name);
         const isHumanoid = appState.customRobotConfig?.humanoid === true;
@@ -178,7 +179,9 @@ async function handleDrop(items) {
                 callbacks.switchToHumanoidUI();
             }
             console.log('\n6️⃣ 同步界面状态...');
-            updateDropOverlay('success', `✓ 已加载人形: ${appState.customRobotConfig.robot_name}`, '✅');
+            updateDropOverlay('success', t('Loaded humanoid: {{name}}', {
+                name: appState.customRobotConfig.robot_name
+            }), '✅');
             hideDropOverlay(1400);
             if (callbacks.refreshDockState) {
                 callbacks.refreshDockState();
@@ -213,11 +216,11 @@ async function handleDrop(items) {
         } else {
             console.log('\n4️⃣ 加载到 3D 场景...');
             if (!appState.visualizer) {
-                throw new Error('可视化器未初始化');
+                throw new Error(t('Visualizer is not initialized'));
             }
             const loaded = await appState.visualizer.loadCustomURDF(robot, null, appState.customRobotConfig);
             if (!loaded) {
-                throw new Error('可视化器加载失败');
+                throw new Error(t('The visualizer failed to load the URDF'));
             }
             console.log('✓ 3D 模型已添加到场景');
             if (callbacks.switchToSingleArmUI) {
@@ -236,7 +239,9 @@ async function handleDrop(items) {
         }
         
         console.log('\n6️⃣ 同步界面状态...');
-        updateDropOverlay('success', `✓ 已加载: ${appState.customRobotConfig.robot_name}`, '✅');
+        updateDropOverlay('success', t('Loaded: {{name}}', {
+            name: appState.customRobotConfig.robot_name
+        }), '✅');
         hideDropOverlay(1400);
         if (callbacks.refreshDockState) {
             callbacks.refreshDockState();
@@ -248,9 +253,11 @@ async function handleDrop(items) {
         console.error('\n❌ 加载失败:', error);
         console.error('错误堆栈:', error.stack);
         console.log('═══════════════════════════════════════════\n');
-        updateDropOverlay('error', '❌ 加载失败，请查看控制台了解详情', '⚠️');
+        updateDropOverlay('error', t('Load failed. See the console for details.'), '⚠️');
         hideDropOverlay(2200);
-        alert(`加载失败:\n\n${error.message}\n\n请打开控制台(F12)查看详细错误信息。`);
+        alert(t('Loading failed:\n\n{{message}}\n\nOpen the console (F12) for detailed error information.', {
+            message: error.message
+        }));
     }
 }
 

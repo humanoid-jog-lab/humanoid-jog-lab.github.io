@@ -34,6 +34,7 @@ test('RobotVisualizer sets hierarchical VFI blend default to 1', () => {
 
 test('RobotVisualizer sets joint-limit manipulability activation threshold default to 0.15 rad', () => {
     const visualizer = new RobotVisualizer(null);
+    assert.equal(visualizer.vfiConfig.jointLimitEta, 5);
     assert.equal(visualizer.vfiConfig.jointLimitManipulabilityActivationThreshold, 0.15);
     assert.equal(visualizer.vfiConfig.manifoldActiveLimitRetreatHoldFraction, 0.5);
     assert.equal(visualizer.vfiConfig.manifoldActiveLimitRetreatHoldDistance, 1e-3);
@@ -160,7 +161,8 @@ test('RobotVisualizer sets mj_restore body-z defaults for upright absolute contr
     const visualizer = new RobotVisualizer(null);
     assert.equal(visualizer.vfiConfig.mjRestoreBodyTolerance, 5e-5);
     assert.equal(visualizer.vfiConfig.mjRestoreHardTolerance, 1e-8);
-    assert.equal(visualizer.vfiConfig.mjRestorePracticalCommandTolPose, 5e-4);
+    assert.equal(visualizer.vfiConfig.mjRestorePracticalCommandTolPose, 1e-6);
+    assert.equal(visualizer.vfiConfig.mjRestorePracticalInvariantTol, 1e-6);
     assert.equal(visualizer.vfiConfig.mjRestoreMetricButtonCommandTolerance, 1e-3);
     assert.equal(visualizer.vfiConfig.mjRestoreMetricButtonInvariantTolerance, 1e-4);
     assert.equal(visualizer.vfiConfig.mjRestoreActiveLimitRetreatCommandTolerance, 1e-2);
@@ -192,11 +194,37 @@ test('RobotVisualizer sets mj_restore arm-only fallback profile defaults', () =>
     assert.equal(visualizer.vfiConfig.mjRestoreSurfaceSlideMaxStepScale, 1.5);
     assert.equal(visualizer.vfiConfig.mjRestoreSurfaceSlideDamping, 5e-5);
     assert.equal(visualizer.vfiConfig.mjRestoreSurfaceSlideReferenceDamping, 0.2);
-    assert.equal(visualizer.vfiConfig.mjRestoreCooperativeSurfacePolishingMaxIter, 120);
+    assert.equal(visualizer.vfiConfig.mjRestoreCooperativeSurfacePolishingMaxIter, 160);
     assert.equal(visualizer.vfiConfig.mjRestoreCooperativeSurfacePolishingMaxStepScale, 1.0);
     assert.equal(visualizer.vfiConfig.mjRestoreCooperativeSurfacePolishingDamping, 1e-4);
-    assert.equal(visualizer.vfiConfig.mjRestoreCooperativeSurfacePolishingReferenceDamping, 0.3);
-    assert.equal(visualizer.vfiConfig.mjRestoreCooperativeSurfacePolishingBestEffortStepNormCap, 0.12);
+    assert.equal(visualizer.vfiConfig.mjRestoreCooperativeSurfacePolishingReferenceDamping, 0.15);
+    assert.equal(visualizer.vfiConfig.mjRestoreCooperativeSurfacePolishingMaxDampingRetries, 12);
+    assert.equal(visualizer.vfiConfig.mjRestoreCooperativeSurfacePolishingDampingGrowthFactor, 4);
+    assert.equal(visualizer.vfiConfig.mjRestoreCooperativeSurfacePolishingMaxTrustRegionRetries, 12);
+    assert.equal(visualizer.vfiConfig.mjRestoreCooperativeSurfacePolishingRhoAcceptanceThreshold, 0.02);
+    assert.equal(visualizer.vfiConfig.mjRestoreCooperativeSurfacePolishingRhoShrinkThreshold, 0.02);
+    assert.equal(visualizer.vfiConfig.mjRestoreCooperativeSurfacePolishingBestEffortStepNormCap, 0.02);
+    assert.equal(visualizer.vfiConfig.mjRestoreCooperativeSurfacePolishingBestEffortCommandNormCap, 0.005);
+    assert.equal(visualizer.vfiConfig.mjRestoreCooperativeSurfacePolishingBestEffortInvariantNormCap, 0.002);
+    assert.equal(visualizer.vfiConfig.mjRestoreCooperativeSurfacePolishingBodyTolerance, 1e-6);
+    assert.equal(visualizer.vfiConfig.mjRestoreCooperativeSurfacePolishingHardCommandTolPose, 5e-6);
+    assert.equal(visualizer.vfiConfig.mjRestoreCooperativeSurfacePolishingPracticalCommandTolPose, 5e-6);
+    assert.equal(visualizer.vfiConfig.mjRestoreCooperativeSurfacePolishingHardInvariantTol, 1e-6);
+    assert.equal(visualizer.vfiConfig.mjRestoreCooperativeSurfacePolishingPracticalInvariantTol, 1e-6);
+    assert.equal(visualizer.vfiConfig.mjRestoreCooperativeSurfacePolishingPolishActivationResidual, 1);
+    assert.equal(visualizer.vfiConfig.mjRestoreCooperativeSurfacePolishingPolishMaxIter, 240);
+    assert.equal(visualizer.vfiConfig.mjRestoreCooperativeSurfacePolishingPolishDamping, 1e-8);
+    assert.equal(visualizer.vfiConfig.mjRestoreCooperativeSurfacePolishingDQSetpointMaxIter, 80);
+    assert.equal(visualizer.vfiConfig.mjRestoreCooperativeSurfacePolishingDQSetpointDamping, 1e-4);
+    assert.equal(visualizer.vfiConfig.mjRestoreCooperativeSurfacePolishingDQSetpointReferenceDamping, 0.15);
+    assert.equal(visualizer.vfiConfig.mjRestoreCooperativeSurfacePolishingDQSetpointMaxDampingRetries, 10);
+    assert.equal(visualizer.vfiConfig.mjRestoreCooperativeSurfacePolishingDQSetpointDampingGrowthFactor, 4);
+    assert.equal(visualizer.vfiConfig.mjRestoreCooperativeSurfacePolishingDQSetpointMaxTrustRegionRetries, 10);
+    assert.equal(visualizer.vfiConfig.mjRestoreCooperativeSurfacePolishingDQSetpointRhoAcceptanceThreshold, 0.02);
+    assert.equal(visualizer.vfiConfig.mjRestoreCooperativeSurfacePolishingDQSetpointRhoShrinkThreshold, 0.02);
+    assert.equal(visualizer.vfiConfig.mjRestoreCooperativeSurfacePolishingDQSetpointPolishActivationResidual, 5e-4);
+    assert.equal(visualizer.vfiConfig.mjRestoreCooperativeSurfacePolishingDQSetpointPolishMaxIter, 64);
+    assert.equal(visualizer.vfiConfig.mjRestoreCooperativeSurfacePolishingDQSetpointPolishDamping, 1e-7);
     assert.equal(visualizer.vfiConfig.mjRestoreNullspaceStepSize, 0.01);
     assert.equal(visualizer.vfiConfig.mjRestoreMetricProjectionStepSize, 0.01);
     assert.equal(visualizer.vfiConfig.mjRestoreMetricProjectionPasses, 4);
@@ -452,7 +480,7 @@ test('RobotVisualizer metric-only MJ optimization routes distance-mode w+ throug
     }
 });
 
-test('RobotVisualizer metric-only MJ optimization routes robot1-mode w+ through the special pre-w stage and applies q_pre', async () => {
+test('RobotVisualizer metric-only MJ optimization routes robot1-mode w+ through the dedicated TR single-arm helper', async () => {
     const visualizer = new RobotVisualizer(null);
     visualizer.humanoidMode = true;
     visualizer.humanoidWaistLength = 4;
@@ -473,20 +501,12 @@ test('RobotVisualizer metric-only MJ optimization routes robot1-mode w+ through 
     };
 
     let capturedArgs = null;
-    let appliedQ = null;
     visualizer._getHumanoidAbsolutePose = () => new Array(8).fill(0);
     visualizer._getHumanoidRelativePose = () => new Array(8).fill(0);
     visualizer._getHumanoidPose1 = () => new Array(8).fill(1);
-    visualizer._runHumanoidMJRestoreSpecialModePreWStage = async (args) => {
+    visualizer._updateHumanoidSingleArmPoseTargetMJRestore = async (...args) => {
         capturedArgs = args;
-        return {
-            state: 'active',
-            qApplied: new Array(20).fill(0.25),
-            acceptedCandidate: true
-        };
-    };
-    visualizer._applyHumanoidJointSolution = (q) => {
-        appliedQ = q.slice();
+        return true;
     };
     visualizer._publishHumanoidJogDiagnostics = () => {};
 
@@ -494,9 +514,11 @@ test('RobotVisualizer metric-only MJ optimization routes robot1-mode w+ through 
         const result = await visualizer.optimizeHumanoidHierarchicalAbsoluteManipulability('increase');
         assert.equal(result, true);
         assert.ok(capturedArgs);
-        assert.equal(capturedArgs.mode, 'robot1');
-        assert.equal(capturedArgs.preWMetric, 'w_abs_hier');
-        assert.deepEqual(appliedQ, new Array(20).fill(0.25));
+        assert.deepEqual(capturedArgs[0], new Array(8).fill(1));
+        assert.equal(capturedArgs[2], 1);
+        assert.equal(capturedArgs[5]?.solverMode, 'mj_restore_tr');
+        assert.equal(capturedArgs[5]?.jogMetricOverride, 'w_abs_hier');
+        assert.equal(capturedArgs[5]?.metricDirection, 'increase');
     } finally {
         globalThis.document = originalDocument;
         if (originalWindow === undefined) {
@@ -606,7 +628,7 @@ test('RobotVisualizer iterative hierarchical w_abs_hier_vfi optimization routes 
         const result = visualizer.optimizeHumanoidHierarchicalAbsoluteVFIManipulabilityIterative('increase');
         assert.equal(result, true);
         assert.ok(Array.isArray(called));
-        assert.equal(called[6]?.solverMode, 'mj_restore');
+        assert.equal(called[6]?.solverMode, 'mj_restore_tr');
         assert.equal(called[6]?.preferWorker, false);
         assert.equal(called[6]?.jogMetricOverride, 'w_abs_hier_vfi');
         assert.equal(called[6]?.metricDirection, 'increase');
@@ -1650,6 +1672,7 @@ test('RobotVisualizer cooperative ruled-surface polishing refines its shared str
 
     assert.ok(refinedCost < initialCost, `expected refinement to reduce position cost, got initial=${initialCost} refined=${refinedCost}`);
     assert.ok(Math.abs(refined.u - 0.42) < 1e-3, `expected refined shared u near 0.42, got ${refined.u}`);
+    assert.ok(Math.abs(refined.normalOffset - 0.05) < 0.01, `expected refined normal offset to stay near the realized hand offset, got ${refined.normalOffset}`);
 });
 
 test('RobotVisualizer cooperative ruled-surface polishing preserves the initial left/right v-side ordering when building arm targets', () => {
@@ -1871,7 +1894,7 @@ test('RobotVisualizer cooperative ruled-surface polishing anchor aligns the surf
     }
 });
 
-test('RobotVisualizer cooperative ruled-surface polishing anchor keeps the surface normal pointing upward toward the hand workspace', () => {
+test('RobotVisualizer cooperative ruled-surface polishing anchor aligns the surface normal with the blended hand x-axis projected off the span direction', () => {
     const visualizer = new RobotVisualizer(null);
     const originalWindow = globalThis.window;
     const leftPose = [1, 0, 0, 0, 0.32, 0.38, 0.06, 0];
@@ -1895,8 +1918,55 @@ test('RobotVisualizer cooperative ruled-surface polishing anchor keeps the surfa
             ];
         };
         const zAxis = rotateByQuaternion([0, 0, 1]);
+        const span = [0.36, 0.24, 0];
+        const spanNorm = Math.hypot(...span);
+        const spanUnit = span.map((value) => value / spanNorm);
+        const projectedHandX = [
+            1 - (spanUnit[0] * spanUnit[0]),
+            -(spanUnit[0] * spanUnit[1]),
+            0
+        ];
+        const projectedNorm = Math.hypot(...projectedHandX);
+        const projectedUnit = projectedHandX.map((value) => value / projectedNorm);
+        const alignment = (zAxis[0] * projectedUnit[0]) + (zAxis[1] * projectedUnit[1]) + (zAxis[2] * projectedUnit[2]);
 
-        assert.ok(zAxis[2] > 0.999, `expected surface normal to point upward, got z-axis=${JSON.stringify(zAxis)}`);
+        assert.ok(alignment > 0.999, `expected surface normal to follow the projected hand x-axis, got z-axis=${JSON.stringify(zAxis)} and dot=${alignment}`);
+    } finally {
+        globalThis.window = originalWindow;
+    }
+});
+
+test('RobotVisualizer cooperative ruled-surface polishing anchor prefers the blended hand x-axis for the surface normal over the absolute pose heading', () => {
+    const visualizer = new RobotVisualizer(null);
+    const originalWindow = globalThis.window;
+    const handQuaternion = [Math.SQRT1_2, 0, -Math.SQRT1_2, 0];
+    const leftPose = [handQuaternion[0], handQuaternion[1], handQuaternion[2], handQuaternion[3], 0.5, -0.1, 0.06, 0];
+    const rightPose = [handQuaternion[0], handQuaternion[1], handQuaternion[2], handQuaternion[3], 0.5, 0.1, 0.06, 0];
+    const absolutePose = [1, 0, 0, 0, 0.5, 0, 0.06, 0];
+    globalThis.window = {};
+
+    try {
+        const anchor = visualizer._getHumanoidCooperativeRuledSurfaceAnchorPose(leftPose, rightPose, absolutePose);
+        const [w, x, y, z] = anchor.quaternion;
+        const rotateByQuaternion = (vector) => {
+            const [vx, vy, vz] = vector;
+            const ix = (w * vx) + (y * vz) - (z * vy);
+            const iy = (w * vy) + (z * vx) - (x * vz);
+            const iz = (w * vz) + (x * vy) - (y * vx);
+            const iw = (-x * vx) - (y * vy) - (z * vz);
+            return [
+                (ix * w) + (iw * -x) + (iy * -z) - (iz * -y),
+                (iy * w) + (iw * -y) + (iz * -x) - (ix * -z),
+                (iz * w) + (iw * -z) + (ix * -y) - (iy * -x)
+            ];
+        };
+        const zAxis = rotateByQuaternion([0, 0, 1]);
+        const normalAlignment = zAxis[2];
+
+        assert.ok(
+            normalAlignment > 0.999,
+            `expected anchor normal to follow the blended hand x-axis instead of the absolute pose, got ${JSON.stringify(zAxis)}`
+        );
     } finally {
         globalThis.window = originalWindow;
     }
@@ -2079,7 +2149,225 @@ test('RobotVisualizer projects a pose on the opposite side of a surface with a n
     assert.equal(Number(projected.normalOffset.toFixed(6)), 0.08);
 });
 
-test('RobotVisualizer cooperative ruled-surface polishing forwards shared strip targets and Plucker-tube invariants into bimanual restoration', async () => {
+test('RobotVisualizer left ruled-surface polishing initializes from the current left-hand surface attachment state', () => {
+    const visualizer = new RobotVisualizer(null);
+    const originalWindow = globalThis.window;
+    const planeSurface = {
+        position: (u, v) => [u, v, 0],
+        du: () => [1, 0, 0],
+        dv: () => [0, 1, 0]
+    };
+
+    globalThis.window = {
+        humanoidQ: new Array(20).fill(0)
+    };
+
+    visualizer.humanoidMode = true;
+    visualizer._getHumanoidLeftRuledSurfacePolishingControlMode = () => 'left-ruled-surface-polishing';
+    visualizer._getHumanoidPose1 = () => [1, 0, 0, 0, 0.32, 0.38, 0.06, 0];
+    visualizer._createHumanoidSurfaceSlideDemoSurfaceFromPose = () => planeSurface;
+
+    try {
+        const state = visualizer._ensureHumanoidLeftRuledSurfacePolishingState();
+        assert.ok(state);
+        assert.equal(state.modeKey, 'left-ruled-surface-polishing');
+        assert.equal(state.surface, planeSurface);
+        assert.ok(Math.abs(state.u - 0.32) < 0.08);
+        assert.ok(Math.abs(state.v - 0.38) < 0.08);
+        assert.ok(Math.abs(state.normalOffset - 0.06) < 0.02);
+        assert.deepEqual(state.bounds, { u: [0, 1], v: [0, 1] });
+    } finally {
+        globalThis.window = originalWindow;
+    }
+});
+
+test('RobotVisualizer left ruled-surface polishing reuses the cooperative cylindrical sample and object pose when available', () => {
+    const visualizer = new RobotVisualizer(null);
+    const originalWindow = globalThis.window;
+    const planeSurface = {
+        position: (u, v) => [u, v, 0],
+        du: () => [1, 0, 0],
+        dv: () => [0, 1, 0]
+    };
+    let capturedPose = null;
+    let capturedOptions = null;
+
+    globalThis.window = {
+        humanoidQ: new Array(20).fill(0),
+        humanoidCooperativeRuledSurfaceSource: 'cylindrical-patch',
+        humanoidCooperativeRuledSurfaceObjectPose: {
+            position: [0.11, -0.22, -0.33],
+            quaternion: [1, 0, 0, 0]
+        }
+    };
+
+    visualizer.humanoidMode = true;
+    visualizer._getHumanoidLeftRuledSurfacePolishingControlMode = () => 'left-ruled-surface-polishing';
+    visualizer._getHumanoidPose1 = () => [1, 0, 0, 0, 0.32, 0.38, 0.06, 0];
+    visualizer._createHumanoidCooperativeRuledSurfaceDemoSurfaceFromPose = (poseLike, options) => {
+        capturedPose = poseLike;
+        capturedOptions = options;
+        return planeSurface;
+    };
+    visualizer._createHumanoidSurfaceSlideDemoSurfaceFromPose = () => {
+        throw new Error('left ruled-surface polishing should not use the legacy surface-slide surface source');
+    };
+
+    try {
+        const state = visualizer._ensureHumanoidLeftRuledSurfacePolishingState();
+        assert.ok(state);
+        assert.equal(state.surface, planeSurface);
+        assert.deepEqual(capturedPose.position, [0.11, -0.22, -0.33]);
+        assert.deepEqual(capturedPose.quaternion, [1, 0, 0, 0]);
+        assert.equal(capturedOptions.surfaceSource, 'cylindrical-patch');
+    } finally {
+        globalThis.window = originalWindow;
+    }
+});
+
+test('RobotVisualizer left ruled-surface polishing falls back to the cooperative anchor pose and shared hand span when no object pose is set', () => {
+    const visualizer = new RobotVisualizer(null);
+    const originalWindow = globalThis.window;
+    const planeSurface = {
+        position: (u, v) => [u, v, 0],
+        du: () => [1, 0, 0],
+        dv: () => [0, 1, 0]
+    };
+    const leftPose = [1, 0, 0, 0, 0.32, 0.38, 0.06, 0];
+    const rightPose = [1, 0, 0, 0, 0.68, 0.62, 0.06, 0];
+    const absolutePose = [1, 0, 0, 0, 0.50, 0.50, 0.06, 0];
+    const anchorPose = {
+        position: [0.5, 0.5, -0.06],
+        quaternion: [1, 0, 0, 0]
+    };
+    let capturedPose = null;
+    let capturedOptions = null;
+
+    globalThis.window = {
+        humanoidQ: new Array(20).fill(0),
+        humanoidCooperativeRuledSurfaceSource: 'cylindrical-patch'
+    };
+
+    visualizer.humanoidMode = true;
+    visualizer._getHumanoidLeftRuledSurfacePolishingControlMode = () => 'left-ruled-surface-polishing';
+    visualizer._getHumanoidPose1 = () => leftPose;
+    visualizer._getHumanoidPose2 = () => rightPose;
+    visualizer._getHumanoidAbsolutePose = () => absolutePose;
+    visualizer._getHumanoidCooperativeRuledSurfaceAnchorPose = () => anchorPose;
+    visualizer._createHumanoidCooperativeRuledSurfaceDemoSurfaceFromPose = (poseLike, options) => {
+        capturedPose = poseLike;
+        capturedOptions = options;
+        return planeSurface;
+    };
+    visualizer._createHumanoidSurfaceSlideDemoSurfaceFromPose = () => {
+        throw new Error('left ruled-surface polishing should still route fallback placement through the cooperative surface builder');
+    };
+
+    try {
+        const state = visualizer._ensureHumanoidLeftRuledSurfacePolishingState();
+        assert.ok(state);
+        assert.equal(state.surface, planeSurface);
+        assert.deepEqual(capturedPose.position.map((value) => Number(value.toFixed(6))), [0.5, 0.5, -0.15]);
+        assert.deepEqual(capturedPose.quaternion, [1, 0, 0, 0]);
+        assert.ok(Math.abs(capturedOptions.spanV - 0.572666) < 1e-6);
+    } finally {
+        globalThis.window = originalWindow;
+    }
+});
+
+test('RobotVisualizer left ruled-surface polishing builds an explicit single-strip differential target for [u, v, n]', () => {
+    const visualizer = new RobotVisualizer(null);
+    const planeSurface = {
+        position: (u, v) => [u, v, 0],
+        du: () => [1, 0, 0],
+        dv: () => [0, 1, 0]
+    };
+    const currentState = {
+        modeKey: 'left-ruled-surface-polishing',
+        surface: planeSurface,
+        u: 0.35,
+        v: 0.5,
+        normalOffset: 0.05,
+        normalOffsetSign: 1,
+        normalOffsetBounds: [0, 0.16],
+        quaternionOffset: [1, 0, 0, 0],
+        bounds: { u: [0, 1], v: [0, 1] }
+    };
+    const nextState = {
+        ...currentState,
+        u: 0.36,
+        v: 0.52,
+        normalOffset: 0.06
+    };
+
+    const explicitCommand = visualizer._buildHumanoidLeftRuledSurfacePolishingExplicitCommand(
+        currentState,
+        nextState
+    );
+
+    assert.deepEqual(
+        explicitCommand.parameterDelta.map((value) => Number(value.toFixed(6))),
+        [0.01, 0.02, 0.01]
+    );
+    assert.equal(explicitCommand.surfaceJacobian.length, 8);
+    assert.equal(explicitCommand.surfaceJacobian[0].length, 3);
+    assert.deepEqual(
+        explicitCommand.commandTargetArray.map((value) => Number(value.toFixed(6))),
+        [0, 0, 0, 0, 0, 0.005, 0.01, 0.005]
+    );
+});
+
+test('RobotVisualizer cooperative ruled-surface polishing builds an explicit chain-rule differential target for shared-strip parameters', () => {
+    const visualizer = new RobotVisualizer(null);
+    const sharedSurface = {
+        position: (u, v) => [u, v, 0],
+        du: () => [1, 0, 0],
+        dv: () => [0, 1, 0]
+    };
+    const currentState = visualizer._normalizeHumanoidCooperativeRuledSurfacePolishingState({
+        modeKey: 'cooperative-ruled-surface-polishing',
+        surface: sharedSurface,
+        u: 0.35,
+        vCenter: 0.50,
+        stripSpacing: 0.20,
+        normalOffset: 0.05,
+        normalOffsetSign: 1,
+        normalOffsetBounds: [0, 0.16],
+        stripSpacingBounds: [0.08, 0.6],
+        leftVSign: 1,
+        leftQuaternionOffset: [1, 0, 0, 0],
+        rightQuaternionOffset: [1, 0, 0, 0],
+        bounds: { u: [0, 1], v: [0, 1] }
+    });
+    const nextState = visualizer._normalizeHumanoidCooperativeRuledSurfacePolishingState({
+        ...visualizer._cloneHumanoidCooperativeRuledSurfacePolishingState(currentState),
+        u: 0.36,
+        vCenter: 0.52,
+        stripSpacing: 0.24,
+        normalOffset: 0.06
+    });
+
+    const explicitCommand = visualizer._buildHumanoidCooperativeRuledSurfacePolishingExplicitCommand(
+        currentState,
+        nextState
+    );
+
+    assert.deepEqual(
+        explicitCommand.parameterDelta.map((value) => Number(value.toFixed(6))),
+        [0.01, 0.02, 0.04, 0.01]
+    );
+    assert.equal(explicitCommand.cooperativeJacobian.length, 16);
+    assert.equal(explicitCommand.cooperativeJacobian[0].length, 4);
+    assert.deepEqual(
+        explicitCommand.commandTargetArray.map((value) => Number(value.toFixed(6))),
+        [
+            0, 0, 0, 0, 0, 0.005, 0.02, 0.005,
+            0, 0, 0, 0, 0, 0.005, 0, 0.005
+        ]
+    );
+});
+
+test('RobotVisualizer cooperative ruled-surface polishing forwards explicit shared-strip differentials without tube invariants into bimanual restoration', async () => {
     const visualizer = new RobotVisualizer(null);
     const originalWindow = globalThis.window;
     const sharedSurface = {
@@ -2133,16 +2421,17 @@ test('RobotVisualizer cooperative ruled-surface polishing forwards shared strip 
     visualizer._getHumanoidJogSolverMode = () => 'mj_restore_tr';
     visualizer._buildHumanoidMJRestoreInternalOptions = () => ({});
     visualizer._updateHumanoidSurfaceSlideVisualization = () => {};
-    visualizer._buildHumanoidSurfaceSlideDQTargetArray = () => [1, 0, 0, 0, 0, 0, 0, 0];
-    visualizer._updateHumanoidJointsFromDualIndependentSurfaceTargetsMJRestore = async (...args) => {
-        capturedArgs = args;
+    visualizer._updateHumanoidCooperativeRuledSurfacePolishingDifferentialMJRestore = async (...args) => {
+        capturedArgs = args.map((value, index) => (index <= 1 && value && typeof value === 'object')
+            ? JSON.parse(JSON.stringify(value))
+            : value);
         visualizer.lastIKSolveStatus = {
             solver: 'mj_restore_tr',
             mode: 'humanoid_cooperative_ruled_surface_polishing',
             converged: false,
             applied: true,
             reason: 'best_effort',
-            message: 'MuJoCo 风格恢复 保留最后可行小步。'
+            message: 'Restore (LS) 保留最后可行小步。'
         };
         return true;
     };
@@ -2150,17 +2439,889 @@ test('RobotVisualizer cooperative ruled-surface polishing forwards shared strip 
     try {
         const ok = await visualizer.moveHumanoidCooperativeRuledSurfacePolishingAlongParameter('x', 'positive');
         assert.equal(ok, true);
-        assert.equal(Number(cooperativeState.u.toFixed(3)), 0.36);
+        assert.equal(Number(cooperativeState.u.toFixed(3)), 0.37);
         assert.ok(Array.isArray(capturedArgs));
+        assert.equal(Number(capturedArgs[0]?.u?.toFixed(3)), 0.35);
+        assert.equal(Number(capturedArgs[1]?.u?.toFixed(3)), 0.37);
         assert.equal(capturedArgs[3], true);
         assert.equal(capturedArgs[4], true);
         assert.equal(capturedArgs[5], true);
         assert.equal(capturedArgs[6]?.controlModeOverride, 'cooperative-ruled-surface-polishing');
         assert.equal(capturedArgs[6]?.statusModeOverride, 'humanoid_cooperative_ruled_surface_polishing');
-        assert.equal(capturedArgs[6]?.bestEffortAppliedCommandNormCap, 0.08);
-        assert.equal(capturedArgs[6]?.bestEffortAppliedInvariantNormCap, 0.01);
-        assert.equal(capturedArgs[6]?.leftTubeInvariant?.kind, 'plucker_tube');
-        assert.equal(capturedArgs[6]?.rightTubeInvariant?.kind, 'plucker_tube');
+        assert.equal(capturedArgs[6]?.bestEffortAppliedCommandNormCap, 0.005);
+        assert.equal(capturedArgs[6]?.bestEffortAppliedInvariantNormCap, 0.002);
+        assert.equal(capturedArgs[6]?.requireHardConvergenceToApply, undefined);
+        assert.equal(capturedArgs[6]?.leftTubeInvariant, undefined);
+        assert.equal(capturedArgs[6]?.rightTubeInvariant, undefined);
+    } finally {
+        globalThis.window = originalWindow;
+    }
+});
+
+test('RobotVisualizer cooperative ruled-surface polishing can route into the parallel DQ set-point mode for comparison', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const originalWindow = globalThis.window;
+    const sharedSurface = {
+        position: (u, v) => [u, v, 0],
+        du: () => [1, 0, 0],
+        dv: () => [0, 1, 0]
+    };
+    const cooperativeState = {
+        modeKey: 'cooperative-ruled-surface-polishing-dq-setpoint',
+        surface: sharedSurface,
+        u: 0.35,
+        vCenter: 0.5,
+        stripSpacing: 0.24,
+        normalOffset: 0.06,
+        normalOffsetBounds: [0, 0.16],
+        stripSpacingBounds: [0.08, 0.6],
+        leftQuaternionOffset: [1, 0, 0, 0],
+        rightQuaternionOffset: [1, 0, 0, 0],
+        bounds: { u: [0, 1], v: [0, 1] }
+    };
+    let capturedArgs = null;
+
+    globalThis.window = {
+        humanoidQ: new Array(20).fill(0)
+    };
+
+    visualizer.humanoidMode = true;
+    visualizer._ensureHumanoidCooperativeRuledSurfacePolishingState = () => cooperativeState;
+    visualizer._getHumanoidCooperativeRuledSurfacePolishingControlMode = () => 'cooperative-ruled-surface-polishing-dq-setpoint';
+    visualizer._isHumanoidMJRestoreLikeSolverEnabled = () => true;
+    visualizer._getHumanoidJogSolverMode = () => 'mj_restore_tr';
+    visualizer._buildHumanoidMJRestoreInternalOptions = () => ({});
+    visualizer._updateHumanoidSurfaceSlideVisualization = () => {};
+    visualizer._updateHumanoidCooperativeRuledSurfacePolishingDQSetpointMJRestore = async (...args) => {
+        capturedArgs = args;
+        visualizer.lastIKSolveStatus = {
+            solver: 'mj_restore_tr',
+            mode: 'humanoid_cooperative_ruled_surface_polishing_dq_setpoint',
+            converged: false,
+            applied: true,
+            reason: 'best_effort',
+            message: '恢复优化(TR) 保留最后可行小步。'
+        };
+        return true;
+    };
+    visualizer._updateHumanoidCooperativeRuledSurfacePolishingDifferentialMJRestore = async () => {
+        throw new Error('legacy differential path should not be used for dq set-point mode');
+    };
+
+    try {
+        const ok = await visualizer.moveHumanoidCooperativeRuledSurfacePolishingAlongParameter('x', 'positive');
+        assert.equal(ok, true);
+        assert.ok(Array.isArray(capturedArgs));
+        assert.equal(Number(cooperativeState.u.toFixed(3)), 0.37);
+        assert.equal(Number(capturedArgs[1]?.u?.toFixed(3)), 0.37);
+        assert.equal(capturedArgs[6]?.controlModeOverride, 'cooperative-ruled-surface-polishing-dq-setpoint');
+        assert.equal(capturedArgs[6]?.statusModeOverride, 'humanoid_cooperative_ruled_surface_polishing_dq_setpoint');
+    } finally {
+        globalThis.window = originalWindow;
+    }
+});
+
+test('RobotVisualizer cooperative ruled-surface polishing DQ set-point mode forwards dedicated WASM targets into the custom restore path', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const leftTarget = new Array(8).fill(0.1);
+    const rightTarget = new Array(8).fill(-0.1);
+    let observedOptions = null;
+
+    visualizer._buildHumanoidCooperativeRuledSurfacePolishingDQSetpointTargets = () => ({
+        leftDQTargetArray: leftTarget.slice(),
+        rightDQTargetArray: rightTarget.slice(),
+        poseTargets: [{}, {}]
+    });
+    visualizer._getHumanoidJointLimits = () => new Array(20).fill(null).map(() => ({ lower: -1, upper: 1 }));
+    visualizer._humanoidSingleArmPlusWaistCoordinatedIndices = () => [0, 1, 2];
+    visualizer._updateHumanoidCustomPoseTargetMJRestore = async (options) => {
+        observedOptions = options;
+        return true;
+    };
+
+    await visualizer._updateHumanoidCooperativeRuledSurfacePolishingDQSetpointMJRestore(
+        { modeKey: 'cooperative-ruled-surface-polishing-dq-setpoint' },
+        { modeKey: 'cooperative-ruled-surface-polishing-dq-setpoint' },
+        new Array(20).fill(0),
+        true,
+        true,
+        true,
+        { solverMode: 'mj_restore_tr' }
+    );
+
+    assert.ok(observedOptions);
+    assert.equal(observedOptions.internalOptions.wasmSolveVariant, 'cooperative_dq_setpoint');
+    assert.deepEqual(observedOptions.internalOptions.wasmLeftTarget, leftTarget);
+    assert.deepEqual(observedOptions.internalOptions.wasmRightTarget, rightTarget);
+});
+
+test('RobotVisualizer cooperative ruled-surface polishing arm-only DQ set-point mode disables waist and body-z in the custom restore path', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const originalWindow = globalThis.window;
+    const sharedSurface = {
+        position: (u, v) => [u, v, 0],
+        du: () => [1, 0, 0],
+        dv: () => [0, 1, 0]
+    };
+    const cooperativeState = {
+        modeKey: 'cooperative-ruled-surface-polishing-dq-setpoint-arm-only',
+        surface: sharedSurface,
+        u: 0.35,
+        vCenter: 0.5,
+        stripSpacing: 0.24,
+        normalOffset: 0.06,
+        normalOffsetBounds: [0, 0.16],
+        stripSpacingBounds: [0.08, 0.6],
+        leftQuaternionOffset: [1, 0, 0, 0],
+        rightQuaternionOffset: [1, 0, 0, 0],
+        bounds: { u: [0, 1], v: [0, 1] }
+    };
+    let capturedArgs = null;
+
+    globalThis.window = {
+        humanoidQ: new Array(20).fill(0)
+    };
+
+    visualizer.humanoidMode = true;
+    visualizer._ensureHumanoidCooperativeRuledSurfacePolishingState = () => cooperativeState;
+    visualizer._getHumanoidCooperativeRuledSurfacePolishingControlMode = () => 'cooperative-ruled-surface-polishing-dq-setpoint-arm-only';
+    visualizer._isHumanoidMJRestoreLikeSolverEnabled = () => true;
+    visualizer._getHumanoidJogSolverMode = () => 'mj_restore_tr';
+    visualizer._buildHumanoidMJRestoreInternalOptions = () => ({});
+    visualizer._updateHumanoidSurfaceSlideVisualization = () => {};
+    visualizer._updateHumanoidCooperativeRuledSurfacePolishingDQSetpointMJRestore = async (...args) => {
+        capturedArgs = args;
+        return true;
+    };
+
+    try {
+        const ok = await visualizer.moveHumanoidCooperativeRuledSurfacePolishingAlongParameter('x', 'positive');
+        assert.equal(ok, true);
+        assert.ok(Array.isArray(capturedArgs));
+        assert.equal(capturedArgs[4], false);
+        assert.equal(capturedArgs[5], false);
+        assert.equal(capturedArgs[6]?.controlModeOverride, 'cooperative-ruled-surface-polishing-dq-setpoint-arm-only');
+    } finally {
+        globalThis.window = originalWindow;
+    }
+});
+
+test('RobotVisualizer cooperative ruled-surface polishing waist-maintained DQ set-point mode keeps waist and body-z in the custom restore path', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const originalWindow = globalThis.window;
+    const sharedSurface = {
+        position: (u, v) => [u, v, 0],
+        du: () => [1, 0, 0],
+        dv: () => [0, 1, 0]
+    };
+    const cooperativeState = {
+        modeKey: 'cooperative-ruled-surface-polishing-dq-setpoint',
+        surface: sharedSurface,
+        u: 0.35,
+        vCenter: 0.5,
+        stripSpacing: 0.24,
+        normalOffset: 0.06,
+        normalOffsetBounds: [0, 0.16],
+        stripSpacingBounds: [0.08, 0.6],
+        leftQuaternionOffset: [1, 0, 0, 0],
+        rightQuaternionOffset: [1, 0, 0, 0],
+        bounds: { u: [0, 1], v: [0, 1] }
+    };
+    let capturedArgs = null;
+
+    globalThis.window = {
+        humanoidQ: new Array(20).fill(0)
+    };
+
+    visualizer.humanoidMode = true;
+    visualizer._ensureHumanoidCooperativeRuledSurfacePolishingState = () => cooperativeState;
+    visualizer._getHumanoidCooperativeRuledSurfacePolishingControlMode = () => 'cooperative-ruled-surface-polishing-dq-setpoint';
+    visualizer._isHumanoidMJRestoreLikeSolverEnabled = () => true;
+    visualizer._getHumanoidJogSolverMode = () => 'mj_restore_tr';
+    visualizer._buildHumanoidMJRestoreInternalOptions = () => ({});
+    visualizer._updateHumanoidSurfaceSlideVisualization = () => {};
+    visualizer._updateHumanoidCooperativeRuledSurfacePolishingDQSetpointMJRestore = async (...args) => {
+        capturedArgs = args;
+        return true;
+    };
+
+    try {
+        const ok = await visualizer.moveHumanoidCooperativeRuledSurfacePolishingAlongParameter('x', 'positive');
+        assert.equal(ok, true);
+        assert.ok(Array.isArray(capturedArgs));
+        assert.equal(capturedArgs[4], true);
+        assert.equal(capturedArgs[5], true);
+        assert.equal(capturedArgs[6]?.controlModeOverride, 'cooperative-ruled-surface-polishing-dq-setpoint');
+    } finally {
+        globalThis.window = originalWindow;
+    }
+});
+
+test('RobotVisualizer DQ set-point error model uses the right constrained Jacobian operator from the reference formulation', () => {
+    const visualizer = new RobotVisualizer(null);
+    const originalWindow = globalThis.window;
+    const identityDQ = [1, 0, 0, 0, 0, 0, 0, 0];
+    const targetDQ = [
+        Math.SQRT1_2,
+        0,
+        0,
+        Math.SQRT1_2,
+        0,
+        0,
+        0,
+        0
+    ];
+    const poseJacobian = [
+        [1, 2],
+        [3, 4],
+        [5, 6],
+        [7, 8],
+        [9, 10],
+        [11, 12],
+        [13, 14],
+        [15, 16]
+    ];
+
+    const multiplyQuaternion = (left, right) => {
+        const [lw, lx, ly, lz] = left;
+        const [rw, rx, ry, rz] = right;
+        return [
+            lw * rw - lx * rx - ly * ry - lz * rz,
+            lw * rx + lx * rw + ly * rz - lz * ry,
+            lw * ry - lx * rz + ly * rw + lz * rx,
+            lw * rz + lx * ry - ly * rx + lz * rw
+        ];
+    };
+
+    const addQuaternion = (left, right) => left.map((value, index) => value + right[index]);
+
+    const conjugateDQ = (dq) => [
+        dq[0], -dq[1], -dq[2], -dq[3],
+        dq[4], -dq[5], -dq[6], -dq[7]
+    ];
+
+    const multiplyDQ = (left, right) => {
+        const leftPrimal = left.slice(0, 4);
+        const leftDual = left.slice(4, 8);
+        const rightPrimal = right.slice(0, 4);
+        const rightDual = right.slice(4, 8);
+        const primal = multiplyQuaternion(leftPrimal, rightPrimal);
+        const dual = addQuaternion(
+            multiplyQuaternion(leftPrimal, rightDual),
+            multiplyQuaternion(leftDual, rightPrimal)
+        );
+        return primal.concat(dual);
+    };
+
+    const buildRightMatrix = (rightDQ) => {
+        const matrix = Array.from({ length: 8 }, () => new Array(8).fill(0));
+        for (let column = 0; column < 8; column += 1) {
+            const basis = new Array(8).fill(0);
+            basis[column] = 1;
+            const resultColumn = multiplyDQ(basis, rightDQ);
+            for (let row = 0; row < 8; row += 1) {
+                matrix[row][column] = resultColumn[row];
+            }
+        }
+        return matrix;
+    };
+
+    const multiplyMatrix = (left, right) => {
+        const out = Array.from({ length: left.length }, () => new Array(right[0].length).fill(0));
+        for (let row = 0; row < left.length; row += 1) {
+            for (let column = 0; column < right[0].length; column += 1) {
+                let sum = 0;
+                for (let k = 0; k < right.length; k += 1) {
+                    sum += left[row][k] * right[k][column];
+                }
+                out[row][column] = sum;
+            }
+        }
+        return out;
+    };
+
+    globalThis.window = {
+        DQModule: {
+            DQWrapper: {
+                createFromArray: (value) => value,
+                conjugate: conjugateDQ,
+                multiply: multiplyDQ,
+                toArray: (value) => value
+            }
+        }
+    };
+
+    try {
+        const model = visualizer._buildHumanoidDQSetpointErrorModel(identityDQ, targetDQ, poseJacobian);
+        assert.ok(model);
+        const d8 = [
+            [1, 0, 0, 0, 0, 0, 0, 0],
+            [0, -1, 0, 0, 0, 0, 0, 0],
+            [0, 0, -1, 0, 0, 0, 0, 0],
+            [0, 0, 0, -1, 0, 0, 0, 0],
+            [0, 0, 0, 0, 1, 0, 0, 0],
+            [0, 0, 0, 0, 0, -1, 0, 0],
+            [0, 0, 0, 0, 0, 0, -1, 0],
+            [0, 0, 0, 0, 0, 0, 0, -1]
+        ];
+        const expectedRight = multiplyMatrix(buildRightMatrix(targetDQ), multiplyMatrix(d8, poseJacobian))
+            .map((row) => row.map((value) => -value));
+
+        assert.deepEqual(model.error.map((value) => (Object.is(value, -0) ? 0 : value)), [
+            1 - Math.SQRT1_2, 0, 0, -Math.SQRT1_2, 0, 0, 0, 0
+        ]);
+        assert.deepEqual(model.jacobian, expectedRight);
+    } finally {
+        if (originalWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = originalWindow;
+        }
+    }
+});
+
+test('RobotVisualizer DQ set-point error model Jacobian matches finite differences for a simple one-DoF rotation path', () => {
+    const visualizer = new RobotVisualizer(null);
+    const originalWindow = globalThis.window;
+    const targetDQ = [
+        Math.cos(Math.PI / 8), 0, 0, Math.sin(Math.PI / 8),
+        0, 0, 0, 0
+    ];
+    const buildPose = (q) => [
+        Math.cos(q / 2), 0, 0, Math.sin(q / 2),
+        0, 0, 0, 0
+    ];
+    const buildJacobian = (q) => [
+        [-0.5 * Math.sin(q / 2)],
+        [0],
+        [0],
+        [0.5 * Math.cos(q / 2)],
+        [0],
+        [0],
+        [0],
+        [0]
+    ];
+    const q0 = 0.2;
+    const eps = 1e-7;
+
+    const multiplyQuaternion = (left, right) => {
+        const [lw, lx, ly, lz] = left;
+        const [rw, rx, ry, rz] = right;
+        return [
+            lw * rw - lx * rx - ly * ry - lz * rz,
+            lw * rx + lx * rw + ly * rz - lz * ry,
+            lw * ry - lx * rz + ly * rw + lz * rx,
+            lw * rz + lx * ry - ly * rx + lz * rw
+        ];
+    };
+
+    const addQuaternion = (left, right) => left.map((value, index) => value + right[index]);
+
+    const conjugateDQ = (dq) => [
+        dq[0], -dq[1], -dq[2], -dq[3],
+        dq[4], -dq[5], -dq[6], -dq[7]
+    ];
+
+    const multiplyDQ = (left, right) => {
+        const leftPrimal = left.slice(0, 4);
+        const leftDual = left.slice(4, 8);
+        const rightPrimal = right.slice(0, 4);
+        const rightDual = right.slice(4, 8);
+        const primal = multiplyQuaternion(leftPrimal, rightPrimal);
+        const dual = addQuaternion(
+            multiplyQuaternion(leftPrimal, rightDual),
+            multiplyQuaternion(leftDual, rightPrimal)
+        );
+        return primal.concat(dual);
+    };
+
+    globalThis.window = {
+        DQModule: {
+            DQWrapper: {
+                createFromArray: (value) => value,
+                conjugate: conjugateDQ,
+                multiply: multiplyDQ,
+                toArray: (value) => value
+            }
+        }
+    };
+
+    try {
+        const model = visualizer._buildHumanoidDQSetpointErrorModel(buildPose(q0), targetDQ, buildJacobian(q0));
+        assert.ok(model);
+        const errorPlus = visualizer._computeHumanoidDQSetpointError(buildPose(q0 + eps), targetDQ);
+        const errorMinus = visualizer._computeHumanoidDQSetpointError(buildPose(q0 - eps), targetDQ);
+        const fd = errorPlus.map((value, index) => (value - errorMinus[index]) / (2 * eps));
+        const jacColumn = model.jacobian.map((row) => row[0]);
+        for (let index = 0; index < fd.length; index += 1) {
+            assert.ok(Math.abs(fd[index] - jacColumn[index]) < 1e-6, `row ${index}: expected ${fd[index]}, got ${jacColumn[index]}`);
+        }
+    } finally {
+        if (originalWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = originalWindow;
+        }
+    }
+});
+
+test('RobotVisualizer cooperative ruled-surface polishing relies on DQ restoration outcome without injecting a cartesian post-apply guard', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const originalWindow = globalThis.window;
+    const sharedSurface = {
+        position: (u, v) => [u, v, 0],
+        du: () => [1, 0, 0],
+        dv: () => [0, 1, 0],
+        lineAt: (u) => ({
+            kind: 'plucker_line',
+            direction: [0, 1, 0],
+            moment: [0.06 + u, 0, 0],
+            closestPoint: [u, 0, -0.06],
+            referenceCoordinate: 0,
+            pointAtCoordinate: (coordinate) => [u, coordinate, -0.06]
+        }),
+        tubeAt: (u, radius) => ({
+            kind: 'plucker_tube',
+            line: {
+                kind: 'plucker_line',
+                direction: [0, 1, 0],
+                moment: [0.06 + u, 0, 0],
+                closestPoint: [u, 0, -0.06],
+                referenceCoordinate: 0,
+                pointAtCoordinate: (coordinate) => [u, coordinate, -0.06]
+            },
+            radius,
+            radiusSquared: radius * radius
+        })
+    };
+    const currentState = {
+        modeKey: 'cooperative-ruled-surface-polishing',
+        surface: sharedSurface,
+        u: 0.35,
+        vCenter: 0.5,
+        stripSpacing: 0.24,
+        normalOffset: 0.06,
+        normalOffsetBounds: [0, 0.16],
+        stripSpacingBounds: [0.08, 0.6],
+        leftQuaternionOffset: [1, 0, 0, 0],
+        rightQuaternionOffset: [1, 0, 0, 0],
+        bounds: { u: [0, 1], v: [0, 1] }
+    };
+    const nextState = {
+        ...currentState,
+        u: 0.36
+    };
+    let capturedOptions = null;
+
+    globalThis.window = {
+        humanoidQ: new Array(20).fill(0)
+    };
+
+    visualizer.humanoidModel = {};
+    visualizer._getHumanoidPose1 = () => [1, 0, 0, 0, 0, 0, 0, 0];
+    visualizer._getHumanoidPose2 = () => [1, 0, 0, 0, 0, 0, 0, 0];
+    visualizer._getHumanoidSingleArmPoseJacobian = () => Array.from({ length: 8 }, (_, rowIndex) =>
+        new Array(20).fill(0).map((_, colIndex) => (rowIndex === 4 && colIndex === 0 ? 1 : 0))
+    );
+    visualizer._getHumanoidPose1Jacobian = visualizer._getHumanoidSingleArmPoseJacobian;
+    visualizer._getHumanoidPose2Jacobian = visualizer._getHumanoidSingleArmPoseJacobian;
+    visualizer._getHumanoidJointLimits = () => new Array(20).fill(null).map(() => ({ lower: -Math.PI, upper: Math.PI }));
+    visualizer._getHumanoidBodyVerticalState = () => ({ residual: [], jacobian: [] });
+    visualizer._buildManipulabilityVFIConstraints = () => [];
+    visualizer._extractHumanoidWVFIConstraintDiagnostics = () => ({});
+    visualizer._extractHumanoidWaistXCorridorDiagnostics = () => ({});
+    visualizer._publishHumanoidJogDiagnostics = () => {};
+    visualizer._notifyHumanoidJogUnreachable = () => {};
+    visualizer._applyHumanoidJointSolution = () => true;
+    visualizer._updateHumanoidCustomPoseTargetMJRestore = async (options) => {
+        capturedOptions = options;
+        return true;
+    };
+
+    try {
+        const ok = await visualizer._updateHumanoidCooperativeRuledSurfacePolishingDifferentialMJRestore(
+            currentState,
+            nextState,
+            new Array(20).fill(0),
+            true,
+            true,
+            true,
+            {}
+        );
+        assert.equal(ok, true);
+        assert.equal(capturedOptions?.internalOptions?.postApplyAcceptanceEvaluator, undefined);
+        assert.equal(capturedOptions?.internalOptions?.disallowBestEffortApply, undefined);
+        assert.equal(capturedOptions?.bodyEqualityTolerance, 1e-6);
+        assert.equal(capturedOptions?.extraInvariantTargetArray, null);
+        assert.equal(capturedOptions?.extraInvariantEvaluator, null);
+    } finally {
+        globalThis.window = originalWindow;
+    }
+});
+
+test('RobotVisualizer cooperative ruled-surface polishing cartesian acceptance uses a strict default max position error', () => {
+    const visualizer = new RobotVisualizer(null);
+
+    visualizer._getHumanoidPose1 = () => [1, 0, 0, 0, 0, 0, 0, 0];
+    visualizer._getHumanoidPose2 = () => [1, 0, 0, 0, 0, 0, 0, 0];
+    visualizer._computeHumanoidCooperativeRuledSurfacePolishingPositionResidual = () => [0.02, 0, 0, 0, 0, 0];
+
+    const acceptance = visualizer._evaluateHumanoidCooperativeRuledSurfacePolishingCartesianAcceptance(
+        { surface: {} },
+        new Array(20).fill(0)
+    );
+
+    assert.equal(acceptance?.accepted, false);
+    assert.equal(acceptance?.reason, 'command_mismatch');
+    assert.equal(Number(acceptance?.maxPositionError?.toFixed(3)), 0.02);
+});
+
+test('RobotVisualizer left ruled-surface polishing forwards explicit differential commands and fixed-arm invariants into single-arm restoration', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const sharedSurface = {
+        position: (u, v) => [u, v, 0],
+        du: () => [1, 0, 0],
+        dv: () => [0, 1, 0],
+        lineAt: (u) => ({
+            kind: 'plucker_line',
+            direction: [0, 1, 0],
+            moment: [0.06 + u, 0, 0],
+            closestPoint: [u, 0, -0.06],
+            referenceCoordinate: 0,
+            pointAtCoordinate: (coordinate) => [u, coordinate, -0.06]
+        }),
+        tubeAt: (u, radius) => ({
+            kind: 'plucker_tube',
+            line: {
+                kind: 'plucker_line',
+                direction: [0, 1, 0],
+                moment: [0.06 + u, 0, 0],
+                closestPoint: [u, 0, -0.06],
+                referenceCoordinate: 0,
+                pointAtCoordinate: (coordinate) => [u, coordinate, -0.06]
+            },
+            radius,
+            radiusSquared: radius * radius
+        })
+    };
+    const currentState = {
+        modeKey: 'left-ruled-surface-polishing',
+        surface: sharedSurface,
+        u: 0.35,
+        v: 0.5,
+        normalOffset: 0.06,
+        normalOffsetSign: 1,
+        normalOffsetBounds: [0, 0.16],
+        quaternionOffset: [1, 0, 0, 0],
+        bounds: { u: [0, 1], v: [0, 1] }
+    };
+    const nextState = {
+        ...currentState,
+        u: 0.36
+    };
+    let capturedConfig = null;
+    const surfaceTubeInvariant = {
+        ...sharedSurface.tubeAt(0.35, 0.06),
+        weight: 0.42
+    };
+
+    visualizer.humanoidWaistLength = 3;
+    visualizer.humanoidLeftArmLength = 7;
+    visualizer.humanoidRightArmLength = 7;
+    visualizer._getHumanoidPose1 = () => [1, 0, 0, 0, 0.35, 0.5, 0.06, 0];
+    visualizer._getHumanoidJointLimits = () => null;
+    visualizer._updateHumanoidCustomPoseTargetMJRestore = async (config) => {
+        capturedConfig = config;
+        return true;
+    };
+
+    const ok = await visualizer._updateHumanoidLeftRuledSurfacePolishingDifferentialMJRestore(
+        currentState,
+        nextState,
+        new Array(17).fill(0),
+        true,
+        {
+            solverMode: 'mj_restore_tr',
+            surfaceTubeInvariant
+        }
+    );
+
+    assert.equal(ok, true);
+    assert.ok(capturedConfig);
+    assert.equal(capturedConfig.modeTag, 'left-ruled-surface-polishing-target');
+    assert.equal(capturedConfig.statusMode, 'humanoid_left_ruled_surface_polishing');
+    assert.equal(capturedConfig.armStart, 3);
+    assert.equal(capturedConfig.activeCount, 7);
+    assert.deepEqual(
+        capturedConfig.dqTargetArray.map((value) => Number(value.toFixed(6))),
+        [0, 0, 0, 0, 0, 0.005, 0, 0]
+    );
+    assert.deepEqual(capturedConfig.extraInvariantTargetArray, [0]);
+    assert.equal(typeof capturedConfig.extraInvariantEvaluator, 'function');
+    assert.equal(capturedConfig.invariantWeight, 0.42);
+    assert.equal(capturedConfig.internalOptions?.disallowBestEffortApply, true);
+
+    visualizer._getHumanoidSingleArmTranslationJacobian = () => [
+        [1, 0, 0, 0, 0, 0, 0],
+        [0, 1, 0, 0, 0, 0, 0],
+        [0, 0, 1, 0, 0, 0, 0]
+    ];
+    const originalWindow = globalThis.window;
+    globalThis.window = {};
+    try {
+        assert.doesNotThrow(() => {
+            const invariantState = capturedConfig.extraInvariantEvaluator({
+                qFull: new Array(17).fill(0),
+                pose: [0, 0, 0, 0, 0, 0.005, 0, 0]
+            });
+            assert.equal(Array.isArray(invariantState?.current), true);
+            assert.equal(Array.isArray(invariantState?.jacobian), true);
+            assert.equal(invariantState.current.length, 1);
+            assert.equal(invariantState.jacobian.length, 1);
+            assert.equal(invariantState.jacobian[0].length, 7);
+        });
+    } finally {
+        globalThis.window = originalWindow;
+    }
+});
+
+test('RobotVisualizer left ruled-surface polishing forwards explicit differential commands and surface-tube protection into parameter motion', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const originalWindow = globalThis.window;
+    const sharedSurface = {
+        position: (u, v) => [u, v, 0],
+        du: () => [1, 0, 0],
+        dv: () => [0, 1, 0],
+        lineAt: (u) => ({
+            kind: 'plucker_line',
+            direction: [0, 1, 0],
+            moment: [0.06 + u, 0, 0],
+            closestPoint: [u, 0, -0.06],
+            referenceCoordinate: 0,
+            pointAtCoordinate: (coordinate) => [u, coordinate, -0.06]
+        }),
+        tubeAt: (u, radius) => ({
+            kind: 'plucker_tube',
+            line: {
+                kind: 'plucker_line',
+                direction: [0, 1, 0],
+                moment: [0.06 + u, 0, 0],
+                closestPoint: [u, 0, -0.06],
+                referenceCoordinate: 0,
+                pointAtCoordinate: (coordinate) => [u, coordinate, -0.06]
+            },
+            radius,
+            radiusSquared: radius * radius
+        })
+    };
+    const surfaceState = {
+        modeKey: 'left-ruled-surface-polishing',
+        surface: sharedSurface,
+        u: 0.35,
+        v: 0.5,
+        normalOffset: 0.06,
+        normalOffsetBounds: [0, 0.16],
+        quaternionOffset: [1, 0, 0, 0],
+        bounds: { u: [0, 1], v: [0, 1] }
+    };
+    let capturedArgs = null;
+
+    globalThis.window = {
+        humanoidQ: new Array(20).fill(0)
+    };
+
+    visualizer.humanoidMode = true;
+    visualizer._ensureHumanoidLeftRuledSurfacePolishingState = () => surfaceState;
+    visualizer._isHumanoidMJRestoreLikeSolverEnabled = () => true;
+    visualizer._getHumanoidJogSolverMode = () => 'mj_restore_tr';
+    visualizer._buildHumanoidMJRestoreInternalOptions = () => ({});
+    visualizer._updateHumanoidSurfaceSlideVisualization = () => {};
+    visualizer._updateHumanoidLeftRuledSurfacePolishingDifferentialMJRestore = async (...args) => {
+        capturedArgs = args.map((value, index) => (index <= 1 && value && typeof value === 'object')
+            ? JSON.parse(JSON.stringify(value))
+            : value);
+        visualizer.lastIKSolveStatus = {
+            solver: 'mj_restore_tr',
+            mode: 'humanoid_left_ruled_surface_polishing',
+            converged: false,
+            applied: true,
+            reason: 'best_effort',
+            message: 'Restore (LS) 保留最后可行小步。'
+        };
+        return true;
+    };
+
+    try {
+        const ok = await visualizer.moveHumanoidLeftRuledSurfacePolishingAlongParameter('x', 'positive');
+        assert.equal(ok, true);
+        assert.equal(Number(surfaceState.u.toFixed(3)), 0.37);
+        assert.ok(Array.isArray(capturedArgs));
+        assert.equal(Number(capturedArgs[0]?.u?.toFixed(3)), 0.35);
+        assert.equal(Number(capturedArgs[1]?.u?.toFixed(3)), 0.37);
+        assert.equal(capturedArgs[3], true);
+        assert.equal(capturedArgs[4]?.controlModeOverride, 'left-ruled-surface-polishing');
+        assert.equal(capturedArgs[4]?.statusModeOverride, 'humanoid_left_ruled_surface_polishing');
+        assert.equal(capturedArgs[4]?.surfaceTubeInvariant?.kind, 'plucker_tube');
+    } finally {
+        globalThis.window = originalWindow;
+    }
+});
+
+test('RobotVisualizer left ruled-surface polishing keeps the previous state when the solve is not applied', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const originalWindow = globalThis.window;
+    const sharedSurface = {
+        position: (u, v) => [u, v, 0],
+        du: () => [1, 0, 0],
+        dv: () => [0, 1, 0],
+        lineAt: (u) => ({
+            kind: 'plucker_line',
+            direction: [0, 1, 0],
+            moment: [0.06 + u, 0, 0],
+            closestPoint: [u, 0, -0.06],
+            referenceCoordinate: 0,
+            pointAtCoordinate: (coordinate) => [u, coordinate, -0.06]
+        }),
+        tubeAt: (u, radius) => ({
+            kind: 'plucker_tube',
+            line: {
+                kind: 'plucker_line',
+                direction: [0, 1, 0],
+                moment: [0.06 + u, 0, 0],
+                closestPoint: [u, 0, -0.06],
+                referenceCoordinate: 0,
+                pointAtCoordinate: (coordinate) => [u, coordinate, -0.06]
+            },
+            radius,
+            radiusSquared: radius * radius
+        })
+    };
+    const surfaceState = {
+        modeKey: 'left-ruled-surface-polishing',
+        surface: sharedSurface,
+        u: 0.35,
+        v: 0.5,
+        normalOffset: 0.06,
+        normalOffsetBounds: [0, 0.16],
+        quaternionOffset: [1, 0, 0, 0],
+        bounds: { u: [0, 1], v: [0, 1] }
+    };
+    let visualizationRefreshCount = 0;
+
+    globalThis.window = {
+        humanoidQ: new Array(20).fill(0)
+    };
+
+    visualizer.humanoidMode = true;
+    visualizer._ensureHumanoidLeftRuledSurfacePolishingState = () => surfaceState;
+    visualizer._isHumanoidMJRestoreLikeSolverEnabled = () => true;
+    visualizer._getHumanoidJogSolverMode = () => 'mj_restore_tr';
+    visualizer._buildHumanoidMJRestoreInternalOptions = () => ({});
+    visualizer._updateHumanoidSurfaceSlideVisualization = () => {
+        visualizationRefreshCount += 1;
+    };
+    visualizer._updateHumanoidLeftRuledSurfacePolishingDifferentialMJRestore = async () => {
+        visualizer.lastIKSolveStatus = {
+            solver: 'mj_restore_tr',
+            mode: 'humanoid_left_ruled_surface_polishing',
+            converged: false,
+            applied: false,
+            reason: 'command_mismatch',
+            message: '无法到达该位置（目标未达成）。'
+        };
+        return false;
+    };
+
+    try {
+        const ok = await visualizer.moveHumanoidLeftRuledSurfacePolishingAlongParameter('x', 'negative');
+        assert.equal(ok, false);
+        assert.equal(Number(surfaceState.u.toFixed(3)), 0.35);
+        assert.equal(Number(surfaceState.v.toFixed(3)), 0.5);
+        assert.equal(Number(surfaceState.normalOffset.toFixed(3)), 0.06);
+        assert.ok(visualizationRefreshCount >= 1);
+    } finally {
+        globalThis.window = originalWindow;
+    }
+});
+
+test('RobotVisualizer left ruled-surface polishing retries smaller substeps when the full step is rejected', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const originalWindow = globalThis.window;
+    const sharedSurface = {
+        position: (u, v) => [u, v, 0],
+        du: () => [1, 0, 0],
+        dv: () => [0, 1, 0],
+        lineAt: (u) => ({
+            kind: 'plucker_line',
+            direction: [0, 1, 0],
+            moment: [0.06 + u, 0, 0],
+            closestPoint: [u, 0, -0.06],
+            referenceCoordinate: 0,
+            pointAtCoordinate: (coordinate) => [u, coordinate, -0.06]
+        }),
+        tubeAt: (u, radius) => ({
+            kind: 'plucker_tube',
+            line: {
+                kind: 'plucker_line',
+                direction: [0, 1, 0],
+                moment: [0.06 + u, 0, 0],
+                closestPoint: [u, 0, -0.06],
+                referenceCoordinate: 0,
+                pointAtCoordinate: (coordinate) => [u, coordinate, -0.06]
+            },
+            radius,
+            radiusSquared: radius * radius
+        })
+    };
+    const surfaceState = {
+        modeKey: 'left-ruled-surface-polishing',
+        surface: sharedSurface,
+        u: 0.35,
+        v: 0.5,
+        normalOffset: 0.06,
+        normalOffsetBounds: [0, 0.16],
+        quaternionOffset: [1, 0, 0, 0],
+        bounds: { u: [0, 1], v: [0, 1] }
+    };
+    const attemptedStates = [];
+
+    globalThis.window = {
+        humanoidQ: new Array(20).fill(0)
+    };
+
+    visualizer.humanoidMode = true;
+    visualizer._ensureHumanoidLeftRuledSurfacePolishingState = () => surfaceState;
+    visualizer._isHumanoidMJRestoreLikeSolverEnabled = () => true;
+    visualizer._getHumanoidJogSolverMode = () => 'mj_restore_tr';
+    visualizer._buildHumanoidMJRestoreInternalOptions = () => ({});
+    visualizer._updateHumanoidSurfaceSlideVisualization = () => {};
+    visualizer._updateHumanoidLeftRuledSurfacePolishingDifferentialMJRestore = async (_currentState, nextState) => {
+        attemptedStates.push({
+            u: nextState.u,
+            v: nextState.v,
+            normalOffset: nextState.normalOffset
+        });
+        const applied = attemptedStates.length >= 2;
+        visualizer.lastIKSolveStatus = {
+            solver: 'mj_restore_tr',
+            mode: 'humanoid_left_ruled_surface_polishing',
+            converged: applied,
+            applied,
+            reason: applied ? 'solved' : 'command_mismatch',
+            message: applied ? '恢复成功。' : '无法到达该位置（目标未达成）。'
+        };
+        return applied;
+    };
+
+    try {
+        const ok = await visualizer.moveHumanoidLeftRuledSurfacePolishingAlongParameter('x', 'positive');
+        assert.equal(ok, true);
+        assert.equal(attemptedStates.length, 2);
+        assert.equal(Number(attemptedStates[0].u.toFixed(3)), 0.37);
+        assert.equal(Number(attemptedStates[1].u.toFixed(3)), 0.36);
+        assert.equal(Number(surfaceState.u.toFixed(3)), 0.36);
+        assert.equal(Number(surfaceState.v.toFixed(3)), 0.5);
+        assert.equal(Number(surfaceState.normalOffset.toFixed(3)), 0.06);
     } finally {
         globalThis.window = originalWindow;
     }
@@ -2222,8 +3383,7 @@ test('RobotVisualizer cooperative ruled-surface polishing keeps the previous str
     visualizer._updateHumanoidSurfaceSlideVisualization = () => {
         visualizationRefreshCount += 1;
     };
-    visualizer._buildHumanoidSurfaceSlideDQTargetArray = () => [1, 0, 0, 0, 0, 0, 0, 0];
-    visualizer._updateHumanoidJointsFromDualIndependentSurfaceTargetsMJRestore = async () => {
+    visualizer._updateHumanoidCooperativeRuledSurfacePolishingDifferentialMJRestore = async () => {
         visualizer.lastIKSolveStatus = {
             solver: 'mj_restore_tr',
             mode: 'humanoid_cooperative_ruled_surface_polishing',
@@ -2239,6 +3399,657 @@ test('RobotVisualizer cooperative ruled-surface polishing keeps the previous str
         const ok = await visualizer.moveHumanoidCooperativeRuledSurfacePolishingAlongParameter('x', 'negative');
         assert.equal(ok, false);
         assert.equal(Number(cooperativeState.u.toFixed(3)), 0.35);
+        assert.equal(Number(cooperativeState.vCenter.toFixed(3)), 0.5);
+        assert.equal(Number(cooperativeState.stripSpacing.toFixed(3)), 0.24);
+        assert.equal(Number(cooperativeState.normalOffset.toFixed(3)), 0.06);
+        assert.ok(visualizationRefreshCount >= 1);
+    } finally {
+        globalThis.window = originalWindow;
+    }
+});
+
+test('RobotVisualizer cooperative ruled-surface polishing keeps the previous strip state when the restore call returns truthy but marks the step as unapplied', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const originalWindow = globalThis.window;
+    const sharedSurface = {
+        position: (u, v) => [u, v, 0],
+        du: () => [1, 0, 0],
+        dv: () => [0, 1, 0],
+        lineAt: (u) => ({
+            kind: 'plucker_line',
+            direction: [0, 1, 0],
+            moment: [0.06 + u, 0, 0],
+            closestPoint: [u, 0, -0.06],
+            referenceCoordinate: 0,
+            pointAtCoordinate: (coordinate) => [u, coordinate, -0.06]
+        }),
+        tubeAt: (u, radius) => ({
+            kind: 'plucker_tube',
+            line: {
+                kind: 'plucker_line',
+                direction: [0, 1, 0],
+                moment: [0.06 + u, 0, 0],
+                closestPoint: [u, 0, -0.06],
+                referenceCoordinate: 0,
+                pointAtCoordinate: (coordinate) => [u, coordinate, -0.06]
+            },
+            radius,
+            radiusSquared: radius * radius
+        })
+    };
+    const cooperativeState = {
+        modeKey: 'cooperative-ruled-surface-polishing',
+        surface: sharedSurface,
+        u: 0.35,
+        vCenter: 0.5,
+        stripSpacing: 0.24,
+        normalOffset: 0.06,
+        normalOffsetBounds: [0, 0.16],
+        stripSpacingBounds: [0.08, 0.6],
+        leftQuaternionOffset: [1, 0, 0, 0],
+        rightQuaternionOffset: [1, 0, 0, 0],
+        bounds: { u: [0, 1], v: [0, 1] }
+    };
+    let visualizationRefreshCount = 0;
+
+    globalThis.window = {
+        humanoidQ: new Array(20).fill(0)
+    };
+
+    visualizer.humanoidMode = true;
+    visualizer._ensureHumanoidCooperativeRuledSurfacePolishingState = () => cooperativeState;
+    visualizer._isHumanoidMJRestoreLikeSolverEnabled = () => true;
+    visualizer._getHumanoidJogSolverMode = () => 'mj_restore_tr';
+    visualizer._buildHumanoidMJRestoreInternalOptions = () => ({});
+    visualizer._updateHumanoidSurfaceSlideVisualization = () => {
+        visualizationRefreshCount += 1;
+    };
+    visualizer._updateHumanoidCooperativeRuledSurfacePolishingDifferentialMJRestore = async () => {
+        visualizer.lastIKSolveStatus = {
+            solver: 'mj_restore_tr',
+            mode: 'humanoid_cooperative_ruled_surface_polishing',
+            converged: false,
+            applied: false,
+            reason: 'command_mismatch',
+            message: '无法到达该位置（目标未达成）。'
+        };
+        return true;
+    };
+
+    try {
+        const ok = await visualizer.moveHumanoidCooperativeRuledSurfacePolishingAlongParameter('x', 'positive');
+        assert.equal(ok, false);
+        assert.equal(Number(cooperativeState.u.toFixed(3)), 0.35);
+        assert.equal(Number(cooperativeState.vCenter.toFixed(3)), 0.5);
+        assert.equal(Number(cooperativeState.stripSpacing.toFixed(3)), 0.24);
+        assert.equal(Number(cooperativeState.normalOffset.toFixed(3)), 0.06);
+        assert.ok(visualizationRefreshCount >= 1);
+    } finally {
+        globalThis.window = originalWindow;
+    }
+});
+
+test('RobotVisualizer cooperative ruled-surface polishing does not retry smaller shared-strip substeps when the full step is rejected', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const originalWindow = globalThis.window;
+    const sharedSurface = {
+        position: (u, v) => [u, v, 0],
+        du: () => [1, 0, 0],
+        dv: () => [0, 1, 0],
+        lineAt: (u) => ({
+            kind: 'plucker_line',
+            direction: [0, 1, 0],
+            moment: [0.06 + u, 0, 0],
+            closestPoint: [u, 0, -0.06],
+            referenceCoordinate: 0,
+            pointAtCoordinate: (coordinate) => [u, coordinate, -0.06]
+        }),
+        tubeAt: (u, radius) => ({
+            kind: 'plucker_tube',
+            line: {
+                kind: 'plucker_line',
+                direction: [0, 1, 0],
+                moment: [0.06 + u, 0, 0],
+                closestPoint: [u, 0, -0.06],
+                referenceCoordinate: 0,
+                pointAtCoordinate: (coordinate) => [u, coordinate, -0.06]
+            },
+            radius,
+            radiusSquared: radius * radius
+        })
+    };
+    const cooperativeState = {
+        modeKey: 'cooperative-ruled-surface-polishing',
+        surface: sharedSurface,
+        u: 0.35,
+        vCenter: 0.5,
+        stripSpacing: 0.24,
+        normalOffset: 0.06,
+        normalOffsetBounds: [0, 0.16],
+        stripSpacingBounds: [0.08, 0.6],
+        leftQuaternionOffset: [1, 0, 0, 0],
+        rightQuaternionOffset: [1, 0, 0, 0],
+        bounds: { u: [0, 1], v: [0, 1] }
+    };
+    const attemptedStates = [];
+    let unreachableCount = 0;
+
+    globalThis.window = {
+        humanoidQ: new Array(20).fill(0)
+    };
+
+    visualizer.humanoidMode = true;
+    visualizer._ensureHumanoidCooperativeRuledSurfacePolishingState = () => cooperativeState;
+    visualizer._isHumanoidMJRestoreLikeSolverEnabled = () => true;
+    visualizer._getHumanoidJogSolverMode = () => 'mj_restore_tr';
+    visualizer._buildHumanoidMJRestoreInternalOptions = () => ({});
+    visualizer._updateHumanoidSurfaceSlideVisualization = () => {};
+    visualizer._notifyHumanoidJogUnreachable = () => {
+        unreachableCount += 1;
+    };
+    visualizer._updateHumanoidCooperativeRuledSurfacePolishingDifferentialMJRestore = async (_currentState, nextState) => {
+        attemptedStates.push({
+            u: nextState.u,
+            vCenter: nextState.vCenter,
+            stripSpacing: nextState.stripSpacing,
+            normalOffset: nextState.normalOffset
+        });
+        const applied = attemptedStates.length >= 2;
+        visualizer.lastIKSolveStatus = {
+            solver: 'mj_restore_tr',
+            mode: 'humanoid_cooperative_ruled_surface_polishing',
+            converged: applied,
+            applied,
+            reason: applied ? 'solved' : 'command_mismatch',
+            message: applied ? '恢复成功。' : '无法到达该位置（目标未达成）。'
+        };
+        return applied;
+    };
+
+    try {
+        const ok = await visualizer.moveHumanoidCooperativeRuledSurfacePolishingAlongParameter('x', 'positive');
+        assert.equal(ok, false);
+        assert.equal(attemptedStates.length, 1);
+        assert.equal(Number(attemptedStates[0].u.toFixed(3)), 0.37);
+        assert.equal(Number(cooperativeState.u.toFixed(3)), 0.35);
+        assert.equal(Number(cooperativeState.vCenter.toFixed(3)), 0.5);
+        assert.equal(Number(cooperativeState.stripSpacing.toFixed(3)), 0.24);
+        assert.equal(Number(cooperativeState.normalOffset.toFixed(3)), 0.06);
+        assert.equal(unreachableCount, 1);
+    } finally {
+        globalThis.window = originalWindow;
+    }
+});
+
+test('RobotVisualizer cooperative ruled-surface polishing scales high-speed u parameter steps directly from teach speed percent', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const originalWindow = globalThis.window;
+    const sharedSurface = {
+        position: (u, v) => [0.3 * u, 0.6 * (v - 0.5), 0],
+        du: () => [0.3, 0, 0],
+        dv: () => [0, 0.6, 0]
+    };
+    const cooperativeState = {
+        modeKey: 'cooperative-ruled-surface-polishing',
+        surface: sharedSurface,
+        u: 0.35,
+        vCenter: 0.5,
+        stripSpacing: 0.24,
+        normalOffset: 0.06,
+        normalOffsetBounds: [0, 0.16],
+        stripSpacingBounds: [0.08, 0.6],
+        leftQuaternionOffset: [1, 0, 0, 0],
+        rightQuaternionOffset: [1, 0, 0, 0],
+        bounds: { u: [0, 1], v: [0, 1] }
+    };
+    const attemptedStates = [];
+
+    globalThis.window = {
+        humanoidQ: new Array(20).fill(0)
+    };
+
+    visualizer.humanoidMode = true;
+    visualizer.teachSpeedPercent = 100;
+    visualizer._getHumanoidCooperativeRuledSurfacePolishingControlMode = () => 'cooperative-ruled-surface-polishing';
+    visualizer._isHumanoidMJRestoreLikeSolverEnabled = () => true;
+    visualizer._getHumanoidJogSolverMode = () => 'mj_restore_tr';
+    visualizer._buildHumanoidMJRestoreInternalOptions = () => ({});
+    visualizer._updateHumanoidSurfaceSlideVisualization = () => {};
+    visualizer._getHumanoidPose1 = () => [1, 0, 0, 0, 0, 0, 0, 0];
+    visualizer._getHumanoidPose2 = () => [1, 0, 0, 0, 0, 0, 0, 0];
+    visualizer.humanoidCooperativeRuledSurfacePolishingState = cooperativeState;
+    visualizer._refineHumanoidCooperativeRuledSurfacePolishingStateToCurrentHands = (state) => state;
+    visualizer._updateHumanoidCooperativeRuledSurfacePolishingDifferentialMJRestore = async (_currentState, nextState) => {
+        attemptedStates.push({ u: nextState.u, vCenter: nextState.vCenter });
+        visualizer.lastIKSolveStatus = {
+            solver: 'mj_restore_tr',
+            mode: 'humanoid_cooperative_ruled_surface_polishing',
+            converged: true,
+            applied: true,
+            reason: 'solved',
+            message: '恢复成功。'
+        };
+        return true;
+    };
+
+    try {
+        const ok = await visualizer.moveHumanoidCooperativeRuledSurfacePolishingAlongParameter('x', 'positive');
+        assert.equal(ok, true);
+        assert.equal(attemptedStates.length, 1);
+        assert.equal(Number(attemptedStates[0].u.toFixed(6)), Number((0.35 + 0.02).toFixed(6)));
+    } finally {
+        globalThis.window = originalWindow;
+    }
+});
+
+test('RobotVisualizer cooperative ruled-surface polishing re-fits an existing shared strip state to the current hands before building the next target', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const originalWindow = globalThis.window;
+    const sharedSurface = {
+        position: (u, v) => [u, v, 0],
+        du: () => [1, 0, 0],
+        dv: () => [0, 1, 0]
+    };
+    const cooperativeState = {
+        modeKey: 'cooperative-ruled-surface-polishing',
+        surface: sharedSurface,
+        u: 0.35,
+        vCenter: 0.5,
+        stripSpacing: 0.24,
+        normalOffset: 0.06,
+        normalOffsetBounds: [0, 0.16],
+        stripSpacingBounds: [0.08, 0.6],
+        leftQuaternionOffset: [1, 0, 0, 0],
+        rightQuaternionOffset: [1, 0, 0, 0],
+        bounds: { u: [0, 1], v: [0, 1] }
+    };
+    let refineCallCount = 0;
+    const attemptedStates = [];
+
+    globalThis.window = {
+        humanoidQ: new Array(20).fill(0)
+    };
+
+    visualizer.humanoidMode = true;
+    visualizer.humanoidCooperativeRuledSurfacePolishingState = cooperativeState;
+    visualizer._getHumanoidCooperativeRuledSurfacePolishingControlMode = () => 'cooperative-ruled-surface-polishing';
+    visualizer._isHumanoidMJRestoreLikeSolverEnabled = () => true;
+    visualizer._getHumanoidJogSolverMode = () => 'mj_restore_tr';
+    visualizer._buildHumanoidMJRestoreInternalOptions = () => ({});
+    visualizer._updateHumanoidSurfaceSlideVisualization = () => {};
+    visualizer._getHumanoidPose1 = () => [1, 0, 0, 0, 0, 0, 0, 0];
+    visualizer._getHumanoidPose2 = () => [1, 0, 0, 0, 0, 0, 0, 0];
+    visualizer._refineHumanoidCooperativeRuledSurfacePolishingStateToCurrentHands = (state) => {
+        refineCallCount += 1;
+        return {
+            ...state,
+            u: 0.45,
+            vCenter: 0.52
+        };
+    };
+    visualizer._updateHumanoidCooperativeRuledSurfacePolishingDifferentialMJRestore = async (_currentState, nextState) => {
+        attemptedStates.push({
+            u: nextState.u,
+            vCenter: nextState.vCenter,
+            stripSpacing: nextState.stripSpacing,
+            normalOffset: nextState.normalOffset
+        });
+        visualizer.lastIKSolveStatus = {
+            solver: 'mj_restore_tr',
+            mode: 'humanoid_cooperative_ruled_surface_polishing',
+            converged: true,
+            applied: true,
+            reason: 'solved',
+            message: '恢复成功。'
+        };
+        return true;
+    };
+
+    try {
+        const ok = await visualizer.moveHumanoidCooperativeRuledSurfacePolishingAlongParameter('x', 'positive');
+        assert.equal(ok, true);
+        assert.equal(refineCallCount, 2);
+        assert.equal(Number(attemptedStates[0].u.toFixed(3)), 0.47);
+        assert.equal(Number(attemptedStates[0].vCenter.toFixed(3)), 0.52);
+    } finally {
+        globalThis.window = originalWindow;
+    }
+});
+
+test('RobotVisualizer cooperative ruled-surface polishing re-fits the shared strip state to the realized hand poses after an applied step', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const originalWindow = globalThis.window;
+    const sharedSurface = {
+        position: (u, v) => [u, v, 0],
+        du: () => [1, 0, 0],
+        dv: () => [0, 1, 0]
+    };
+    const cooperativeState = {
+        modeKey: 'cooperative-ruled-surface-polishing',
+        surface: sharedSurface,
+        u: 0.35,
+        vCenter: 0.5,
+        stripSpacing: 0.24,
+        normalOffset: 0.06,
+        normalOffsetBounds: [0, 0.16],
+        stripSpacingBounds: [0.08, 0.6],
+        leftQuaternionOffset: [1, 0, 0, 0],
+        rightQuaternionOffset: [1, 0, 0, 0],
+        bounds: { u: [0, 1], v: [0, 1] }
+    };
+    let refineCallCount = 0;
+    let visualizationRefreshCount = 0;
+
+    globalThis.window = {
+        humanoidQ: new Array(20).fill(0)
+    };
+
+    visualizer.humanoidMode = true;
+    visualizer._ensureHumanoidCooperativeRuledSurfacePolishingState = () => cooperativeState;
+    visualizer._isHumanoidMJRestoreLikeSolverEnabled = () => true;
+    visualizer._getHumanoidJogSolverMode = () => 'mj_restore_tr';
+    visualizer._buildHumanoidMJRestoreInternalOptions = () => ({});
+    visualizer._updateHumanoidSurfaceSlideVisualization = () => {
+        visualizationRefreshCount += 1;
+    };
+    visualizer._getHumanoidPose1 = () => [1, 0, 0, 0, 0.12, 0, 0, 0];
+    visualizer._getHumanoidPose2 = () => [1, 0, 0, 0, 0.18, 0, 0, 0];
+    visualizer._refineHumanoidCooperativeRuledSurfacePolishingStateToCurrentHands = (state, leftPose, rightPose) => {
+        refineCallCount += 1;
+        assert.ok(Array.isArray(leftPose));
+        assert.ok(Array.isArray(rightPose));
+        return {
+            ...state,
+            u: 0.357,
+            vCenter: 0.503,
+            normalOffset: 0.041
+        };
+    };
+    visualizer._updateHumanoidCooperativeRuledSurfacePolishingDifferentialMJRestore = async () => {
+        visualizer.lastIKSolveStatus = {
+            solver: 'mj_restore_tr',
+            mode: 'humanoid_cooperative_ruled_surface_polishing',
+            converged: true,
+            applied: true,
+            reason: 'converged',
+            message: '恢复成功。'
+        };
+        return true;
+    };
+
+    try {
+        const ok = await visualizer.moveHumanoidCooperativeRuledSurfacePolishingAlongParameter('x', 'positive');
+        assert.equal(ok, true);
+        assert.equal(refineCallCount, 1);
+        assert.equal(Number(cooperativeState.u.toFixed(3)), 0.357);
+        assert.equal(Number(cooperativeState.vCenter.toFixed(3)), 0.503);
+        assert.equal(Number(cooperativeState.normalOffset.toFixed(3)), 0.041);
+        assert.ok(visualizationRefreshCount >= 1);
+    } finally {
+        globalThis.window = originalWindow;
+    }
+});
+
+test('RobotVisualizer cooperative ruled-surface polishing re-fits shared quaternion offsets to the realized hand poses', () => {
+    const visualizer = new RobotVisualizer(null);
+    const sharedSurface = {
+        position: (u, v) => [u, v, 0],
+        du: () => [1, 0, 0],
+        dv: () => [0, 1, 0]
+    };
+    const cooperativeState = {
+        modeKey: 'cooperative-ruled-surface-polishing',
+        surface: sharedSurface,
+        u: 0.35,
+        vCenter: 0.5,
+        stripSpacing: 0.24,
+        normalOffset: 0.06,
+        normalOffsetBounds: [0, 0.16],
+        stripSpacingBounds: [0.08, 0.6],
+        leftQuaternionOffset: [1, 0, 0, 0],
+        rightQuaternionOffset: [1, 0, 0, 0],
+        bounds: { u: [0, 1], v: [0, 1] }
+    };
+
+    const projectedOffsets = [
+        { quaternionOffset: [0, 0, 0, 1] },
+        { quaternionOffset: [0, 0, 1, 0] }
+    ];
+    let projectCallCount = 0;
+    visualizer._projectHumanoidPoseToSurfaceState = () => projectedOffsets[projectCallCount++] ?? null;
+
+    const refined = visualizer._refineHumanoidCooperativeRuledSurfacePolishingStateToCurrentHands(
+        cooperativeState,
+        [1, 0, 0, 0, 0.12, 0, 0, 0],
+        [1, 0, 0, 0, 0.18, 0, 0, 0]
+    );
+
+    assert.deepEqual(refined.leftQuaternionOffset, [0, 0, 0, 1]);
+    assert.deepEqual(refined.rightQuaternionOffset, [0, 0, 1, 0]);
+});
+
+test('RobotVisualizer cooperative ruled-surface polishing re-fits the shared strip state to the realized hand poses after a rejected step', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const originalWindow = globalThis.window;
+    const sharedSurface = {
+        position: (u, v) => [u, v, 0],
+        du: () => [1, 0, 0],
+        dv: () => [0, 1, 0]
+    };
+    const cooperativeState = {
+        modeKey: 'cooperative-ruled-surface-polishing',
+        surface: sharedSurface,
+        u: 0.35,
+        vCenter: 0.5,
+        stripSpacing: 0.24,
+        normalOffset: 0.06,
+        normalOffsetBounds: [0, 0.16],
+        stripSpacingBounds: [0.08, 0.6],
+        leftQuaternionOffset: [1, 0, 0, 0],
+        rightQuaternionOffset: [1, 0, 0, 0],
+        bounds: { u: [0, 1], v: [0, 1] }
+    };
+    let refineCallCount = 0;
+    let unreachableCount = 0;
+    let visualizationRefreshCount = 0;
+
+    globalThis.window = {
+        humanoidQ: new Array(20).fill(0)
+    };
+
+    visualizer.humanoidMode = true;
+    visualizer._ensureHumanoidCooperativeRuledSurfacePolishingState = () => cooperativeState;
+    visualizer._isHumanoidMJRestoreLikeSolverEnabled = () => true;
+    visualizer._getHumanoidJogSolverMode = () => 'mj_restore_tr';
+    visualizer._buildHumanoidMJRestoreInternalOptions = () => ({});
+    visualizer._updateHumanoidSurfaceSlideVisualization = () => {
+        visualizationRefreshCount += 1;
+    };
+    visualizer._notifyHumanoidJogUnreachable = () => {
+        unreachableCount += 1;
+    };
+    visualizer._getHumanoidPose1 = () => [1, 0, 0, 0, 0.11, 0, 0, 0];
+    visualizer._getHumanoidPose2 = () => [1, 0, 0, 0, 0.19, 0, 0, 0];
+    visualizer._refineHumanoidCooperativeRuledSurfacePolishingStateToCurrentHands = (state, leftPose, rightPose) => {
+        refineCallCount += 1;
+        assert.ok(Array.isArray(leftPose));
+        assert.ok(Array.isArray(rightPose));
+        return {
+            ...state,
+            u: 0.341,
+            vCenter: 0.497,
+            normalOffset: 0.038
+        };
+    };
+    visualizer._updateHumanoidCooperativeRuledSurfacePolishingDifferentialMJRestore = async () => {
+        visualizer.lastIKSolveStatus = {
+            solver: 'mj_restore_tr',
+            mode: 'humanoid_cooperative_ruled_surface_polishing',
+            converged: false,
+            applied: false,
+            reason: 'command_mismatch',
+            message: '无法到达该位置（目标未达成）。'
+        };
+        return true;
+    };
+
+    try {
+        const ok = await visualizer.moveHumanoidCooperativeRuledSurfacePolishingAlongParameter('x', 'positive');
+        assert.equal(ok, false);
+        assert.equal(refineCallCount, 1);
+        assert.equal(Number(cooperativeState.u.toFixed(3)), 0.341);
+        assert.equal(Number(cooperativeState.vCenter.toFixed(3)), 0.497);
+        assert.equal(Number(cooperativeState.normalOffset.toFixed(3)), 0.038);
+        assert.equal(unreachableCount, 1);
+        assert.ok(visualizationRefreshCount >= 1);
+    } finally {
+        globalThis.window = originalWindow;
+    }
+});
+
+test('RobotVisualizer cooperative ruled-surface polishing clamps and stops before a v-edge move would shrink the strip spacing', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const originalWindow = globalThis.window;
+    const sharedSurface = {
+        position: (u, v) => [u, v, 0],
+        du: () => [1, 0, 0],
+        dv: () => [0, 1, 0],
+        lineAt: (u) => ({
+            kind: 'plucker_line',
+            direction: [0, 1, 0],
+            moment: [0.06 + u, 0, 0],
+            closestPoint: [u, 0, -0.06],
+            referenceCoordinate: 0,
+            pointAtCoordinate: (coordinate) => [u, coordinate, -0.06]
+        }),
+        tubeAt: (u, radius) => ({
+            kind: 'plucker_tube',
+            line: {
+                kind: 'plucker_line',
+                direction: [0, 1, 0],
+                moment: [0.06 + u, 0, 0],
+                closestPoint: [u, 0, -0.06],
+                referenceCoordinate: 0,
+                pointAtCoordinate: (coordinate) => [u, coordinate, -0.06]
+            },
+            radius,
+            radiusSquared: radius * radius
+        })
+    };
+    const cooperativeState = {
+        modeKey: 'cooperative-ruled-surface-polishing',
+        surface: sharedSurface,
+        u: 0.35,
+        vCenter: 0.88,
+        stripSpacing: 0.24,
+        normalOffset: 0.06,
+        normalOffsetBounds: [0, 0.16],
+        stripSpacingBounds: [0.08, 0.6],
+        leftQuaternionOffset: [1, 0, 0, 0],
+        rightQuaternionOffset: [1, 0, 0, 0],
+        bounds: { u: [0, 1], v: [0, 1] }
+    };
+    let solveCallCount = 0;
+    let visualizationRefreshCount = 0;
+
+    globalThis.window = {
+        humanoidQ: new Array(20).fill(0)
+    };
+
+    visualizer.humanoidMode = true;
+    visualizer._ensureHumanoidCooperativeRuledSurfacePolishingState = () => cooperativeState;
+    visualizer._isHumanoidMJRestoreLikeSolverEnabled = () => true;
+    visualizer._getHumanoidJogSolverMode = () => 'mj_restore_tr';
+    visualizer._buildHumanoidMJRestoreInternalOptions = () => ({});
+    visualizer._updateHumanoidSurfaceSlideVisualization = () => {
+        visualizationRefreshCount += 1;
+    };
+    visualizer._updateHumanoidCooperativeRuledSurfacePolishingDifferentialMJRestore = async () => {
+        solveCallCount += 1;
+        return true;
+    };
+
+    try {
+        const ok = await visualizer.moveHumanoidCooperativeRuledSurfacePolishingAlongParameter('y', 'positive');
+        assert.equal(ok, true);
+        assert.equal(solveCallCount, 0);
+        assert.equal(Number(cooperativeState.u.toFixed(3)), 0.35);
+        assert.equal(Number(cooperativeState.vCenter.toFixed(3)), 0.88);
+        assert.equal(Number(cooperativeState.stripSpacing.toFixed(3)), 0.24);
+        assert.equal(Number(cooperativeState.normalOffset.toFixed(3)), 0.06);
+        assert.ok(visualizationRefreshCount >= 1);
+    } finally {
+        globalThis.window = originalWindow;
+    }
+});
+
+test('RobotVisualizer cooperative ruled-surface polishing clamps and stops before a u-edge move would hit the arc bound', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const originalWindow = globalThis.window;
+    const sharedSurface = {
+        position: (u, v) => [u, v, 0],
+        du: () => [1, 0, 0],
+        dv: () => [0, 1, 0],
+        lineAt: (u) => ({
+            kind: 'plucker_line',
+            direction: [0, 1, 0],
+            moment: [0.06 + u, 0, 0],
+            closestPoint: [u, 0, -0.06],
+            referenceCoordinate: 0,
+            pointAtCoordinate: (coordinate) => [u, coordinate, -0.06]
+        }),
+        tubeAt: (u, radius) => ({
+            kind: 'plucker_tube',
+            line: {
+                kind: 'plucker_line',
+                direction: [0, 1, 0],
+                moment: [0.06 + u, 0, 0],
+                closestPoint: [u, 0, -0.06],
+                referenceCoordinate: 0,
+                pointAtCoordinate: (coordinate) => [u, coordinate, -0.06]
+            },
+            radius,
+            radiusSquared: radius * radius
+        })
+    };
+    const cooperativeState = {
+        modeKey: 'cooperative-ruled-surface-polishing',
+        surface: sharedSurface,
+        u: 0.99,
+        vCenter: 0.5,
+        stripSpacing: 0.24,
+        normalOffset: 0.06,
+        normalOffsetBounds: [0, 0.16],
+        stripSpacingBounds: [0.08, 0.6],
+        leftQuaternionOffset: [1, 0, 0, 0],
+        rightQuaternionOffset: [1, 0, 0, 0],
+        bounds: { u: [0, 1], v: [0, 1] }
+    };
+    let solveCallCount = 0;
+    let visualizationRefreshCount = 0;
+
+    globalThis.window = {
+        humanoidQ: new Array(20).fill(0)
+    };
+
+    visualizer.humanoidMode = true;
+    visualizer._ensureHumanoidCooperativeRuledSurfacePolishingState = () => cooperativeState;
+    visualizer._isHumanoidMJRestoreLikeSolverEnabled = () => true;
+    visualizer._getHumanoidJogSolverMode = () => 'mj_restore_tr';
+    visualizer._buildHumanoidMJRestoreInternalOptions = () => ({});
+    visualizer._updateHumanoidSurfaceSlideVisualization = () => {
+        visualizationRefreshCount += 1;
+    };
+    visualizer._updateHumanoidCooperativeRuledSurfacePolishingDifferentialMJRestore = async () => {
+        solveCallCount += 1;
+        return true;
+    };
+
+    try {
+        const ok = await visualizer.moveHumanoidCooperativeRuledSurfacePolishingAlongParameter('x', 'positive');
+        assert.equal(ok, true);
+        assert.equal(solveCallCount, 0);
+        assert.equal(Number(cooperativeState.u.toFixed(3)), 0.99);
         assert.equal(Number(cooperativeState.vCenter.toFixed(3)), 0.5);
         assert.equal(Number(cooperativeState.stripSpacing.toFixed(3)), 0.24);
         assert.equal(Number(cooperativeState.normalOffset.toFixed(3)), 0.06);
@@ -2266,7 +4077,7 @@ test('RobotVisualizer cooperative ruled-surface polishing keeps n+ moving outwar
     visualizer._isHumanoidMJRestoreLikeSolverEnabled = () => true;
     visualizer._getHumanoidJogSolverMode = () => 'mj_restore';
     visualizer._buildHumanoidMJRestoreInternalOptions = () => ({});
-    visualizer._updateHumanoidJointsFromDualIndependentSurfaceTargetsMJRestore = () => true;
+    visualizer._updateHumanoidCooperativeRuledSurfacePolishingDifferentialMJRestore = () => true;
     visualizer._updateHumanoidSurfaceSlideVisualization = () => {};
     visualizer.lastIKSolveStatus = { applied: true };
     visualizer._buildHumanoidCooperativeRuledSurfacePolishingPoseTargets = (state) => ({
@@ -2279,7 +4090,6 @@ test('RobotVisualizer cooperative ruled-surface polishing keeps n+ moving outwar
             quaternion: [1, 0, 0, 0]
         }
     });
-    visualizer._buildHumanoidSurfaceSlideDQTargetArray = () => [1, 0, 0, 0, 0, 0, 0, 0];
     visualizer._getHumanoidAbsolutePose = () => [1, 0, 0, 0, 0.32, 0.5, 0.06, 0];
     visualizer._getHumanoidPose1 = () => [1, 0, 0, 0, 0.32, 0.38, 0.06, 0];
     visualizer._getHumanoidPose2 = () => [1, 0, 0, 0, 0.32, 0.62, 0.06, 0];
@@ -2466,7 +4276,7 @@ test('RobotVisualizer single-arm surface-slide initializes from current surface 
     }
 });
 
-test('RobotVisualizer bimanual surface-slide MJ helper merges left/right targets and dual tube invariants into one custom restoration problem', async () => {
+test('RobotVisualizer bimanual surface-slide MJ helper rejects the removed dual-independent surface mode adapter', async () => {
     const visualizer = new RobotVisualizer(null);
     const originalWindow = globalThis.window;
     const currentQ = new Array(20).fill(0);
@@ -2543,18 +4353,9 @@ test('RobotVisualizer bimanual surface-slide MJ helper merges left/right targets
                 solverMode: 'mj_restore_tr'
             }
         );
-        assert.equal(result, true);
-        assert.ok(capturedOptions);
-        assert.deepEqual(capturedOptions.dqTargetArray, [
-            1, 0, 0, 0, 0.2, 0, 0, 0,
-            1, 0, 0, 0, -0.2, 0, 0, 0
-        ]);
-        assert.equal(capturedOptions.modeTag, 'dual-independent-surface-slide-target');
-        assert.equal(capturedOptions.statusMode, 'humanoid_dual_independent_surface');
-        assert.equal(capturedOptions.includeWaist, true);
-        assert.equal(capturedOptions.keepBodyZVertical, true);
-        assert.deepEqual(capturedOptions.extraInvariantTargetArray, [0, 0]);
-        assert.equal(typeof capturedOptions.extraInvariantEvaluator, 'function');
+        assert.equal(result, false);
+        assert.equal(capturedOptions, null);
+        assert.equal(visualizer.lastIKSolveStatus?.reason, 'mode_adapter_failed');
     } finally {
         globalThis.window = originalWindow;
     }
@@ -2632,6 +4433,163 @@ test('RobotVisualizer custom MJ restore keeps a best-effort pose candidate when 
         assert.notEqual(visualizer.lastIKSolveStatus?.reason, 'hard_tol_not_reached');
         assert.ok((publishedDiagnostics?.stepNorm ?? 0) > 0.1);
         assert.match(publishedDiagnostics?.message ?? '', /保留|已执行|完成/);
+    } finally {
+        globalThis.window = originalWindow;
+        globalThis.document = originalDocument;
+    }
+});
+
+test('RobotVisualizer custom MJ restore reports TR-specific best-effort messaging when mj_restore_tr keeps the last feasible step', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const originalWindow = globalThis.window;
+    const originalDocument = globalThis.document;
+    let publishedDiagnostics = null;
+    let appliedQ = null;
+
+    globalThis.window = {
+        humanoidQ: [0],
+        updateGlobalVariables: () => {},
+        updateRobotPose: () => {}
+    };
+    globalThis.document = {
+        getElementById: () => null
+    };
+
+    visualizer.humanoidModel = {};
+    visualizer.vfiConfig = {
+        mjRestoreMaxIter: 1,
+        mjRestoreMaxStep: 0.16,
+        hardCommandTolPose: 1e-6,
+        practicalCommandTolPose: 1e-4,
+        hardInvariantTol: 5e-5,
+        practicalInvariantTol: 2.5e-4,
+        qpMismatchTol: 1e-3,
+        qpMismatchRequiredReduction: 0.8
+    };
+    visualizer._publishHumanoidJogDiagnostics = (payload) => {
+        publishedDiagnostics = payload;
+    };
+    visualizer._notifyHumanoidJogUnreachable = () => {};
+    visualizer._buildManipulabilityVFIConstraints = () => [];
+    visualizer._extractHumanoidWVFIConstraintDiagnostics = () => ({});
+    visualizer._extractHumanoidWaistXCorridorDiagnostics = () => ({});
+    visualizer._applyHumanoidJointSolution = (qSolved) => {
+        appliedQ = qSolved.slice();
+        for (let i = 0; i < window.humanoidQ.length && i < qSolved.length; i++) {
+            window.humanoidQ[i] = qSolved[i];
+        }
+        return true;
+    };
+
+    const poseGetter = (q) => [1, 0, 0, 0, q[0], 0, 0, 0];
+    const jacobianGetter = () => [[0], [0], [0], [0], [1], [0], [0], [0]];
+
+    try {
+        const result = await visualizer._updateHumanoidCustomPoseTargetMJRestore({
+            dqTargetArray: [1, 0, 0, 0, 0.189, 0, 0, 0],
+            currentQ: [0],
+            solverMode: 'mj_restore_tr',
+            statusMode: 'test',
+            modeTag: 'test-target',
+            includeWaist: false,
+            armStart: 0,
+            activeCount: 1,
+            hardLimits: [{ lower: -1, upper: 1 }],
+            poseGetter,
+            jacobianGetter,
+            invariantWeight: 0,
+            keepBodyZVertical: false
+        });
+
+        assert.equal(result, true);
+        assert.ok(Array.isArray(appliedQ));
+        assert.ok(appliedQ[0] > 0.1, `expected best-effort q to be applied, got ${appliedQ[0]}`);
+        assert.equal(visualizer.lastIKSolveStatus?.solver, 'mj_restore_tr');
+        assert.equal(visualizer.lastIKSolveStatus?.reason, 'best_effort');
+        assert.match(visualizer.lastIKSolveStatus?.message ?? '', /Recovery Optimization \(TR\)/);
+        assert.match(publishedDiagnostics?.message ?? '', /Recovery Optimization \(TR\)/);
+    } finally {
+        globalThis.window = originalWindow;
+        globalThis.document = originalDocument;
+    }
+});
+
+test('RobotVisualizer custom MJ restore can disable best-effort application and report the target as unreachable instead', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const originalWindow = globalThis.window;
+    const originalDocument = globalThis.document;
+    let publishedDiagnostics = null;
+    let unreachableMessage = null;
+    let appliedQ = null;
+
+    globalThis.window = {
+        humanoidQ: [0],
+        updateGlobalVariables: () => {},
+        updateRobotPose: () => {}
+    };
+    globalThis.document = {
+        getElementById: () => null
+    };
+
+    visualizer.humanoidModel = {};
+    visualizer.vfiConfig = {
+        mjRestoreMaxIter: 1,
+        mjRestoreMaxStep: 0.16,
+        hardCommandTolPose: 1e-6,
+        practicalCommandTolPose: 1e-4,
+        hardInvariantTol: 5e-5,
+        practicalInvariantTol: 2.5e-4,
+        qpMismatchTol: 1e-3,
+        qpMismatchRequiredReduction: 0.8
+    };
+    visualizer._publishHumanoidJogDiagnostics = (payload) => {
+        publishedDiagnostics = payload;
+    };
+    visualizer._notifyHumanoidJogUnreachable = (message) => {
+        unreachableMessage = message;
+    };
+    visualizer._buildManipulabilityVFIConstraints = () => [];
+    visualizer._extractHumanoidWVFIConstraintDiagnostics = () => ({});
+    visualizer._extractHumanoidWaistXCorridorDiagnostics = () => ({});
+    visualizer._applyHumanoidJointSolution = (qSolved) => {
+        appliedQ = qSolved.slice();
+        for (let i = 0; i < window.humanoidQ.length && i < qSolved.length; i++) {
+            window.humanoidQ[i] = qSolved[i];
+        }
+        return true;
+    };
+
+    const poseGetter = (q) => [1, 0, 0, 0, q[0], 0, 0, 0];
+    const jacobianGetter = () => [[0], [0], [0], [0], [1], [0], [0], [0]];
+
+    try {
+        const result = await visualizer._updateHumanoidCustomPoseTargetMJRestore({
+            dqTargetArray: [1, 0, 0, 0, 0.189, 0, 0, 0],
+            currentQ: [0],
+            solverMode: 'mj_restore',
+            statusMode: 'test',
+            modeTag: 'test-target',
+            includeWaist: false,
+            armStart: 0,
+            activeCount: 1,
+            hardLimits: [{ lower: -1, upper: 1 }],
+            poseGetter,
+            jacobianGetter,
+            invariantWeight: 0,
+            keepBodyZVertical: false,
+            internalOptions: {
+                controlModeOverride: 'left-ruled-surface-polishing',
+                disallowBestEffortApply: true
+            }
+        });
+
+        assert.equal(result, true);
+        assert.equal(appliedQ, null);
+        assert.equal(visualizer.lastIKSolveStatus?.reason, 'command_mismatch');
+        assert.equal(visualizer.lastIKSolveStatus?.applied, false);
+        assert.match(publishedDiagnostics?.message ?? '', /目标未达成/);
+        assert.equal(publishedDiagnostics?.stepNorm ?? 0, 0);
+        assert.equal(unreachableMessage, '无法到达该位置');
     } finally {
         globalThis.window = originalWindow;
         globalThis.document = originalDocument;
@@ -2786,11 +4744,172 @@ test('RobotVisualizer custom MJ restore rejects oversized best-effort cooperativ
         });
 
         assert.equal(result, true);
-        assert.deepEqual(appliedQ, [0]);
+        assert.equal(appliedQ, null);
         assert.equal(visualizer.lastIKSolveStatus?.reason, 'command_mismatch');
         assert.match(publishedDiagnostics?.message ?? '', /目标未达成/);
         assert.equal(publishedDiagnostics?.stepNorm ?? 0, 0);
         assert.equal(unreachableMessage, '无法到达该位置');
+    } finally {
+        globalThis.window = originalWindow;
+        globalThis.document = originalDocument;
+    }
+});
+
+test('RobotVisualizer custom MJ restore can reject an otherwise applicable result through a post-apply acceptance guard', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const originalWindow = globalThis.window;
+    const originalDocument = globalThis.document;
+    let publishedDiagnostics = null;
+    let appliedQ = null;
+    let unreachableMessage = null;
+
+    globalThis.window = {
+        humanoidQ: [0],
+        updateGlobalVariables: () => {},
+        updateRobotPose: () => {}
+    };
+    globalThis.document = {
+        getElementById: () => null
+    };
+
+    visualizer.humanoidModel = {};
+    visualizer.vfiConfig = {
+        mjRestoreMaxIter: 1,
+        mjRestoreMaxStep: 0.16,
+        hardCommandTolPose: 1e-6,
+        practicalCommandTolPose: 1e-4,
+        hardInvariantTol: 5e-5,
+        practicalInvariantTol: 2.5e-4,
+        qpMismatchTol: 1e-3,
+        qpMismatchRequiredReduction: 0.8
+    };
+    visualizer._publishHumanoidJogDiagnostics = (payload) => {
+        publishedDiagnostics = payload;
+    };
+    visualizer._notifyHumanoidJogUnreachable = (message) => {
+        unreachableMessage = message;
+    };
+    visualizer._buildManipulabilityVFIConstraints = () => [];
+    visualizer._extractHumanoidWVFIConstraintDiagnostics = () => ({});
+    visualizer._extractHumanoidWaistXCorridorDiagnostics = () => ({});
+    visualizer._applyHumanoidJointSolution = (qSolved) => {
+        appliedQ = qSolved.slice();
+        for (let i = 0; i < window.humanoidQ.length && i < qSolved.length; i++) {
+            window.humanoidQ[i] = qSolved[i];
+        }
+        return true;
+    };
+
+    const poseGetter = (q) => [1, 0, 0, 0, q[0], 0, 0, 0];
+    const jacobianGetter = () => [[0], [0], [0], [0], [1], [0], [0], [0]];
+
+    try {
+        const result = await visualizer._updateHumanoidCustomPoseTargetMJRestore({
+            dqTargetArray: [1, 0, 0, 0, 0.189, 0, 0, 0],
+            currentQ: [0],
+            solverMode: 'mj_restore_tr',
+            statusMode: 'test',
+            modeTag: 'test-target',
+            includeWaist: false,
+            armStart: 0,
+            activeCount: 1,
+            hardLimits: [{ lower: -1, upper: 1 }],
+            poseGetter,
+            jacobianGetter,
+            invariantWeight: 0,
+            keepBodyZVertical: false,
+            internalOptions: {
+                controlModeOverride: 'cooperative-ruled-surface-polishing',
+                postApplyAcceptanceEvaluator: () => ({
+                    accepted: false,
+                    reason: 'command_mismatch',
+                    message: '无法到达该位置（目标未达成）。',
+                    commandNorm: 0.2
+                })
+            }
+        });
+
+        assert.equal(result, true);
+        assert.equal(appliedQ, null);
+        assert.equal(visualizer.lastIKSolveStatus?.reason, 'command_mismatch');
+        assert.equal(visualizer.lastIKSolveStatus?.applied, false);
+        assert.equal(publishedDiagnostics?.commandError, 0.2);
+        assert.equal(publishedDiagnostics?.stepNorm ?? 0, 0);
+        assert.equal(unreachableMessage, '无法到达该位置');
+    } finally {
+        globalThis.window = originalWindow;
+        globalThis.document = originalDocument;
+    }
+});
+
+test('RobotVisualizer custom MJ restore can suppress unreachable notifications during internal retry chains', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const originalWindow = globalThis.window;
+    const originalDocument = globalThis.document;
+    let unreachableMessage = null;
+
+    globalThis.window = {
+        humanoidQ: [0],
+        updateGlobalVariables: () => {},
+        updateRobotPose: () => {}
+    };
+    globalThis.document = {
+        getElementById: () => null
+    };
+
+    visualizer.humanoidModel = {};
+    visualizer.vfiConfig = {
+        mjRestoreMaxIter: 1,
+        mjRestoreMaxStep: 0.16,
+        hardCommandTolPose: 1e-6,
+        practicalCommandTolPose: 1e-4,
+        hardInvariantTol: 5e-5,
+        practicalInvariantTol: 2.5e-4,
+        qpMismatchTol: 1e-3,
+        qpMismatchRequiredReduction: 0.8
+    };
+    visualizer._publishHumanoidJogDiagnostics = () => {};
+    visualizer._notifyHumanoidJogUnreachable = (message) => {
+        unreachableMessage = message;
+    };
+    visualizer._buildManipulabilityVFIConstraints = () => [];
+    visualizer._extractHumanoidWVFIConstraintDiagnostics = () => ({});
+    visualizer._extractHumanoidWaistXCorridorDiagnostics = () => ({});
+    visualizer._applyHumanoidJointSolution = () => true;
+
+    const poseGetter = (q) => [1, 0, 0, 0, q[0], 0, 0, 0];
+    const jacobianGetter = () => [[0], [0], [0], [0], [1], [0], [0], [0]];
+
+    try {
+        const result = await visualizer._updateHumanoidCustomPoseTargetMJRestore({
+            dqTargetArray: [1, 0, 0, 0, 0.189, 0, 0, 0],
+            currentQ: [0],
+            solverMode: 'mj_restore_tr',
+            statusMode: 'test',
+            modeTag: 'test-target',
+            includeWaist: false,
+            armStart: 0,
+            activeCount: 1,
+            hardLimits: [{ lower: -1, upper: 1 }],
+            poseGetter,
+            jacobianGetter,
+            invariantWeight: 0,
+            keepBodyZVertical: false,
+            internalOptions: {
+                controlModeOverride: 'cooperative-ruled-surface-polishing',
+                suppressUnreachableNotify: true,
+                postApplyAcceptanceEvaluator: () => ({
+                    accepted: false,
+                    reason: 'command_mismatch',
+                    message: '无法到达该位置（目标未达成）。',
+                    commandNorm: 0.2
+                })
+            }
+        });
+
+        assert.equal(result, true);
+        assert.equal(visualizer.lastIKSolveStatus?.reason, 'command_mismatch');
+        assert.equal(unreachableMessage, null);
     } finally {
         globalThis.window = originalWindow;
         globalThis.document = originalDocument;
@@ -2992,6 +5111,80 @@ test('RobotVisualizer plain mj_restore absolute jogs force jogMetricOverride non
     assert.equal(manifoldArgs[6]?.solverMode, 'mj_restore');
     assert.equal(manifoldArgs[6]?.jogMetricOverride, 'none');
     assert.equal(manifoldArgs[6]?.metricDirection, undefined);
+});
+
+test('RobotVisualizer absolute mj_restore_tr local path does not throw when building the restore request', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const currentQ = [0.1, -0.2, 0.3];
+    const absTarget = [1, 0, 0, 0, 0.01, 0, 0, 0];
+    const relCurrent = [1, 0, 0, 0, 0, 0, 0, 0];
+    const originalWindow = globalThis.window;
+    const originalDocument = globalThis.document;
+
+    globalThis.window = {
+        humanoidQ: currentQ.slice(),
+        updateGlobalVariables: () => {},
+        updateRobotPose: () => {},
+        DQModule: { DQWrapper: {} }
+    };
+    globalThis.document = {
+        getElementById: () => null
+    };
+
+    visualizer.humanoidModel = {};
+    visualizer.humanoidWaistLength = 0;
+    visualizer.humanoidLeftArmLength = 3;
+    visualizer.humanoidRightArmLength = 0;
+    visualizer._canUseHumanoidJogMJRestoreWorker = () => false;
+    visualizer._getHumanoidAbsolutePose = (q) => [1, 0, 0, 0, q[0] ?? 0, 0, 0, 0];
+    visualizer._getHumanoidRelativePose = () => relCurrent.slice();
+    visualizer._getHumanoidAbsolutePoseJacobian = () => [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [1, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]];
+    visualizer._getHumanoidRelativePoseJacobian = () => Array.from({ length: 8 }, () => [0, 0, 0]);
+    visualizer._buildManipulabilityVFIConstraints = () => [];
+    visualizer._computeModeCCTSM = () => ({
+        w_abs_hier_vfi: 1,
+        w_abs_arm_vfi: 1,
+        w_abs_vfi: 1,
+        w_abs_hier: 1,
+        w_abs_arm: 1,
+        w_abs: 1,
+        w: 1,
+        w_vfi: 1
+    });
+    visualizer._computeProtectedManipulabilityGradient = () => [0, 0, 0];
+    visualizer._extractHumanoidWVFIConstraintDiagnostics = () => ({});
+    visualizer._extractHumanoidWaistXCorridorDiagnostics = () => ({});
+    visualizer._publishHumanoidJogDiagnostics = () => {};
+    visualizer._notifyHumanoidJogUnreachable = () => {};
+    visualizer._applyHumanoidJointSolution = () => true;
+    visualizer._getHumanoidJointLimits = () => [{ lower: -1, upper: 1 }, { lower: -1, upper: 1 }, { lower: -1, upper: 1 }];
+    visualizer._sliceHumanoidActiveJoints = (_q, start, count) => currentQ.slice(start, start + count);
+    visualizer._writeHumanoidActiveJoints = (_qInitial, qActive) => qActive.slice();
+    visualizer._buildHumanoidManifoldWaistXCorridor = () => ({ enabled: false, violation: 0 });
+    visualizer._signedPoseError = () => [1];
+    visualizer._computePoseErrorNorm = () => 0.1;
+
+    try {
+        const result = await visualizer._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstManifold(
+            absTarget.slice(),
+            currentQ.slice(),
+            true,
+            false,
+            false,
+            relCurrent.slice(),
+            { solverMode: 'mj_restore_tr', preferWorker: false, jogMetricOverride: 'none' }
+        );
+
+        assert.equal(typeof result, 'boolean');
+        assert.equal(visualizer.lastIKSolveStatus?.solver, 'mj_restore_tr');
+    } finally {
+        globalThis.document = originalDocument;
+        if (originalWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = originalWindow;
+        }
+    }
 });
 
 test('RobotVisualizer mj_restore_pre_w absolute stage 2 preserves solver identity and pre-w metadata on the real local manifold path', async () => {
@@ -4910,46 +7103,6 @@ test('RobotVisualizer mj_restore_pre_w routes robot1 and robot2 jogs through a l
     }
 });
 
-test('RobotVisualizer mj_restore_pre_w routes robot1-waist and robot2-waist jogs through stage 2 with pre-w disabled_for_mode metadata', async () => {
-    const visualizer = new RobotVisualizer(null);
-    visualizer.humanoidMode = true;
-    visualizer.setHumanoidJogSolverMode('mj_restore_pre_w');
-    visualizer._getHumanoidManifoldJogSecondaryMetric = () => 'w_abs_hier_vfi';
-    const originalWindow = globalThis.window;
-    const currentQ = new Array(20).fill(0).map((_, index) => index * 0.01);
-    globalThis.window = {
-        humanoidQ: currentQ.slice(),
-        updateGlobalVariables: () => {},
-        updateRobotPose: () => {}
-    };
-
-    const stage2Calls = [];
-    visualizer._getHumanoidPose1 = () => [1, 0, 0, 0, 0, 0, 0, 0];
-    visualizer._getHumanoidPose2 = () => [1, 0, 0, 0, 0, 0, 0, 0];
-    visualizer._updateHumanoidCustomPoseTargetMJRestore = (options) => {
-        stage2Calls.push(options);
-        assert.equal(options.solverMode, 'mj_restore_pre_w');
-        assert.equal(options.internalOptions?.preWState, 'disabled_for_mode');
-        assert.equal(options.internalOptions?.preWMetric, 'w_abs_hier_vfi');
-        assert.equal(options.internalOptions?.preWStart, 'q0');
-        assert.ok(Array.isArray(options.currentQ));
-        assert.equal(options.currentQ[0], currentQ[0]);
-        return true;
-    };
-
-    try {
-        await visualizer._updateHumanoidSingleArmPlusWaistPoseTargetMJRestore([1, 0, 0, 0, 0, 0, 0, 0], currentQ.slice(), 1, { solverMode: 'mj_restore_pre_w' });
-        await visualizer._updateHumanoidSingleArmPlusWaistPoseTargetMJRestore([1, 0, 0, 0, 0, 0, 0, 0], currentQ.slice(), 2, { solverMode: 'mj_restore_pre_w' });
-        assert.equal(stage2Calls.length, 2);
-    } finally {
-        if (originalWindow === undefined) {
-            delete globalThis.window;
-        } else {
-            globalThis.window = originalWindow;
-        }
-    }
-});
-
 test('RobotVisualizer mj_restore_pre_w routes waist-body-link-xz jogs through a local special-mode pre-w stage before stage 2', async () => {
     const visualizer = new RobotVisualizer(null);
     visualizer.humanoidMode = true;
@@ -5032,14 +7185,78 @@ test('RobotVisualizer publishes rendered mj_restore_pre_w diagnostics lines for 
         visualizer._publishHumanoidJogDiagnostics(buildHumanoidJogMJDiagnostics({
             solverMode: 'mj_restore_pre_w',
             modeTag: 'absolute-target',
+            restorationResult: {
+                iterations: 1,
+                acceptedIterations: 1
+            },
+            polishIterations: 1,
             preWState: 'applied',
             preWMetric: 'w_abs_hier',
             preWStart: 'q_pre'
         }));
+        assert.ok(visualizer.lastHumanoidJogDiagnostics.renderedLines.includes('iters(total/restore/polish): 2 / 1 / 1    active_joints: n/a'));
         assert.ok(visualizer.lastHumanoidJogDiagnostics.renderedLines.includes('pre_w: applied'));
         assert.ok(visualizer.lastHumanoidJogDiagnostics.renderedLines.includes('pre_w_metric: w_abs_hier'));
-        assert.ok(visualizer.lastHumanoidJogDiagnostics.renderedLines.includes('task_pre_w: w_abs_hier'));
+        assert.ok(visualizer.lastHumanoidJogDiagnostics.renderedLines.includes('task_pre_w: w_abs'));
         assert.ok(visualizer.lastHumanoidJogDiagnostics.renderedLines.includes('pre_w_start: q_pre'));
+
+        visualizer._publishHumanoidJogDiagnostics({
+            ...buildHumanoidJogMJDiagnostics({
+                solverMode: 'mj_restore_tr',
+                modeTag: 'cooperative-ruled-surface-polishing-target',
+                restorationResult: {
+                    iterations: 2,
+                    acceptedIterations: 1,
+                    lastAcceptedRho: 0.82,
+                    lastPredictedReduction: 0.6,
+                    lastActualReduction: 0.49,
+                    acceptedBy: 'filter',
+                    lastRejectedRho: -0.15,
+                    lastRejectedPredictedReduction: 0.08,
+                    lastRejectedActualReduction: -0.01,
+                    lastRejectedReason: 'poor_ratio'
+                },
+                polishIterations: 2
+            }),
+            iterations: 4
+        });
+        assert.ok(
+            visualizer.lastHumanoidJogDiagnostics.renderedLines.includes(
+                'iters(total/restore/polish): 4 / 2 / 2    active_joints: n/a'
+            )
+        );
+        assert.ok(
+            visualizer.lastHumanoidJogDiagnostics.renderedLines.some((line) => (
+                typeof line === 'string' &&
+                line.startsWith('restore(pred/ared/rho/by):') &&
+                line.includes('filter')
+            ))
+        );
+        assert.ok(
+            visualizer.lastHumanoidJogDiagnostics.renderedLines.some((line) => (
+                typeof line === 'string' &&
+                line.startsWith('restore(rej_pred/rej_ared/rej_rho/rej):') &&
+                line.includes('poor_ratio')
+            ))
+        );
+
+        visualizer._publishHumanoidJogDiagnostics({
+            ...buildHumanoidJogMJDiagnostics({
+                solverMode: 'mj_restore_tr',
+                modeTag: 'cooperative-ruled-surface-polishing-target',
+                restorationResult: {
+                    iterations: 2,
+                    acceptedIterations: 1
+                },
+                polishIterations: 2
+            }),
+            iterations: 2
+        });
+        assert.ok(
+            visualizer.lastHumanoidJogDiagnostics.renderedLines.includes(
+                'iters(total/restore/polish): 4 / 2 / 2    active_joints: n/a'
+            )
+        );
 
         visualizer._publishHumanoidJogDiagnostics(buildHumanoidJogMJDiagnostics({
             solverMode: 'mj_restore_pre_w',
@@ -5050,7 +7267,7 @@ test('RobotVisualizer publishes rendered mj_restore_pre_w diagnostics lines for 
         }));
         assert.ok(visualizer.lastHumanoidJogDiagnostics.renderedLines.includes('pre_w: skipped(no_progress)'));
         assert.ok(visualizer.lastHumanoidJogDiagnostics.renderedLines.includes('pre_w_metric: w_abs_hier'));
-        assert.ok(visualizer.lastHumanoidJogDiagnostics.renderedLines.includes('task_pre_w: w_abs_hier'));
+        assert.ok(visualizer.lastHumanoidJogDiagnostics.renderedLines.includes('task_pre_w: w_abs'));
         assert.ok(visualizer.lastHumanoidJogDiagnostics.renderedLines.includes('pre_w_start: q0'));
 
         visualizer._publishHumanoidJogDiagnostics(buildHumanoidJogMJDiagnostics({
@@ -5065,13 +7282,110 @@ test('RobotVisualizer publishes rendered mj_restore_pre_w diagnostics lines for 
             preWMetric: 'w_abs_hier_vfi',
             preWStart: 'q0'
         }));
-        assert.ok(visualizer.lastHumanoidJogDiagnostics.renderedLines.includes('task_w: w_rel_hier_vfi'));
+        assert.ok(visualizer.lastHumanoidJogDiagnostics.renderedLines.includes('task_w: w_rel_vfi'));
         assert.ok(visualizer.lastHumanoidJogDiagnostics.renderedLines.includes('pre_w: disabled_for_mode'));
         assert.ok(visualizer.lastHumanoidJogDiagnostics.renderedLines.includes('pre_w_metric: w_abs_hier_vfi'));
-        assert.ok(visualizer.lastHumanoidJogDiagnostics.renderedLines.includes('task_pre_w: w_rel_hier_vfi'));
+        assert.ok(visualizer.lastHumanoidJogDiagnostics.renderedLines.includes('task_pre_w: w_rel_vfi'));
         assert.ok(visualizer.lastHumanoidJogDiagnostics.renderedLines.includes('pre_w_start: q0'));
+
+        visualizer._publishHumanoidJogDiagnostics(buildHumanoidJogMJDiagnostics({
+            solverMode: 'mj_restore',
+            modeTag: 'cooperative-ruled-surface-polishing-target',
+            jogMetric: 'none',
+            jogMetricState: 'skipped(waiting_for_restore)',
+            jogMetricBefore: Number.NaN,
+            jogMetricAfter: Number.NaN,
+            jogMetricApplied: false
+        }));
+        assert.ok(
+            visualizer.lastHumanoidJogDiagnostics.renderedLines.includes(
+                'jog_metric: none  skipped(waiting_for_restore)  before=n/a  after=n/a  applied=n/a'
+            )
+        );
     } finally {
         globalThis.document = originalDocument;
+    }
+});
+
+test('RobotVisualizer optimizeHumanoidManipulability routes the w button through mj_restore_tr even when another solver is selected', () => {
+    const visualizer = new RobotVisualizer(null);
+    const originalWindow = globalThis.window;
+    const originalDocument = globalThis.document;
+    let capturedArgs = null;
+
+    visualizer.humanoidMode = true;
+    visualizer.setHumanoidJogSolverMode('priority');
+    visualizer._getHumanoidAbsolutePose = () => [1, 0, 0, 0, 0, 0, 0, 0];
+    visualizer._getHumanoidRelativePose = () => [1, 0, 0, 0, 0, 0, 0, 0];
+    visualizer._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstMJRestore = (...args) => {
+        capturedArgs = args;
+        return true;
+    };
+
+    globalThis.window = {
+        humanoidQ: new Array(20).fill(0)
+    };
+    globalThis.document = {
+        getElementById(id) {
+            if (id === 'dual-arm-control-mode-select') return { value: 'absolute' };
+            if (id === 'joint-limit-avoidance-toggle') return { checked: true };
+            return null;
+        }
+    };
+
+    try {
+        const ok = visualizer.optimizeHumanoidManipulability('increase');
+        assert.equal(ok, true);
+        assert.ok(Array.isArray(capturedArgs));
+        assert.equal(capturedArgs[7]?.solverMode, 'mj_restore_tr');
+        assert.equal(capturedArgs[7]?.jogMetricOverride, 'w_cmd');
+        assert.equal(capturedArgs[7]?.metricDirection, 'increase');
+    } finally {
+        if (originalWindow === undefined) delete globalThis.window;
+        else globalThis.window = originalWindow;
+        if (originalDocument === undefined) delete globalThis.document;
+        else globalThis.document = originalDocument;
+    }
+});
+
+test('RobotVisualizer optimizeHumanoidHierarchicalAbsoluteVFIManipulabilityIterative routes the iterative w button through mj_restore_tr regardless of the selected solver', () => {
+    const visualizer = new RobotVisualizer(null);
+    const originalWindow = globalThis.window;
+    const originalDocument = globalThis.document;
+    let capturedArgs = null;
+
+    visualizer.humanoidMode = true;
+    visualizer.setHumanoidJogSolverMode('vfi');
+    visualizer._getHumanoidAbsolutePose = () => [1, 0, 0, 0, 0, 0, 0, 0];
+    visualizer._getHumanoidRelativePose = () => [1, 0, 0, 0, 0, 0, 0, 0];
+    visualizer._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstManifold = (...args) => {
+        capturedArgs = args;
+        return true;
+    };
+
+    globalThis.window = {
+        humanoidQ: new Array(20).fill(0)
+    };
+    globalThis.document = {
+        getElementById(id) {
+            if (id === 'dual-arm-control-mode-select') return { value: 'absolute' };
+            if (id === 'joint-limit-avoidance-toggle') return { checked: true };
+            return null;
+        }
+    };
+
+    try {
+        const ok = visualizer.optimizeHumanoidHierarchicalAbsoluteVFIManipulabilityIterative('increase');
+        assert.equal(ok, true);
+        assert.ok(Array.isArray(capturedArgs));
+        assert.equal(capturedArgs[6]?.solverMode, 'mj_restore_tr');
+        assert.equal(capturedArgs[6]?.jogMetricOverride, 'w_abs_hier_vfi');
+        assert.equal(capturedArgs[6]?.metricDirection, 'increase');
+    } finally {
+        if (originalWindow === undefined) delete globalThis.window;
+        else globalThis.window = originalWindow;
+        if (originalDocument === undefined) delete globalThis.document;
+        else globalThis.document = originalDocument;
     }
 });
 

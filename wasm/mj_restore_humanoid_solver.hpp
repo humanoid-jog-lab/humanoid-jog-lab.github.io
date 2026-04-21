@@ -22,12 +22,21 @@ struct HumanoidMJRestoreWaistXCorridorRequest {
     std::vector<double> rhs;
 };
 
+struct HumanoidMJRestoreJointLimitVFIRequest {
+    bool enabled = false;
+    std::vector<std::vector<double>> rows;
+    std::vector<double> rhs;
+};
+
 struct HumanoidAbsoluteMJRestoreRequest {
+    std::string solve_variant = "absolute_target";
     std::vector<double> q_current;
     int active_start = 0;
     int active_count = 0;
     std::vector<double> absolute_target;
     std::vector<double> relative_target;
+    std::vector<double> left_target;
+    std::vector<double> right_target;
     bool keep_body_z_vertical = false;
     double body_equality_tolerance = 0.0;
     double absolute_weight = 1.0;
@@ -39,6 +48,7 @@ struct HumanoidAbsoluteMJRestoreRequest {
     std::vector<double> regularization_weights;
     double wvfi_lower_bound = 0.0;
     double joint_limit_activation_threshold = 0.05;
+    HumanoidMJRestoreJointLimitVFIRequest joint_limit_vfi;
     HumanoidMJRestoreWaistXCorridorRequest waist_x_corridor;
     HumanoidMJRestoreReferenceAxis absolute_reference;
     HumanoidMJRestoreReferenceAxis relative_reference;
@@ -79,6 +89,10 @@ struct HumanoidAbsoluteMJRestoreResult {
     double last_predicted_reduction = std::numeric_limits<double>::quiet_NaN();
     double last_actual_reduction = std::numeric_limits<double>::quiet_NaN();
     std::string accepted_by;
+    double last_rejected_rho = std::numeric_limits<double>::quiet_NaN();
+    double last_rejected_predicted_reduction = std::numeric_limits<double>::quiet_NaN();
+    double last_rejected_actual_reduction = std::numeric_limits<double>::quiet_NaN();
+    std::string last_rejected_reason;
     double best_constraint_violation = std::numeric_limits<double>::infinity();
     int filter_size = 0;
     std::vector<double> reference_residual;
@@ -92,6 +106,26 @@ HumanoidAbsoluteMJRestoreResult solveHumanoidAbsoluteTargetMJRestore(
 );
 
 HumanoidAbsoluteMJRestoreResult solveHumanoidAbsoluteTargetMJRestoreTrustRegion(
+    const DQ_robotics::DQ_HumanoidURDF& robot,
+    const HumanoidAbsoluteMJRestoreRequest& request
+);
+
+HumanoidAbsoluteMJRestoreResult solveHumanoidAbsoluteDQSetpointMJRestore(
+    const DQ_robotics::DQ_HumanoidURDF& robot,
+    const HumanoidAbsoluteMJRestoreRequest& request
+);
+
+HumanoidAbsoluteMJRestoreResult solveHumanoidAbsoluteDQSetpointMJRestoreTrustRegion(
+    const DQ_robotics::DQ_HumanoidURDF& robot,
+    const HumanoidAbsoluteMJRestoreRequest& request
+);
+
+HumanoidAbsoluteMJRestoreResult solveHumanoidCooperativeDQSetpointMJRestore(
+    const DQ_robotics::DQ_HumanoidURDF& robot,
+    const HumanoidAbsoluteMJRestoreRequest& request
+);
+
+HumanoidAbsoluteMJRestoreResult solveHumanoidCooperativeDQSetpointMJRestoreTrustRegion(
     const DQ_robotics::DQ_HumanoidURDF& robot,
     const HumanoidAbsoluteMJRestoreRequest& request
 );

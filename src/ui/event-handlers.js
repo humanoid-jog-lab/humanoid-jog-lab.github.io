@@ -19,9 +19,13 @@ import { URDFPackageManager, loadURDFFromPackage } from '../urdf-loader.js';
 import { getActiveJointConfig, displayStep, angleToDisplay } from '../utils/math.js';
 import { setupGlobalDragAndDrop } from './drag-drop.js';
 import { setupScenePresetListeners } from './environment-panel.js';
-import { setupPlannedMotionListeners } from '../features/planned-motion.js';
 import { normalizeHumanoidJogSolverMode } from '../core/humanoid-jog-solver-presentation.js';
 import { getHumanoidTaskMetricOptionLabels } from '../core/humanoid-jog-task-metric-labels.js';
+import { onLanguageChange, t } from '../i18n.js';
+
+const TEACH_MULTIPLICATION_ORDER_STORAGE_KEY = 'teach-multiply-order-delta-first';
+const HUMANOID_W_METRIC_HOLD_DELAY_MS = 250;
+const HUMANOID_W_METRIC_REPEAT_INTERVAL_MS = 100;
 
 export function setupHumanoidDefaultPoseControls() {
     const profile1Btn = document.getElementById('humanoid-default-q-profile-1-btn');
@@ -92,6 +96,53 @@ export function setupHumanoidDefaultPoseControls() {
     };
 }
 
+export function setupTeachOrderControls() {
+    const teachOrderToggle = document.getElementById('teach-multiply-order-toggle');
+    const teachOrderStatus = document.getElementById('teach-multiply-order-status');
+    const updateTeachOrderStatus = (isDeltaFirst) => {
+        if (!teachOrderStatus) return;
+        teachOrderStatus.textContent = isDeltaFirst
+            ? t('Current Mode: local frame (current × Δ)')
+            : t('Current Mode: world frame (Δ × current)');
+    };
+    const applyTeachOrder = (isDeltaFirst) => {
+        if (appState.visualizer?.setTeachMultiplicationOrder) {
+            const order = isDeltaFirst ? 'delta-first' : 'current-first';
+            appState.visualizer.setTeachMultiplicationOrder(order);
+        }
+    };
+    const persistTeachOrder = (isDeltaFirst) => {
+        try {
+            localStorage.setItem(TEACH_MULTIPLICATION_ORDER_STORAGE_KEY, isDeltaFirst ? '1' : '0');
+        } catch (_) {}
+    };
+    const applyTeachOrderPreference = (isDeltaFirst) => {
+        if (teachOrderToggle) {
+            teachOrderToggle.checked = isDeltaFirst;
+        }
+        updateTeachOrderStatus(isDeltaFirst);
+        applyTeachOrder(isDeltaFirst);
+        persistTeachOrder(isDeltaFirst);
+    };
+    if (teachOrderToggle) {
+        const saved = (() => {
+            try { return localStorage.getItem(TEACH_MULTIPLICATION_ORDER_STORAGE_KEY); } catch (_) { return null; }
+        })();
+        const initialIsDeltaFirst = saved != null ? saved === '1' : Boolean(teachOrderToggle.checked);
+        applyTeachOrderPreference(initialIsDeltaFirst);
+        onLanguageChange(() => updateTeachOrderStatus(teachOrderToggle.checked));
+        teachOrderToggle.addEventListener('change', (e) => {
+            applyTeachOrderPreference(Boolean(e.target?.checked));
+        });
+    } else {
+        updateTeachOrderStatus(false);
+    }
+
+    return {
+        applyTeachOrderPreference
+    };
+}
+
 export function setupHumanoidCooperativePolishingSurfaceControls() {
     const analyticBtn = document.getElementById('humanoid-cooperative-polishing-surface-source-analytic-btn');
     const cylinderBtn = document.getElementById('humanoid-cooperative-polishing-surface-source-cylinder-btn');
@@ -158,6 +209,7 @@ export function setupHumanoidCooperativePolishingObjectPoseControls() {
     const flipNormalToggle = document.getElementById('humanoid-cooperative-polishing-object-flip-normal-toggle');
     const applyBtn = document.getElementById('humanoid-cooperative-polishing-object-apply-btn');
     const captureBtn = document.getElementById('humanoid-cooperative-polishing-object-capture-btn');
+    const exportBtn = document.getElementById('humanoid-cooperative-polishing-export-obj-btn');
     const STORAGE_KEY = 'humanoid-cooperative-polishing-object-pose';
     let currentPose = null;
 
@@ -307,6 +359,16 @@ export function setupHumanoidCooperativePolishingObjectPoseControls() {
         applyPose(capturedPose);
     });
 
+    exportBtn?.addEventListener('click', async () => {
+        await Promise.resolve(
+            appState.visualizer?.exportHumanoidCooperativeRuledSurfacePrintableObj?.({
+                thicknessMetres: 0.008,
+                segmentsU: 96,
+                segmentsV: 32
+            })
+        );
+    });
+
     flipNormalToggle?.addEventListener('change', (event) => {
         const nextFlipNormal = Boolean(event?.target?.checked);
         const nextQuaternion = Array.isArray(currentPose?.quaternion)
@@ -329,23 +391,124 @@ export function setupHumanoidCooperativePolishingObjectPoseControls() {
     };
 }
 
+export function setupHumanoidParameterControls() {
+    const humanoidJointLimitEtaInput = document.getElementById('humanoid-joint-limit-eta-input');
+    const humanoidJointLimitEtaStatus = document.getElementById('humanoid-joint-limit-eta-status');
+    const HUMANOID_JOINT_LIMIT_ETA_STORAGE_KEY = 'humanoid-joint-limit-eta';
+
+    if (!humanoidJointLimitEtaInput) {
+        return {
+            applyHumanoidJointLimitEta: () => false
+        };
+    }
+
+    const normalizeHumanoidJointLimitEta = (valueRaw) => {
+        const parsed = Number(valueRaw);
+        return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+    };
+
+    const updateHumanoidJointLimitEtaStatus = (message) => {
+        if (!humanoidJointLimitEtaStatus) return;
+        humanoidJointLimitEtaStatus.textContent = message;
+    };
+
+    const readCurrentHumanoidJointLimitEta = () => {
+        const visualizerEta = appState.visualizer?.vfiConfig?.jointLimitEta;
+        if (Number.isFinite(visualizerEta) && visualizerEta > 0) return visualizerEta;
+        const windowEta = typeof window !== 'undefined' ? window.humanoidJointLimitEta : null;
+        if (Number.isFinite(windowEta) && windowEta > 0) return windowEta;
+        return 5;
+    };
+
+    let appliedHumanoidJointLimitEta = readCurrentHumanoidJointLimitEta();
+
+    const applyHumanoidJointLimitEta = (valueRaw) => {
+        const value = normalizeHumanoidJointLimitEta(valueRaw);
+        if (value == null) {
+            humanoidJointLimitEtaInput.value = String(appliedHumanoidJointLimitEta);
+            updateHumanoidJointLimitEtaStatus(`输入无效，已恢复为 η_θ=${appliedHumanoidJointLimitEta}`);
+            return false;
+        }
+
+        appliedHumanoidJointLimitEta = value;
+        humanoidJointLimitEtaInput.value = String(value);
+        if (typeof window !== 'undefined') {
+            window.humanoidJointLimitEta = value;
+        }
+        if (appState.visualizer?.setHumanoidJointLimitEta) {
+            appState.visualizer.setHumanoidJointLimitEta(value);
+        } else if (appState.visualizer?.vfiConfig) {
+            appState.visualizer.vfiConfig.jointLimitEta = value;
+        }
+        try {
+            localStorage.setItem(HUMANOID_JOINT_LIMIT_ETA_STORAGE_KEY, String(value));
+        } catch (_) {}
+        updateHumanoidJointLimitEtaStatus(`当前值已应用：η_θ=${value}`);
+        return true;
+    };
+
+    const savedHumanoidJointLimitEta = (() => {
+        try { return localStorage.getItem(HUMANOID_JOINT_LIMIT_ETA_STORAGE_KEY); } catch (_) { return null; }
+    })();
+    applyHumanoidJointLimitEta(savedHumanoidJointLimitEta ?? appliedHumanoidJointLimitEta);
+
+    humanoidJointLimitEtaInput.addEventListener('change', (e) => {
+        applyHumanoidJointLimitEta(e.target?.value);
+    });
+    humanoidJointLimitEtaInput.addEventListener('blur', (e) => {
+        applyHumanoidJointLimitEta(e.target?.value);
+    });
+    humanoidJointLimitEtaInput.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter') return;
+        e.preventDefault?.();
+        applyHumanoidJointLimitEta(e.target?.value);
+    });
+
+    if (typeof window !== 'undefined') {
+        window.setHumanoidJointLimitEta = applyHumanoidJointLimitEta;
+    }
+
+    return {
+        applyHumanoidJointLimitEta
+    };
+}
+
 function setupHumanoidJogSolverControls() {
     // 人形点动求解器切换（new qpJ / 零空间投影 / MuJoCo 风格恢复）
     const humanoidJogSolverSelect = document.getElementById('humanoid-jog-solver-select');
     const humanoidJogMetricSelect = document.getElementById('humanoid-manifold-jog-metric-select');
     const humanoidWMetricIncreaseBtn = document.getElementById('humanoid-w-metric-increase-btn');
     const humanoidWaistXCorridorToggle = document.getElementById('humanoid-waist-x-corridor-toggle');
+    const humanoidWaistXCorridorMinInput = document.getElementById('humanoid-waist-x-corridor-min-input');
+    const humanoidWaistXCorridorMaxInput = document.getElementById('humanoid-waist-x-corridor-max-input');
     const humanoidTestDualArmLockToggle = document.getElementById('humanoid-test-dual-arm-lock-toggle');
     const dualArmControlModeSelect = document.getElementById('dual-arm-control-mode-select');
     const HUMANOID_JOG_SOLVER_STORAGE_KEY = 'humanoid-jog-solver-mode';
     const HUMANOID_JOG_METRIC_STORAGE_KEY = 'humanoid-manifold-jog-metric';
     const HUMANOID_WAIST_X_CORRIDOR_STORAGE_KEY = 'humanoid-waist-x-corridor-enabled';
+    const HUMANOID_WAIST_X_CORRIDOR_MIN_STORAGE_KEY = 'humanoid-waist-x-corridor-min';
+    const HUMANOID_WAIST_X_CORRIDOR_MAX_STORAGE_KEY = 'humanoid-waist-x-corridor-max';
     const HUMANOID_TEST_DUAL_ARM_LOCK_STORAGE_KEY = 'humanoid-test-dual-arm-lock-enabled';
+    const isHumanoidRuledSurfacePolishingMode = (mode) => (
+        mode === 'left-ruled-surface-polishing'
+        || mode === 'cooperative-ruled-surface-polishing'
+        || mode === 'cooperative-ruled-surface-polishing-dq-setpoint'
+        || mode === 'cooperative-ruled-surface-polishing-dq-setpoint-arm-only'
+    );
+    const isHumanoidMJRestoreLikeSolverMode = (mode) => (
+        mode === 'mj_restore'
+        || mode === 'mj_restore_pre_w'
+        || mode === 'mj_restore_tr'
+    );
+    const normalizeHumanoidJogSolverModeForUI = (modeRaw) => {
+        const mode = normalizeHumanoidJogSolverMode(modeRaw);
+        return mode === 'mj_restore_pre_w' ? 'mj_restore_tr' : mode;
+    };
     const normalizeHumanoidJogMetric = (metricRaw) => {
         return metricRaw === 'w_abs_hier_vfi' ? 'w_abs_hier_vfi' : 'w_abs_hier';
     };
     const applyHumanoidJogSolverMode = (modeRaw) => {
-        const mode = normalizeHumanoidJogSolverMode(modeRaw);
+        const mode = normalizeHumanoidJogSolverModeForUI(modeRaw);
         if (humanoidJogSolverSelect) humanoidJogSolverSelect.value = mode;
         if (typeof window !== 'undefined') {
             window.humanoidJogSolverMode = mode;
@@ -356,6 +519,17 @@ function setupHumanoidJogSolverControls() {
         try {
             localStorage.setItem(HUMANOID_JOG_SOLVER_STORAGE_KEY, mode);
         } catch (_) {}
+    };
+    const ensureHumanoidJogSolverSupportsControlMode = (controlModeRaw) => {
+        if (!isHumanoidRuledSurfacePolishingMode(controlModeRaw)) return;
+        const currentSolverMode = normalizeHumanoidJogSolverModeForUI(
+            humanoidJogSolverSelect?.value
+            ?? (typeof window !== 'undefined' ? window.humanoidJogSolverMode : null)
+            ?? 'vfi'
+        );
+        if (!isHumanoidMJRestoreLikeSolverMode(currentSolverMode)) {
+            applyHumanoidJogSolverMode('mj_restore');
+        }
     };
     const applyHumanoidJogMetric = (metricRaw) => {
         const metric = normalizeHumanoidJogMetric(metricRaw);
@@ -409,6 +583,40 @@ function setupHumanoidJogSolverControls() {
             localStorage.setItem(HUMANOID_WAIST_X_CORRIDOR_STORAGE_KEY, enabled ? '1' : '0');
         } catch (_) {}
     };
+    const normalizeHumanoidWaistXCorridorMax = (valueRaw) => {
+        const parsed = Number(valueRaw);
+        return Number.isFinite(parsed) ? parsed : 0.05;
+    };
+    const normalizeHumanoidWaistXCorridorMin = (valueRaw) => {
+        const parsed = Number(valueRaw);
+        return Number.isFinite(parsed) ? parsed : -0.1;
+    };
+    const applyHumanoidWaistXCorridorMin = (valueRaw) => {
+        const value = normalizeHumanoidWaistXCorridorMin(valueRaw);
+        if (humanoidWaistXCorridorMinInput) humanoidWaistXCorridorMinInput.value = String(value);
+        if (typeof window !== 'undefined') {
+            window.humanoidWaistXCorridorMin = value;
+        }
+        if (appState.visualizer?.setHumanoidWaistXCorridorMin) {
+            appState.visualizer.setHumanoidWaistXCorridorMin(value);
+        }
+        try {
+            localStorage.setItem(HUMANOID_WAIST_X_CORRIDOR_MIN_STORAGE_KEY, String(value));
+        } catch (_) {}
+    };
+    const applyHumanoidWaistXCorridorMax = (valueRaw) => {
+        const value = normalizeHumanoidWaistXCorridorMax(valueRaw);
+        if (humanoidWaistXCorridorMaxInput) humanoidWaistXCorridorMaxInput.value = String(value);
+        if (typeof window !== 'undefined') {
+            window.humanoidWaistXCorridorMax = value;
+        }
+        if (appState.visualizer?.setHumanoidWaistXCorridorMax) {
+            appState.visualizer.setHumanoidWaistXCorridorMax(value);
+        }
+        try {
+            localStorage.setItem(HUMANOID_WAIST_X_CORRIDOR_MAX_STORAGE_KEY, String(value));
+        } catch (_) {}
+    };
     const triggerHumanoidWMetricOptimization = (direction) => {
         if (!appState.visualizer) return;
         const metric = normalizeHumanoidJogMetric(
@@ -421,10 +629,60 @@ function setupHumanoidJogSolverControls() {
         }
         appState.visualizer.optimizeHumanoidHierarchicalAbsoluteManipulability?.(direction);
     };
-    const bindSingleShotMetricButton = (button, direction) => {
+    const bindRepeatingMetricButton = (button, direction) => {
         if (!button) return;
+        let repeatDelayTimeoutId = null;
+        let repeatIntervalId = null;
+        let pointerTriggeredClick = false;
+
+        const clearRepeatDelay = () => {
+            if (repeatDelayTimeoutId === null) return;
+            clearTimeout(repeatDelayTimeoutId);
+            repeatDelayTimeoutId = null;
+        };
+        const clearRepeatInterval = () => {
+            if (repeatIntervalId === null) return;
+            clearInterval(repeatIntervalId);
+            repeatIntervalId = null;
+        };
+        const stopRepeating = () => {
+            clearRepeatDelay();
+            clearRepeatInterval();
+        };
         const fire = () => triggerHumanoidWMetricOptimization(direction);
-        button.addEventListener('mousedown', fire);
+        const startRepeating = () => {
+            clearRepeatInterval();
+            repeatIntervalId = setInterval(() => {
+                fire();
+            }, HUMANOID_W_METRIC_REPEAT_INTERVAL_MS);
+        };
+        const handlePointerDown = (event) => {
+            event?.preventDefault?.();
+            stopRepeating();
+            pointerTriggeredClick = true;
+            fire();
+            repeatDelayTimeoutId = setTimeout(() => {
+                repeatDelayTimeoutId = null;
+                startRepeating();
+            }, HUMANOID_W_METRIC_HOLD_DELAY_MS);
+        };
+        const handleClick = (event) => {
+            if (pointerTriggeredClick) {
+                pointerTriggeredClick = false;
+                event?.preventDefault?.();
+                return;
+            }
+            fire();
+        };
+
+        button.addEventListener('pointerdown', handlePointerDown);
+        button.addEventListener('pointerup', stopRepeating);
+        button.addEventListener('pointerleave', stopRepeating);
+        button.addEventListener('pointercancel', stopRepeating);
+        button.addEventListener('click', handleClick);
+        if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+            window.addEventListener('blur', stopRepeating);
+        }
     };
     if (
         humanoidJogSolverSelect ||
@@ -445,9 +703,31 @@ function setupHumanoidJogSolverControls() {
         const savedWaistXCorridor = (() => {
             try { return localStorage.getItem(HUMANOID_WAIST_X_CORRIDOR_STORAGE_KEY); } catch (_) { return null; }
         })();
+        const savedWaistXCorridorMin = (() => {
+            try { return localStorage.getItem(HUMANOID_WAIST_X_CORRIDOR_MIN_STORAGE_KEY); } catch (_) { return null; }
+        })();
+        const savedWaistXCorridorMax = (() => {
+            try { return localStorage.getItem(HUMANOID_WAIST_X_CORRIDOR_MAX_STORAGE_KEY); } catch (_) { return null; }
+        })();
         applyHumanoidJogSolverMode(saved ?? humanoidJogSolverSelect.value ?? 'vfi');
         applyHumanoidJogMetric(savedMetric ?? humanoidJogMetricSelect?.value ?? 'w_abs_hier');
         updateHumanoidJogMetricOptionLabels();
+        ensureHumanoidJogSolverSupportsControlMode(
+            dualArmControlModeSelect?.value
+            ?? (typeof window !== 'undefined' ? window.currentDualArmControlMode : null)
+        );
+        applyHumanoidWaistXCorridorMin(
+            savedWaistXCorridorMin
+            ?? ((typeof window !== 'undefined' && Number.isFinite(window.humanoidWaistXCorridorMin))
+                ? window.humanoidWaistXCorridorMin
+                : -0.1)
+        );
+        applyHumanoidWaistXCorridorMax(
+            savedWaistXCorridorMax
+            ?? ((typeof window !== 'undefined' && Number.isFinite(window.humanoidWaistXCorridorMax))
+                ? window.humanoidWaistXCorridorMax
+                : 0.05)
+        );
         applyHumanoidWaistXCorridor(
             savedWaistXCorridor != null
                 ? savedWaistXCorridor === '1'
@@ -473,6 +753,7 @@ function setupHumanoidJogSolverControls() {
         if (dualArmControlModeSelect) {
             dualArmControlModeSelect.addEventListener('change', (e) => {
                 updateHumanoidJogMetricOptionLabels(e.target?.value);
+                ensureHumanoidJogSolverSupportsControlMode(e.target?.value);
             });
         }
         if (humanoidWaistXCorridorToggle) {
@@ -480,16 +761,28 @@ function setupHumanoidJogSolverControls() {
                 applyHumanoidWaistXCorridor(Boolean(e.target?.checked));
             });
         }
+        if (humanoidWaistXCorridorMinInput) {
+            humanoidWaistXCorridorMinInput.addEventListener('change', (e) => {
+                applyHumanoidWaistXCorridorMin(e.target?.value);
+            });
+        }
+        if (humanoidWaistXCorridorMaxInput) {
+            humanoidWaistXCorridorMaxInput.addEventListener('change', (e) => {
+                applyHumanoidWaistXCorridorMax(e.target?.value);
+            });
+        }
         if (humanoidTestDualArmLockToggle) {
             humanoidTestDualArmLockToggle.addEventListener('change', (e) => {
                 applyHumanoidTestDualArmLock(Boolean(e.target?.checked));
             });
         }
-        bindSingleShotMetricButton(humanoidWMetricIncreaseBtn, 'increase');
+        bindRepeatingMetricButton(humanoidWMetricIncreaseBtn, 'increase');
         if (typeof window !== 'undefined') {
             window.setHumanoidJogSolverMode = applyHumanoidJogSolverMode;
             window.setHumanoidJogMetric = applyHumanoidJogMetric;
             window.setHumanoidWaistXCorridorEnabled = applyHumanoidWaistXCorridor;
+            window.setHumanoidWaistXCorridorMin = applyHumanoidWaistXCorridorMin;
+            window.setHumanoidWaistXCorridorMax = applyHumanoidWaistXCorridorMax;
             window.setHumanoidTestDualArmLockEnabled = applyHumanoidTestDualArmLock;
             window.refreshHumanoidJogMetricOptionLabels = updateHumanoidJogMetricOptionLabels;
         }
@@ -499,6 +792,8 @@ function setupHumanoidJogSolverControls() {
         applyHumanoidJogSolverMode,
         applyHumanoidJogMetric,
         applyHumanoidWaistXCorridor,
+        applyHumanoidWaistXCorridorMin,
+        applyHumanoidWaistXCorridorMax,
         applyHumanoidTestDualArmLock
     };
 }
@@ -515,15 +810,7 @@ function setupEventListeners() {
             applyPreset(preset);
         });
     });
-    
-    // 标签切换
-    document.querySelectorAll('.tab-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const tabName = btn.dataset.tab;
-            switchTab(tabName);
-        });
-    });
-    
+
     // DQ 演示按钮（可选）
     const dqRotationDemoBtn = document.getElementById('dq-rotation-demo');
     if (dqRotationDemoBtn) {
@@ -575,9 +862,10 @@ function setupEventListeners() {
     const angleUnitToggle = document.getElementById('angle-unit-toggle');
     if (angleUnitToggle) {
         const updateAngleUnitToggleLabel = () => {
-            angleUnitToggle.textContent = appState.angleDisplayMode === 'deg' ? '切换为弧度' : '切换为角度';
+            angleUnitToggle.textContent = appState.angleDisplayMode === 'deg' ? t('Switch to Radians') : t('Switch to Degrees');
         };
         updateAngleUnitToggleLabel();
+        onLanguageChange(updateAngleUnitToggleLabel);
         angleUnitToggle.addEventListener('click', () => {
             appState.angleDisplayMode = appState.angleDisplayMode === 'deg' ? 'rad' : 'deg';
             if (callbacks.refreshJointControlDisplay) {
@@ -589,20 +877,19 @@ function setupEventListeners() {
 
     const topDownViewBtn = document.getElementById('top-down-view-btn');
     if (topDownViewBtn) {
-        const defaultText = topDownViewBtn.textContent.trim();
         topDownViewBtn.addEventListener('click', () => {
             topDownViewBtn.disabled = true;
             try {
                 if (appState.visualizer?.setTopDownView) {
                     appState.visualizer.setTopDownView();
                 }
-                topDownViewBtn.textContent = '已切换俯视';
+                topDownViewBtn.textContent = t('Top View Set');
             } catch (error) {
                 console.error('切换俯视视角失败:', error);
-                topDownViewBtn.textContent = '切换失败';
+                topDownViewBtn.textContent = t('Switch Failed');
             } finally {
                 setTimeout(() => {
-                    topDownViewBtn.textContent = defaultText;
+                    topDownViewBtn.textContent = t('Top View');
                     topDownViewBtn.disabled = false;
                 }, 1200);
             }
@@ -619,10 +906,10 @@ function setupEventListeners() {
                 if (navigator?.clipboard?.readText) {
                     inputText = await navigator.clipboard.readText();
                     if (!inputText || !inputText.trim()) {
-                        throw new Error('剪贴板为空，无法导入关节角度');
+                        throw new Error(t('Clipboard is empty; cannot import joint angles'));
                     }
                 } else {
-                    const promptText = window.prompt('粘贴关节角度数组（支持直接粘贴复制的输出）：');
+                    const promptText = window.prompt(t('Paste joint angle array (supports direct paste from copied output):'));
                     if (promptText === null) {
                         importAnglesBtn.disabled = false;
                         return;
@@ -633,14 +920,14 @@ function setupEventListeners() {
                 if (callbacks.importJointAnglesFromText) {
                     callbacks.importJointAnglesFromText(inputText);
                 }
-                importAnglesBtn.textContent = '导入成功';
+                importAnglesBtn.textContent = t('Joint angle import complete');
             } catch (error) {
                 console.error('导入关节角度失败:', error);
-                importAnglesBtn.textContent = '导入失败';
-                window.alert(`导入关节角度失败：${error.message}`);
+                importAnglesBtn.textContent = t('Joint angle import failed');
+                window.alert(t('Failed to import joint angles: {{message}}', { message: error.message }));
             } finally {
                 setTimeout(() => {
-                    importAnglesBtn.textContent = defaultText;
+                    importAnglesBtn.textContent = t('Import from Clipboard');
                     importAnglesBtn.disabled = false;
                 }, 1500);
             }
@@ -656,14 +943,14 @@ function setupEventListeners() {
                 if (callbacks.addEnvironmentBoxToScene) {
                     callbacks.addEnvironmentBoxToScene();
                 }
-                addEnvironmentBoxBtn.textContent = '已添加箱子';
+                addEnvironmentBoxBtn.textContent = t('Environment box added');
             } catch (error) {
                 console.error('添加环境箱体失败:', error);
-                addEnvironmentBoxBtn.textContent = '添加失败';
-                window.alert(`添加环境箱体失败：${error.message}`);
+                addEnvironmentBoxBtn.textContent = t('Add failed');
+                window.alert(t('Failed to add environment box: {{message}}', { message: error.message }));
             } finally {
                 setTimeout(() => {
-                    addEnvironmentBoxBtn.textContent = defaultLabel;
+                    addEnvironmentBoxBtn.textContent = t('Add Box (41.5 × 30.5 × 14 cm)');
                     addEnvironmentBoxBtn.disabled = false;
                 }, 1500);
             }
@@ -672,9 +959,6 @@ function setupEventListeners() {
 
     // 场景预设下拉菜单
     setupScenePresetListeners();
-
-    // 规划运动事件监听
-    setupPlannedMotionListeners();
 
     const copyAnglesBtn = document.getElementById('copy-joint-angles-btn');
     if (copyAnglesBtn) {
@@ -685,13 +969,13 @@ function setupEventListeners() {
                 if (callbacks.copyJointAnglesToClipboard) {
                     await callbacks.copyJointAnglesToClipboard();
                 }
-                copyAnglesBtn.textContent = '已复制！';
+                copyAnglesBtn.textContent = t('Copied!');
             } catch (error) {
                 console.error('复制关节角度失败:', error);
-                copyAnglesBtn.textContent = '复制失败';
+                copyAnglesBtn.textContent = t('Copy failed');
             } finally {
                 setTimeout(() => {
-                    copyAnglesBtn.textContent = defaultCopyText;
+                    copyAnglesBtn.textContent = t('Copy Joint Angles');
                     copyAnglesBtn.disabled = false;
                 }, 1500);
             }
@@ -707,43 +991,20 @@ function setupEventListeners() {
                 if (callbacks.copyJointLimitsToClipboard) {
                     await callbacks.copyJointLimitsToClipboard();
                 }
-                copyLimitsBtn.textContent = '已复制！';
+                copyLimitsBtn.textContent = t('Copied!');
             } catch (error) {
                 console.error('复制关节限位失败:', error);
-                copyLimitsBtn.textContent = '复制失败';
+                copyLimitsBtn.textContent = t('Copy failed');
             } finally {
                 setTimeout(() => {
-                    copyLimitsBtn.textContent = defaultText;
+                    copyLimitsBtn.textContent = t('Copy Joint Limits');
                     copyLimitsBtn.disabled = false;
                 }, 1500);
             }
         });
     }
     
-    // 点动乘法顺序切换
-    const teachOrderToggle = document.getElementById('teach-multiply-order-toggle');
-    const teachOrderStatus = document.getElementById('teach-multiply-order-status');
-    const updateTeachOrderStatus = (isDeltaFirst) => {
-        if (!teachOrderStatus) return;
-        teachOrderStatus.textContent = isDeltaFirst 
-            ? '当前模式：局部坐标（当前 × Δ）'
-            : '当前模式：世界坐标（Δ × 当前）';
-    };
-    const applyTeachOrder = (isDeltaFirst) => {
-        if (appState.visualizer?.setTeachMultiplicationOrder) {
-            const order = isDeltaFirst ? 'delta-first' : 'current-first';
-            appState.visualizer.setTeachMultiplicationOrder(order);
-        }
-    };
-    if (teachOrderToggle) {
-        updateTeachOrderStatus(teachOrderToggle.checked);
-        applyTeachOrder(teachOrderToggle.checked);
-        teachOrderToggle.addEventListener('change', (e) => {
-            const isDeltaFirst = e.target.checked;
-            updateTeachOrderStatus(isDeltaFirst);
-            applyTeachOrder(isDeltaFirst);
-        });
-    }
+    setupTeachOrderControls();
 
     // 示教器速度百分比（影响每步增量）
     const teachSpeedSlider = document.getElementById('teach-speed-percent');
@@ -774,6 +1035,7 @@ function setupEventListeners() {
     }
 
     setupHumanoidDefaultPoseControls();
+    setupHumanoidParameterControls();
     setupHumanoidCooperativePolishingSurfaceControls();
     setupHumanoidCooperativePolishingObjectPoseControls();
     setupHumanoidJogSolverControls();
@@ -878,50 +1140,62 @@ function setupEventListeners() {
                     }
                     return;
                 }
-                if (appState.visualizer.humanoidMode && controlMode === 'surface-slide') {
-                    if (type === 'rotation') return;
-                    if (axis !== 'x' && axis !== 'y' && axis !== 'z') return;
-                    appState.visualizer.moveHumanoidSurfaceAlongParameter(axis, direction);
-                    intervalId = setInterval(() => {
-                        appState.visualizer.moveHumanoidSurfaceAlongParameter(axis, direction);
-                    }, 20);
-                    return;
-                }
-                if (appState.visualizer.humanoidMode && controlMode === 'surface-slide-absolute') {
-                    if (type === 'rotation') return;
-                    if (axis !== 'x' && axis !== 'y' && axis !== 'z') return;
-                    appState.visualizer.moveHumanoidSurfaceAbsoluteAlongParameter(axis, direction);
-                    intervalId = setInterval(() => {
-                        appState.visualizer.moveHumanoidSurfaceAbsoluteAlongParameter(axis, direction);
-                    }, 20);
-                    return;
-                }
-                if (appState.visualizer.humanoidMode && controlMode === 'dual-independent-surface-slide') {
-                    const parameterAxis = type === 'rotation'
-                        ? (axis === 'rx' ? 'x' : (axis === 'ry' ? 'y' : (axis === 'rz' ? 'z' : null)))
-                        : axis;
-                    if (parameterAxis !== 'x' && parameterAxis !== 'y' && parameterAxis !== 'z') return;
-                    if (type === 'rotation') {
-                        appState.visualizer.moveHumanoidDualIndependentRightSurfaceAlongParameter(parameterAxis, direction);
-                        intervalId = setInterval(() => {
-                            appState.visualizer.moveHumanoidDualIndependentRightSurfaceAlongParameter(parameterAxis, direction);
-                        }, 20);
-                    } else {
-                        appState.visualizer.moveHumanoidDualIndependentLeftSurfaceAlongParameter(parameterAxis, direction);
-                        intervalId = setInterval(() => {
-                            appState.visualizer.moveHumanoidDualIndependentLeftSurfaceAlongParameter(parameterAxis, direction);
-                        }, 20);
-                    }
-                    return;
-                }
-                if (appState.visualizer.humanoidMode && controlMode === 'cooperative-ruled-surface-polishing') {
+                if (
+                    appState.visualizer.humanoidMode
+                    && (
+                        controlMode === 'cooperative-ruled-surface-polishing'
+                        || controlMode === 'cooperative-ruled-surface-polishing-dq-setpoint'
+                        || controlMode === 'cooperative-ruled-surface-polishing-dq-setpoint-arm-only'
+                    )
+                ) {
                     const parameterAxis = type === 'rotation'
                         ? (axis === 'rx' ? 'rx' : null)
                         : axis;
                     if (parameterAxis !== 'x' && parameterAxis !== 'y' && parameterAxis !== 'z' && parameterAxis !== 'rx') return;
-                    appState.visualizer.moveHumanoidCooperativeRuledSurfacePolishingAlongParameter(parameterAxis, direction);
+                    let cooperativeMovePending = false;
+                    const stopRepeating = () => {
+                        if (intervalId) {
+                            clearInterval(intervalId);
+                            intervalId = null;
+                        }
+                    };
+                    const settleCooperativeMove = (result) => {
+                        cooperativeMovePending = false;
+                        if (result === false) {
+                            stopRepeating();
+                        }
+                    };
+                    const triggerCooperativeMove = () => {
+                        if (cooperativeMovePending) return;
+                        cooperativeMovePending = true;
+                        try {
+                            const moveResult = appState.visualizer.moveHumanoidCooperativeRuledSurfacePolishingAlongParameter(parameterAxis, direction);
+                            if (moveResult && typeof moveResult.then === 'function') {
+                                void moveResult.then(settleCooperativeMove).catch(() => {
+                                    settleCooperativeMove(false);
+                                });
+                                return;
+                            }
+                            settleCooperativeMove(moveResult);
+                        } catch (error) {
+                            settleCooperativeMove(false);
+                            throw error;
+                        }
+                    };
                     intervalId = setInterval(() => {
-                        appState.visualizer.moveHumanoidCooperativeRuledSurfacePolishingAlongParameter(parameterAxis, direction);
+                        triggerCooperativeMove();
+                    }, 20);
+                    triggerCooperativeMove();
+                    return;
+                }
+                if (appState.visualizer.humanoidMode && controlMode === 'left-ruled-surface-polishing') {
+                    const parameterAxis = type === 'rotation' ? null : axis;
+                    if (parameterAxis !== 'x' && parameterAxis !== 'y' && parameterAxis !== 'z') return;
+                    const moveAlongParameter = appState.visualizer?.moveHumanoidLeftRuledSurfacePolishingAlongParameter;
+                    if (typeof moveAlongParameter !== 'function') return;
+                    moveAlongParameter.call(appState.visualizer, parameterAxis, direction);
+                    intervalId = setInterval(() => {
+                        moveAlongParameter.call(appState.visualizer, parameterAxis, direction);
                     }, 20);
                     return;
                 }
@@ -1161,48 +1435,6 @@ async function applyPreset(preset) {
     }
 }
 
-/**
- * 切换标签
- */
-function switchTab(tabName) {
-    // 更新按钮状态
-    document.querySelectorAll('.tab-btn').forEach(btn => {
-        btn.classList.toggle('active', btn.dataset.tab === tabName);
-    });
-    
-    // 更新标签内容
-    document.querySelectorAll('.tab-pane').forEach(pane => {
-        // 对于pose标签，根据模式显示不同的内容
-        if (tabName === 'pose') {
-            if (appState.dualArmMode) {
-                // 双臂模式：显示双臂位姿
-                if (pane.id === 'dual-arm-pose-tab') {
-                    pane.classList.add('active');
-                    pane.style.display = 'block';
-                } else if (pane.id === 'pose-tab') {
-                    pane.classList.remove('active');
-                    pane.style.display = 'none';
-                } else {
-                    pane.classList.toggle('active', pane.id === `${tabName}-tab`);
-                }
-            } else {
-                // 单臂模式：显示单臂位姿
-                if (pane.id === 'pose-tab') {
-                    pane.classList.add('active');
-                    pane.style.display = 'block';
-                } else if (pane.id === 'dual-arm-pose-tab') {
-                    pane.classList.remove('active');
-                    pane.style.display = 'none';
-                } else {
-                    pane.classList.toggle('active', pane.id === `${tabName}-tab`);
-                }
-            }
-        } else {
-            pane.classList.toggle('active', pane.id === `${tabName}-tab`);
-        }
-    });
-}
-
 // ═══════════════════════════════════════════
 //  DQ Demos
 // ═══════════════════════════════════════════
@@ -1217,7 +1449,7 @@ function demoRotation() {
     const rotation = DQ.rotation(Math.PI / 2, 0, 0, 1);
     console.log('旋转 DQ (90° 绕 Z 轴):', rotation.toArray());
     
-    alert('查看控制台以查看旋转 DQ 输出');
+    alert(t('See the console for the rotation DQ output'));
 }
 
 /**
@@ -1230,7 +1462,7 @@ function demoTranslation() {
     const translation = DQ.translation(1, 2, 3);
     console.log('平移 DQ (1, 2, 3):', translation.toArray());
     
-    alert('查看控制台以查看平移 DQ 输出');
+    alert(t('See the console for the translation DQ output'));
 }
 
 /**
@@ -1248,7 +1480,7 @@ function demoPose() {
     console.log('平移部分:', translation);
     console.log('旋转部分:', rotation);
     
-    alert('查看控制台以查看位姿 DQ 输出');
+    alert(t('See the console for the pose DQ output'));
 }
 
 // ═══════════════════════════════════════════
@@ -1260,7 +1492,7 @@ function demoPose() {
  */
 function extractMDHFromCurrentURDF() {
     if (!appState.visualizer || !appState.visualizer.urdfRobot) {
-        alert('⚠ URDF 模型未加载\n\n请确保 URDF 模型已成功加载。');
+        alert(t('⚠ URDF model is not loaded\n\nPlease make sure the URDF model has loaded successfully.'));
         return;
     }
     
@@ -1298,11 +1530,11 @@ function extractMDHFromCurrentURDF() {
             </div>
         `;
         
-        alert('✓ MDH 参数提取成功！\n\n请打开控制台 (F12) 查看详细参数。');
+        alert(t('✓ MDH parameters extracted successfully!\n\nPlease open the console (F12) to view the details.'));
         
     } catch (error) {
         console.error('提取 MDH 失败:', error);
-        alert('❌ 提取失败\n\n' + error.message);
+        alert(t('❌ Extraction failed\n\n{{message}}', { message: error.message }));
     }
 }
 
@@ -1311,7 +1543,7 @@ function extractMDHFromCurrentURDF() {
  */
 function compareMDHParameters() {
     if (!appState.visualizer || !appState.visualizer.urdfRobot) {
-        alert('⚠ URDF 模型未加载');
+        alert(t('⚠ URDF model is not loaded'));
         return;
     }
     
@@ -1331,7 +1563,7 @@ function compareMDHParameters() {
                     URDF 和预定义参数匹配
                 </div>
             `;
-            alert('✓ 参数一致！\n\nURDF 提取的 MDH 参数与官方参考参数完全一致。\n\n查看控制台了解详情。');
+            alert(t('✓ Parameters match!\n\nThe MDH parameters extracted from the URDF exactly match the official reference.\n\nSee the console for details.'));
         } else {
             const diffCount = result.comparison.differences.length;
             statusDiv.innerHTML = `
@@ -1340,12 +1572,12 @@ function compareMDHParameters() {
                     查看控制台了解详情
                 </div>
             `;
-            alert(`⚠ 发现差异\n\n在 ${diffCount} 个参数上存在差异。\n\n这可能是由于：\n- 坐标系约定不同\n- 零位定义不同\n- 参数来源不同\n\n查看控制台了解详情。`);
+            alert(t('⚠ Differences found\n\n{{count}} parameters differ.\n\nPossible reasons:\n- Different frame conventions\n- Different zero-position definitions\n- Different parameter sources\n\nSee the console for details.', { count: diffCount }));
         }
         
     } catch (error) {
         console.error('对比失败:', error);
-        alert('❌ 对比失败\n\n' + error.message);
+        alert(t('❌ Comparison failed\n\n{{message}}', { message: error.message }));
     }
 }
 
@@ -1354,7 +1586,7 @@ function compareMDHParameters() {
  */
 function useURDFMDH() {
     if (!appState.extractedMDH) {
-        alert('⚠ 请先提取 MDH 参数\n\n点击 "从URDF提取MDH" 按钮。');
+        alert(t('⚠ Please extract the MDH parameters first.\n\nClick "Extract MDH from URDF".'));
         return;
     }
     
@@ -1392,11 +1624,11 @@ function useURDFMDH() {
             callbacks.updateRobotPose();
         }
         
-        alert('✓ 切换成功！\n\n现在使用从 URDF 提取的 MDH 参数进行运动学计算。\n\n黄色球应该与 URDF 末端完全对齐！');
+        alert(t('✓ Switch successful!\n\nThe kinematics now use the MDH parameters extracted from the URDF.\n\nThe yellow marker should align exactly with the URDF end-effector.'));
         
     } catch (error) {
         console.error('切换失败:', error);
-        alert('❌ 切换失败\n\n' + error.message);
+        alert(t('❌ Switch failed\n\n{{message}}', { message: error.message }));
     }
 }
 
@@ -1408,7 +1640,6 @@ function useURDFMDH() {
  * 注册事件处理回调到全局 callbacks 对象
  */
 export function registerEventHandlersCallbacks() {
-    callbacks.switchTab = switchTab;
     callbacks.setupEventListeners = setupEventListeners;
 }
 
@@ -1420,7 +1651,6 @@ export {
     setupEventListeners,
     setupHumanoidJogSolverControls,
     applyPreset,
-    switchTab,
     demoRotation,
     demoTranslation,
     demoPose,

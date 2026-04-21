@@ -8,9 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "benchmark:humanoid-jog": "node tools/run-humanoid-jog-benchmark.mjs",
-    "check:nlopt": "sh -c 'if [ -d third_party/nlopt ]; then echo \"✓ NLopt source found at third_party/nlopt\"; else echo \"✗ NLopt source missing at third_party/nlopt\"; echo \"Vendor NLopt before running NLopt-specific builds.\"; exit 1; fi'",
     "build:wasm": "./build.sh",
-    "build:wasm:nlopt": "NLOPT_REQUIRED=1 ./build.sh",
     "ros2-backend": "node server/ros2-backend.js",
     "dev:full": "concurrently \"npm run dev\" \"npm run ros2-backend\""
   },

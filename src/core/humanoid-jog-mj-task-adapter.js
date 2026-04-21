@@ -135,33 +135,13 @@ const MODE_CONFIGS = {
             createInvariant('right_arm_fixed', null, 1, 100)
         ]
     },
-    'surface-slide': {
-        modeTag: 'surface-slide-target',
-        commandKind: 'surface_slide_pose',
+    'left-ruled-surface-polishing': {
+        modeTag: 'left-ruled-surface-polishing-target',
+        commandKind: 'single_arm_surface_polishing_pose',
         activeJointScope: 'left-arm',
         invariants: () => [
             createInvariant('right_arm_fixed', null, 1, 100),
             createInvariant('waist_fixed', null, 0.5, 50)
-        ]
-    },
-    'surface-slide-absolute': {
-        modeTag: 'absolute-target',
-        commandKind: 'absolute_pose',
-        activeJointScope: 'waist+arms',
-        invariants: () => [
-            createInvariant('relative_pose')
-        ],
-        extraConstraints: () => [
-            createExtraConstraint('body_z', { upright: true }, 1, 100, 'body_z/upright')
-        ]
-    },
-    'dual-independent-surface-slide': {
-        modeTag: 'dual-independent-surface-slide-target',
-        commandKind: 'bimanual_surface_slide_pose',
-        activeJointScope: 'waist+arms',
-        invariants: () => [],
-        extraConstraints: () => [
-            createExtraConstraint('body_z', { upright: true }, 1, 100, 'body_z/upright')
         ]
     },
     'cooperative-ruled-surface-polishing': {
@@ -172,6 +152,22 @@ const MODE_CONFIGS = {
         extraConstraints: () => [
             createExtraConstraint('body_z', { upright: true }, 1, 100, 'body_z/upright')
         ]
+    },
+    'cooperative-ruled-surface-polishing-dq-setpoint': {
+        modeTag: 'cooperative-ruled-surface-polishing-dq-setpoint-target',
+        commandKind: 'bimanual_surface_polishing_pose_dq_setpoint',
+        activeJointScope: 'waist+arms',
+        invariants: () => [],
+        extraConstraints: () => [
+            createExtraConstraint('body_z', { upright: true }, 1, 100, 'body_z/upright')
+        ]
+    },
+    'cooperative-ruled-surface-polishing-dq-setpoint-arm-only': {
+        modeTag: 'cooperative-ruled-surface-polishing-dq-setpoint-arm-only-target',
+        commandKind: 'bimanual_surface_polishing_pose_dq_setpoint',
+        activeJointScope: 'arms',
+        invariants: () => [],
+        extraConstraints: () => []
     }
 };
 

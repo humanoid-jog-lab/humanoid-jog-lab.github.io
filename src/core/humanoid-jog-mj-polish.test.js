@@ -35,6 +35,18 @@ test('shouldAttemptHumanoidJogMJPolish activates for accepted best-effort states
     }), true);
 });
 
+test('shouldAttemptHumanoidJogMJPolish can activate for larger best-effort residuals when a mode-specific polish threshold is provided', () => {
+    assert.equal(shouldAttemptHumanoidJogMJPolish({
+        restorationResult: {
+            converged: false,
+            reason: 'best_effort',
+            currentResidualNorm: 1e-3,
+            acceptedIterations: 120
+        },
+        activationResidual: 2e-3
+    }), true);
+});
+
 test('shouldApplyHumanoidJogMJPolish accepts converged or strictly improved polish results', () => {
     assert.equal(shouldApplyHumanoidJogMJPolish({
         restorationResult: { currentResidualNorm: 1e-5 },

@@ -10,14 +10,13 @@ test('index.html only exposes the supported humanoid jog solvers', () => {
 
     assert.match(html, /<option value="vfi">new qpJ<\/option>/);
     assert.match(html, /<option value="priority">零空间投影<\/option>/);
-    assert.match(html, /<option value="mj_restore">MuJoCo 风格恢复<\/option>/);
+    assert.match(html, /<option value="mj_restore">Restore \(LS\)<\/option>/);
     assert.match(html, /<option value="mj_restore_tr">恢复优化\(TR\)<\/option>/);
-    assert.match(html, /<option value="mj_restore_pre_w">MuJoCo 风格恢复 \+ w预优化<\/option>/);
+    assert.doesNotMatch(html, /<option value="mj_restore_pre_w">/);
     assert.doesNotMatch(html, /<option value="torso_seed_upright">Torso-Seeded Upright<\/option>/);
     assert.doesNotMatch(html, /<option value="torso_seed_upright_vfi">Torso-Seeded Upright \+ VFI-w<\/option>/);
     assert.doesNotMatch(html, /<option value="cns">/);
     assert.doesNotMatch(html, /<option value="sqp">/);
-    assert.doesNotMatch(html, /<option value="nlopt">/);
     assert.doesNotMatch(html, /<option value="manifold">/);
 });
 
@@ -53,11 +52,26 @@ test('index.html exposes the humanoid dual-arm test lock toggle', () => {
     const html = readFileSync(resolve(ROOT, 'index.html'), 'utf8');
 
     assert.match(html, /id="humanoid-waist-x-corridor-toggle"/);
+    assert.match(html, /id="humanoid-waist-x-corridor-min-input"/);
+    assert.match(html, /id="humanoid-waist-x-corridor-max-input"/);
     assert.match(html, /腰部 X 约束/);
-    assert.match(html, /约束腰部 X 位置不超过当前走廊上界/);
+    assert.match(html, /x_min \(m\)：/);
+    assert.match(html, /x_max \(m\)：/);
+    assert.match(html, /约束腰部 X 位置落在可调走廊区间内/);
     assert.match(html, /id="humanoid-test-dual-arm-lock-toggle"/);
     assert.match(html, /双臂测试锁/);
     assert.match(html, /ljoint2∈\[-0\.1,0\.2\], rjoint2∈\[-0\.2,0\.1\]/);
+});
+
+test('index.html exposes the humanoid parameter panel with a joint-limit eta input', () => {
+    const html = readFileSync(resolve(ROOT, 'index.html'), 'utf8');
+
+    assert.match(html, /id="parameter-panel"/);
+    assert.match(html, /data-panel="parameter-panel"/);
+    assert.match(html, /参数面板/);
+    assert.match(html, /id="humanoid-joint-limit-eta-input"/);
+    assert.match(html, /id="humanoid-joint-limit-eta-status"/);
+    assert.match(html, /关节极限 VFI η_θ/);
 });
 
 test('index.html exposes the humanoid single-arm-plus-waist control modes', () => {
@@ -67,13 +81,16 @@ test('index.html exposes the humanoid single-arm-plus-waist control modes', () =
     assert.match(html, /<option value="robot2-waist">右臂\+腰部<\/option>/);
 });
 
-test('index.html exposes the humanoid surface-slide control mode', () => {
+test('index.html removes the old humanoid surface-slide control modes while exposing the new ruled-surface polishing modes', () => {
     const html = readFileSync(resolve(ROOT, 'index.html'), 'utf8');
 
-    assert.match(html, /<option value="surface-slide">曲面滑动<\/option>/);
-    assert.match(html, /<option value="surface-slide-absolute">绝对位姿曲面滑动<\/option>/);
-    assert.match(html, /<option value="dual-independent-surface-slide">双臂独立曲面滑动<\/option>/);
+    assert.doesNotMatch(html, /<option value="surface-slide">/);
+    assert.doesNotMatch(html, /<option value="surface-slide-absolute">/);
+    assert.doesNotMatch(html, /<option value="dual-independent-surface-slide">/);
+    assert.match(html, /<option value="left-ruled-surface-polishing">左臂擦面<\/option>/);
     assert.match(html, /<option value="cooperative-ruled-surface-polishing">双臂协同擦面<\/option>/);
+    assert.match(html, /<option value="cooperative-ruled-surface-polishing-dq-setpoint">双臂协同擦面（DQ目标，腰部维持）<\/option>/);
+    assert.match(html, /<option value="cooperative-ruled-surface-polishing-dq-setpoint-arm-only">双臂协同擦面（DQ目标，无腰部）<\/option>/);
 });
 
 test('index.html exposes humanoid default joint-angle profile buttons', () => {
@@ -106,8 +123,10 @@ test('index.html exposes cooperative polishing object pose controls', () => {
     assert.match(html, /id="humanoid-cooperative-polishing-object-flip-normal-toggle"/);
     assert.match(html, /id="humanoid-cooperative-polishing-object-apply-btn"/);
     assert.match(html, /id="humanoid-cooperative-polishing-object-capture-btn"/);
+    assert.match(html, /id="humanoid-cooperative-polishing-export-obj-btn"/);
     assert.match(html, /物体位姿/);
     assert.match(html, /法向反转/);
     assert.match(html, />应用位姿</);
     assert.match(html, />捕捉当前双手</);
+    assert.match(html, />导出打印 OBJ</);
 });

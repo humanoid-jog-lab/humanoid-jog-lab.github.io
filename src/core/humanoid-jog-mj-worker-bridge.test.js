@@ -213,7 +213,103 @@ test('attemptHumanoidJogMJRestoreWasmWorker forwards trust-region solver mode to
 
     assert.equal(observed.length, 1);
     assert.equal(observed[0].solverMode, 'mj_restore_tr');
+    assert.equal(observed[0].solveVariant, 'absolute_target');
     assert.equal(observed[0].request.solverMode, 'mj_restore_tr');
+});
+
+test('attemptHumanoidJogMJRestoreWasmWorker forwards cooperative DQ set-point solve variants to the worker bridge', async () => {
+    const observed = [];
+    const workerClient = {
+        async solve(payload) {
+            observed.push(payload);
+            return {
+                converged: true,
+                reason: 'converged',
+                iterations: 5,
+                acceptedIterations: 4,
+                lastAcceptedScale: 1,
+                commandResidualNorm: 1e-7,
+                relativeResidualNorm: 0,
+                bodyResidualNorm: 0,
+                inequalityViolation: 0,
+                qApplied: [0.1, -0.1]
+            };
+        }
+    };
+    const evaluateProblem = (q) => ({
+        qCurrent: q.slice(),
+        equalities: { activeResidualNorm: Math.abs(q[0] ?? 0) + Math.abs(q[1] ?? 0) },
+        inequalities: {},
+        metadata: { qFull: q.slice() }
+    });
+
+    await attemptHumanoidJogMJRestoreWasmWorker({
+        workerClient,
+        modelSpec: { waistChain: [] },
+        solveVariant: 'cooperative_dq_setpoint',
+        solverMode: 'mj_restore_tr',
+        qInitial: [0, 0],
+        evaluateProblem,
+        activeStart: 0,
+        activeCount: 2,
+        absoluteTarget: new Array(16).fill(0),
+        relativeTarget: [],
+        leftTarget: new Array(8).fill(0.1),
+        rightTarget: new Array(8).fill(-0.1)
+    });
+
+    assert.equal(observed.length, 1);
+    assert.equal(observed[0].solverMode, 'mj_restore_tr');
+    assert.equal(observed[0].solveVariant, 'cooperative_dq_setpoint');
+    assert.equal(observed[0].request.solveVariant, 'cooperative_dq_setpoint');
+    assert.deepEqual(observed[0].request.leftTarget, new Array(8).fill(0.1));
+    assert.deepEqual(observed[0].request.rightTarget, new Array(8).fill(-0.1));
+});
+
+test('attemptHumanoidJogMJRestoreWasmWorker forwards absolute DQ set-point solve variants to the worker bridge', async () => {
+    const observed = [];
+    const workerClient = {
+        async solve(payload) {
+            observed.push(payload);
+            return {
+                converged: true,
+                reason: 'converged',
+                iterations: 4,
+                acceptedIterations: 3,
+                lastAcceptedScale: 1,
+                commandResidualNorm: 1e-7,
+                relativeResidualNorm: 0,
+                bodyResidualNorm: 0,
+                inequalityViolation: 0,
+                qApplied: [0.1, -0.1]
+            };
+        }
+    };
+    const evaluateProblem = (q) => ({
+        qCurrent: q.slice(),
+        equalities: { activeResidualNorm: Math.abs(q[0] ?? 0) + Math.abs(q[1] ?? 0) },
+        inequalities: {},
+        metadata: { qFull: q.slice() }
+    });
+
+    await attemptHumanoidJogMJRestoreWasmWorker({
+        workerClient,
+        modelSpec: { waistChain: [] },
+        solveVariant: 'absolute_dq_setpoint',
+        solverMode: 'mj_restore_tr',
+        qInitial: [0, 0],
+        evaluateProblem,
+        activeStart: 0,
+        activeCount: 2,
+        absoluteTarget: new Array(8).fill(0.2),
+        relativeTarget: new Array(8).fill(0)
+    });
+
+    assert.equal(observed.length, 1);
+    assert.equal(observed[0].solverMode, 'mj_restore_tr');
+    assert.equal(observed[0].solveVariant, 'absolute_dq_setpoint');
+    assert.equal(observed[0].request.solveVariant, 'absolute_dq_setpoint');
+    assert.deepEqual(observed[0].request.absoluteTarget, new Array(8).fill(0.2));
 });
 
 test('attemptHumanoidJogMJRestoreWasmWorker preserves direct w_abs_arm worker metric state', async () => {

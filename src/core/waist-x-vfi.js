@@ -81,8 +81,10 @@ function computeWaistPxJacobianRow(fkmFn, q, waistStart, waistCount, DQ, eps = 1
  * For lower bound  p0_x >= x_min  (optional):
  *   row = -J_pos_x,  rhs = eta * (p0_x - x_min)
  *
- * Rows are only included when the current position is within the activation
- * zone (d < threshold) or already violating.
+ * Control rows are only included when the current position is within the
+ * activation zone (d < threshold) or already violating. The returned
+ * `vfiConstraints` for manipulability attenuation remain available for all
+ * finite corridor distances.
  *
  * @param {object} opts
  * @param {function} opts.fkmFn       FK for waist end effector: (q) -> 8-array
@@ -93,7 +95,7 @@ function computeWaistPxJacobianRow(fkmFn, q, waistStart, waistCount, DQ, eps = 1
  * @param {number}   [opts.xMax]      upper x limit in metres (default 0.05 = 5cm)
  * @param {number}   [opts.xMin]      lower x limit (default -Infinity, inactive)
  * @param {number}   [opts.eta]       VFI decay rate (default 1.0)
- * @param {number}   [opts.activationThreshold]  activate constraint within this margin
+ * @param {number}   [opts.activationThreshold]  control activation margin and CCTSM attenuation scale
  * @returns {{
  *   rows: number[][],
  *   rhs: number[],
@@ -133,19 +135,25 @@ export function computeWaistXVFIRows({
     const d_lower = Number.isFinite(xMin) ? p0x - xMin : Infinity;
 
     // Upper bound: p0_x <= x_max  →  J_px * u <= eta * d_upper
+    if (Number.isFinite(xMax)) {
+        const safeD = Math.max(0, d_upper);
+        vfiConstraints.push({ row: JpxRow.map((v) => -v), distance: safeD, threshold: activationThreshold });
+    }
     if (Number.isFinite(xMax) && d_upper < activationThreshold) {
         const safeD = Math.max(0, d_upper);
         rows.push([...JpxRow]);
         rhs.push(eta * safeD);
-        vfiConstraints.push({ row: JpxRow.map((v) => -v), distance: safeD, threshold: activationThreshold });
     }
 
     // Lower bound: p0_x >= x_min  →  -J_px * u <= eta * d_lower
+    if (Number.isFinite(xMin)) {
+        const safeD = Math.max(0, d_lower);
+        vfiConstraints.push({ row: [...JpxRow], distance: safeD, threshold: activationThreshold });
+    }
     if (Number.isFinite(xMin) && d_lower < activationThreshold) {
         const safeD = Math.max(0, d_lower);
         rows.push(JpxRow.map((v) => -v));
         rhs.push(eta * safeD);
-        vfiConstraints.push({ row: [...JpxRow], distance: safeD, threshold: activationThreshold });
     }
 
     return { rows, rhs, vfiConstraints, p0x, d_upper, d_lower };

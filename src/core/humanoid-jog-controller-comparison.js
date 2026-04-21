@@ -1,8 +1,10 @@
+import { t } from '../i18n.js';
+
 const CONTROLLERS = [
     { solverMode: 'vfi', key: 'qp', label: 'new qpJ' },
-    { solverMode: 'priority', key: 'nullspace', label: '零空间投影' },
+    { solverMode: 'priority', key: 'nullspace', label: 'Null-space Projection' },
     { solverMode: 'mj_restore', key: 'ours', label: 'Ours' },
-    { solverMode: 'mj_restore_tr', key: 'restore_tr', label: '恢复优化(TR)' }
+    { solverMode: 'mj_restore_tr', key: 'restore_tr', label: 'Recovery Optimization (TR)' }
 ];
 
 const TASKS = [
@@ -98,7 +100,7 @@ export function buildHumanoidControllerComparisonTasks() {
                     ...task,
                     ...posture,
                     ...controller,
-                    scenarioLabel: `${task.label} | ${posture.label} | ${controller.label}`
+                    scenarioLabel: `${t(task.label)} | ${t(posture.label)} | ${t(controller.label)}`
                 });
             }
         }
@@ -266,11 +268,11 @@ export function summarizeHumanoidControllerComparisonRows(results = []) {
 
 export function getHumanoidControllerComparisonColumns() {
     return [
-        { key: 'mode', label: 'Mode' },
-        { key: 'start_posture', label: 'Start posture' },
+        { key: 'mode', label: t('Mode') },
+        { key: 'start_posture', label: t('Start posture') },
         { key: 'qp', label: 'new qpJ' },
-        { key: 'nullspace', label: 'Null-space' },
+        { key: 'nullspace', label: t('Null-space') },
         { key: 'ours', label: 'Ours' },
-        { key: 'restore_tr', label: '恢复优化(TR)' }
+        { key: 'restore_tr', label: t('Recovery Optimization (TR)') }
     ];
 }

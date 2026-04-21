@@ -6,11 +6,11 @@ import {
     buildJoint2LockTrajectoryPlotPayload
 } from './humanoid-joint2-lock-trajectory.js';
 
-test('JOINT2_LOCK_TRAJECTORY_CASE defines the absolute full-body joint2-lock scenario', () => {
+test('JOINT2_LOCK_TRAJECTORY_CASE defines the absolute dual-arm joint2-lock scenario', () => {
     assert.equal(JOINT2_LOCK_TRAJECTORY_CASE.taskKind, 'absolute');
-    assert.equal(JOINT2_LOCK_TRAJECTORY_CASE.structure, 'full-body');
-    assert.equal(JOINT2_LOCK_TRAJECTORY_CASE.controlMode, 'decoupled');
-    assert.equal(JOINT2_LOCK_TRAJECTORY_CASE.includeWaist, true);
+    assert.equal(JOINT2_LOCK_TRAJECTORY_CASE.structure, 'dual-arm');
+    assert.equal(JOINT2_LOCK_TRAJECTORY_CASE.controlMode, 'absolute');
+    assert.equal(JOINT2_LOCK_TRAJECTORY_CASE.includeWaist, false);
     assert.equal(JOINT2_LOCK_TRAJECTORY_CASE.keepBodyZVertical, false);
     assert.equal(JOINT2_LOCK_TRAJECTORY_CASE.joints.length, 2);
     assert.deepEqual(
@@ -45,7 +45,7 @@ test('buildJoint2LockTrajectoryPlotPayload reshapes metric trajectories for both
     });
 
     assert.equal(payload.repeatCount, 2);
-    assert.equal(payload.title, 'Absolute | full-body | joint2 lock');
+    assert.equal(payload.title, 'Absolute | dual-arm | joint2 lock');
     assert.deepEqual(payload.metrics.map((entry) => entry.label), ['w_hier+', 'w_hier_vfi+']);
     assert.equal(payload.joints.length, 2);
     assert.deepEqual(

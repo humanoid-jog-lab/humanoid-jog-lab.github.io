@@ -79,6 +79,46 @@ function buildPartiallyInfeasibleProblem(q) {
     };
 }
 
+function buildJointLimitVFIStepLimitedProblem(q) {
+    const residual = 1 - q[0];
+    return {
+        q: q.slice(),
+        equalities: {
+            residual: [residual],
+            jacobian: [[1]],
+            residualNorm: Math.abs(residual),
+            activeResidual: [residual],
+            activeJacobian: [[1]],
+            activeResidualNorm: Math.abs(residual),
+            weightedResidual: [residual],
+            weightedJacobian: [[1]],
+            blocks: {
+                absolute: { residual: [residual] },
+                relative: { residual: [] },
+                bodyZ: null
+            }
+        },
+        inequalities: {
+            wvfiFloor: { enabled: false, violation: 0 },
+            jointLimitVFI: {
+                enabled: true,
+                rows: [[1]],
+                rhs: [0.1],
+                count: 1
+            },
+            waistXCorridor: { enabled: false, violation: 0, vfiRows: [], rhs: [] }
+        },
+        bounds: {
+            effectiveLower: [-10],
+            effectiveUpper: [10]
+        },
+        referenceModel: {
+            stiffnessRows: [1.0],
+            dampingRows: [0]
+        }
+    };
+}
+
 test('restoreHumanoidJogMJTrustRegion converges a simple restoration problem', () => {
     const result = restoreHumanoidJogMJTrustRegion({
         qInitial: [0],
@@ -120,4 +160,18 @@ test('restoreHumanoidJogMJTrustRegion accepts a best-effort constraint-improving
     assert.ok(trustRegion.bestConstraintViolation < 0.5);
     assert.ok(trustRegion.acceptedIterations >= 1);
     assert.ok(['filter', 'rho', 'best_effort'].includes(trustRegion.acceptedBy));
+});
+
+test('restoreHumanoidJogMJTrustRegion respects joint-limit VFI step rows during active-row repair', () => {
+    const result = restoreHumanoidJogMJTrustRegion({
+        qInitial: [0],
+        evaluateProblem: (q) => buildJointLimitVFIStepLimitedProblem(q),
+        maxIterations: 1,
+        equalityTolerance: 1e-12,
+        initialTrustRadius: 1
+    });
+
+    assert.equal(result.acceptedIterations, 1);
+    assert.ok(result.qApplied[0] <= 0.1 + 1e-9);
+    assert.ok(result.qApplied[0] > 0);
 });

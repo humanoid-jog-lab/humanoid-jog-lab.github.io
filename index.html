@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DQ Robotics 可视化</title>
+    <title>DQ Robotics Visualizer</title>
     <link rel="stylesheet" href="/src/styles.css">
 </head>
 <body>
@@ -11,14 +11,20 @@
     <canvas id="robot-canvas"></canvas>
     <div id="loading" class="loading">
         <div class="spinner"></div>
-        <p>正在加载 WASM 模块...</p>
+        <p>Loading WASM module...</p>
     </div>
 
     <!-- 左侧浮动控制面板 -->
     <div class="floating-panel control-panel" id="control-panel">
         <div class="panel-header">
-            <h2>控制面板</h2>
-            <button class="panel-toggle" id="control-toggle">−</button>
+            <h2>Control Panel</h2>
+            <div class="panel-header-actions">
+                <select id="language-select" class="language-select" title="Language">
+                    <option value="en">EN</option>
+                    <option value="zh">中文</option>
+                </select>
+                <button class="panel-toggle" id="control-toggle">−</button>
+            </div>
         </div>
         <div class="panel-body">
                 <div class="panel-section">
@@ -94,10 +100,10 @@
                                     <option value="relative-fullbody">全身相对位姿</option>
                                     <option value="distance">相对距离</option>
                                     <option value="distance-fullbody">全身相对距离</option>
-                                    <option value="surface-slide">曲面滑动</option>
-                                    <option value="surface-slide-absolute">绝对位姿曲面滑动</option>
-                                    <option value="dual-independent-surface-slide">双臂独立曲面滑动</option>
+                                    <option value="left-ruled-surface-polishing">左臂擦面</option>
                                     <option value="cooperative-ruled-surface-polishing">双臂协同擦面</option>
+                                    <option value="cooperative-ruled-surface-polishing-dq-setpoint">双臂协同擦面（DQ目标，腰部维持）</option>
+                                    <option value="cooperative-ruled-surface-polishing-dq-setpoint-arm-only">双臂协同擦面（DQ目标，无腰部）</option>
                                     <option value="robot1">机器人1</option>
                                     <option value="robot1-waist">左臂+腰部</option>
                                     <option value="robot2">机器人2</option>
@@ -122,9 +128,8 @@
                                 <select id="humanoid-jog-solver-select" style="width: 100%; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;">
                                     <option value="vfi">new qpJ</option>
                                     <option value="priority">零空间投影</option>
-                                    <option value="mj_restore">MuJoCo 风格恢复</option>
+                                    <option value="mj_restore">Restore (LS)</option>
                                     <option value="mj_restore_tr">恢复优化(TR)</option>
-                                    <option value="mj_restore_pre_w">MuJoCo 风格恢复 + w预优化</option>
                                 </select>
                                 <div style="font-size: 0.7rem; color: #64748b; margin-top: 0.2rem;">
                                     对人形协同点动模式生效，可随时切换。
@@ -149,8 +154,28 @@
                                     <span class="toggle-slider"></span>
                                     <span class="toggle-label">腰部 X 约束</span>
                                 </label>
+                                <div style="margin-top: 0.4rem;">
+                                    <label style="font-size: 0.8rem; color: #cbd5e1; display: block; margin-bottom: 0.2rem;">x_min (m)：</label>
+                                    <input
+                                        type="number"
+                                        id="humanoid-waist-x-corridor-min-input"
+                                        value="-0.10"
+                                        step="0.01"
+                                        style="width: 100%; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;"
+                                    >
+                                </div>
+                                <div style="margin-top: 0.4rem;">
+                                    <label style="font-size: 0.8rem; color: #cbd5e1; display: block; margin-bottom: 0.2rem;">x_max (m)：</label>
+                                    <input
+                                        type="number"
+                                        id="humanoid-waist-x-corridor-max-input"
+                                        value="0.05"
+                                        step="0.01"
+                                        style="width: 100%; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;"
+                                    >
+                                </div>
                                 <div style="font-size: 0.7rem; color: #64748b; margin-top: 0.2rem;">
-                                    约束腰部 X 位置不超过当前走廊上界
+                                    约束腰部 X 位置落在可调走廊区间内
                                 </div>
                             </div>
                             <div style="margin-top: 0.6rem;">
@@ -202,6 +227,9 @@
                                     <button id="humanoid-cooperative-polishing-object-apply-btn" class="demo-btn" style="width: 100%;">应用位姿</button>
                                     <button id="humanoid-cooperative-polishing-object-capture-btn" class="demo-btn" style="width: 100%;">捕捉当前双手</button>
                                 </div>
+                                <div style="margin-top: 0.45rem;">
+                                    <button id="humanoid-cooperative-polishing-export-obj-btn" class="demo-btn" style="width: 100%;">导出打印 OBJ</button>
+                                </div>
                                 <div style="font-size: 0.7rem; color: #64748b; margin-top: 0.2rem;">
                                     将协同擦面工件固定在世界坐标中，或从当前双手工作区捕捉一次后冻结
                                 </div>
@@ -216,12 +244,12 @@
                         </div>
                         <div style="margin-bottom: 0.75rem;">
                             <label class="toggle-switch" style="font-size: 0.85rem;">
-                                <input type="checkbox" id="teach-multiply-order-toggle" checked>
+                                <input type="checkbox" id="teach-multiply-order-toggle">
                                 <span class="toggle-slider"></span>
                                 <span class="toggle-label">局部增量（Δ × 当前）</span>
                             </label>
                             <div id="teach-multiply-order-status" style="font-size: 0.75rem; color: #94a3b8; margin-top: 0.25rem;">
-                                当前模式：局部坐标（Δ × 当前）
+                                当前模式：世界坐标（Δ × 当前）
                             </div>
                         </div>
                         <div style="margin-bottom: 0.75rem;">
@@ -275,209 +303,6 @@
                         </div>
                     </div>
 
-                    <div class="panel-section" id="planned-motion-section" style="display: none;">
-                        <h3 style="margin-bottom: 0.5rem; font-size: 0.9rem; color: #cbd5e1;">规划运动</h3>
-                        <p style="font-size: 0.75rem; color: #94a3b8; margin-bottom: 0.5rem;">
-                            输入目标绝对位姿（世界坐标系 DQ），系统自动判断：偏差较大时先移动底盘再补偿手臂，偏差较小时直接手臂调整。
-                        </p>
-                        <div style="margin-bottom: 0.5rem;">
-                            <label style="font-size: 0.85rem; color: #cbd5e1; display: block; margin-bottom: 0.25rem;">
-                                任务类型：
-                            </label>
-                            <select
-                                id="planned-motion-task-type-select"
-                                style="width: 100%; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;"
-                            >
-                                <option value="absolute">绝对位姿规划（现有）</option>
-                                <option value="dual-arm-sequence-place">左右臂顺序放置（先左后右）</option>
-                            </select>
-                        </div>
-                        <div id="planned-motion-absolute-target-row" style="margin-bottom: 0.5rem;">
-                            <label style="font-size: 0.85rem; color: #cbd5e1; display: block; margin-bottom: 0.25rem;">
-                                目标双四元数（8 个数）：
-                            </label>
-                            <div style="display: flex; gap: 0.35rem;">
-                                <input
-                                    type="text"
-                                    id="planned-motion-dq-input"
-                                    placeholder="qw qx qy qz qw' qx' qy' qz"
-                                    style="flex: 1; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;"
-                                >
-                                <button id="planned-motion-copy-current" class="demo-btn" style="padding: 0.35rem 0.6rem; font-size: 0.75rem; white-space: nowrap;">
-                                    填入当前
-                                </button>
-                            </div>
-                        </div>
-                        <div id="planned-motion-base-yaw-row" style="margin-bottom: 0.5rem;">
-                            <label style="font-size: 0.85rem; color: #cbd5e1; display: block; margin-bottom: 0.25rem;">
-                                底盘目标 yaw（可选，独立设置）：
-                            </label>
-                            <input
-                                type="text"
-                                id="planned-motion-base-yaw-input"
-                                value="0"
-                                placeholder="例如：30deg / 0.52rad / 30（默认 0 度）"
-                                style="width: 100%; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;"
-                            >
-                            <div style="font-size: 0.7rem; color: #64748b; margin-top: 0.15rem;">
-                                支持 <code>30deg</code> / <code>0.52rad</code> / 纯数字（默认度）；留空按 <code>0deg</code>
-                            </div>
-                        </div>
-                        <div id="planned-motion-placement-targets" style="margin-bottom: 0.5rem; display: none;">
-                            <label style="font-size: 0.85rem; color: #cbd5e1; display: block; margin-bottom: 0.25rem;">
-                                左臂放置点 A（世界坐标系 DQ）：
-                            </label>
-                            <div style="display: flex; gap: 0.35rem; margin-bottom: 0.35rem;">
-                                <input
-                                    type="text"
-                                    id="planned-motion-left-dq-input"
-                                    placeholder="qw qx qy qz qw' qx' qy' qz'"
-                                    style="flex: 1; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;"
-                                >
-                                <button id="planned-motion-copy-left-current" class="demo-btn" style="padding: 0.35rem 0.6rem; font-size: 0.75rem; white-space: nowrap;">
-                                    左臂当前
-                                </button>
-                            </div>
-                            <label style="font-size: 0.85rem; color: #cbd5e1; display: block; margin-bottom: 0.25rem;">
-                                右臂放置点 B（世界坐标系 DQ）：
-                            </label>
-                            <div style="display: flex; gap: 0.35rem;">
-                                <input
-                                    type="text"
-                                    id="planned-motion-right-dq-input"
-                                    placeholder="qw qx qy qz qw' qx' qy' qz'"
-                                    style="flex: 1; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;"
-                                >
-                                <button id="planned-motion-copy-right-current" class="demo-btn" style="padding: 0.35rem 0.6rem; font-size: 0.75rem; white-space: nowrap;">
-                                    右臂当前
-                                </button>
-                            </div>
-                        </div>
-                        <div id="planned-motion-threshold-row" style="margin-bottom: 0.5rem;">
-                            <label style="font-size: 0.85rem; color: #cbd5e1; display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.25rem;">
-                                <span>底盘启动阈值</span>
-                                <span><code id="planned-motion-threshold-value">40</code> cm</span>
-                            </label>
-                            <input id="planned-motion-threshold" type="range" min="10" max="100" value="40" step="5" style="width: 100%;">
-                            <div style="font-size: 0.7rem; color: #64748b; margin-top: 0.15rem;">
-                                偏差大于此值时先移动底盘，否则直接手臂补偿
-                            </div>
-                        </div>
-                        <div id="planned-motion-control-mode-row" style="margin-bottom: 0.5rem;">
-                            <label style="font-size: 0.85rem; color: #cbd5e1; display: block; margin-bottom: 0.25rem;">
-                                手臂补偿模式：
-                            </label>
-                            <select
-                                id="planned-motion-control-mode-select"
-                                style="width: 100%; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;"
-                            >
-                                <option value="decoupled">全身绝对位姿</option>
-                                <option value="decoupled-upright">全身绝对位姿（腰部竖直）</option>
-                            </select>
-                            <div style="font-size: 0.7rem; color: #64748b; margin-top: 0.15rem;">
-                                规划运动时手臂 IK 是否保持 body_link 的 z 轴竖直
-                            </div>
-                        </div>
-                        <div style="display: flex; gap: 0.5rem; margin-bottom: 0.5rem;">
-                            <button id="planned-motion-plan-btn" class="demo-btn" style="flex: 1;">
-                                规划预览
-                            </button>
-                            <button id="planned-motion-execute-btn" class="demo-btn" style="flex: 1;">
-                                执行已规划运动
-                            </button>
-                            <button id="planned-motion-cancel-btn" class="demo-btn" style="flex: 0 0 auto; padding: 0.35rem 0.75rem;" disabled>
-                                取消
-                            </button>
-                        </div>
-                        <div id="planned-motion-debug-row" style="margin-bottom: 0.5rem;">
-                            <div style="font-size: 0.75rem; color: #94a3b8; margin-bottom: 0.25rem;">
-                                Debug 分步查看：
-                            </div>
-                            <div id="planned-motion-debug-step-row" style="display: none; gap: 0.35rem; flex-wrap: wrap; margin-bottom: 0.3rem;">
-                                <button id="planned-motion-debug-step-left-btn" class="demo-btn" style="padding: 0.3rem 0.55rem; font-size: 0.72rem;">
-                                    左臂流程
-                                </button>
-                                <button id="planned-motion-debug-step-right-btn" class="demo-btn" style="padding: 0.3rem 0.55rem; font-size: 0.72rem;">
-                                    右臂流程
-                                </button>
-                            </div>
-                            <div style="display: flex; gap: 0.35rem; flex-wrap: wrap;">
-                                <button id="planned-motion-debug-start-btn" class="demo-btn" style="padding: 0.3rem 0.55rem; font-size: 0.72rem;">
-                                    起点
-                                </button>
-                                <button id="planned-motion-debug-waist-btn" class="demo-btn" style="padding: 0.3rem 0.55rem; font-size: 0.72rem;">
-                                    腰部对齐后
-                                </button>
-                                <button id="planned-motion-debug-base-btn" class="demo-btn" style="padding: 0.3rem 0.55rem; font-size: 0.72rem;">
-                                    底盘XY后
-                                </button>
-                                <button id="planned-motion-debug-final-btn" class="demo-btn" style="padding: 0.3rem 0.55rem; font-size: 0.72rem;">
-                                    最终IK
-                                </button>
-                                <button id="planned-motion-debug-dump-btn" class="demo-btn" style="padding: 0.3rem 0.55rem; font-size: 0.72rem;">
-                                    打印计划
-                                </button>
-                                <button id="planned-motion-debug-flow-btn" class="demo-btn" style="padding: 0.3rem 0.55rem; font-size: 0.72rem;">
-                                    流程可视化
-                                </button>
-                            </div>
-                            <div id="planned-motion-debug-info" style="font-size: 0.72rem; color: #93c5fd; margin-top: 0.3rem; line-height: 1.35;">
-                                -
-                            </div>
-                        </div>
-                        <div id="planned-motion-joint-monitor" class="planned-motion-joint-monitor">
-                            <div class="planned-motion-joint-monitor-header">
-                                <span>执行关节实时监控</span>
-                                <div class="planned-motion-joint-monitor-header-actions">
-                                    <button
-                                        id="planned-motion-joint-monitor-open-window"
-                                        class="demo-btn planned-motion-monitor-open-btn"
-                                        type="button"
-                                    >
-                                        新窗口查看
-                                    </button>
-                                    <code id="planned-motion-joint-monitor-state">等待人形数据</code>
-                                </div>
-                            </div>
-                            <div class="planned-motion-joint-monitor-grid">
-                                <div class="planned-motion-joint-card">
-                                    <div class="planned-motion-joint-card-head">
-                                        <span>腰部</span>
-                                        <code id="planned-motion-joint-waist-meta">0 joints</code>
-                                    </div>
-                                    <canvas id="planned-motion-joint-waist-canvas" class="planned-motion-joint-canvas" width="280" height="90"></canvas>
-                                    <div id="planned-motion-joint-waist-values" class="planned-motion-joint-values">-</div>
-                                </div>
-                                <div class="planned-motion-joint-card">
-                                    <div class="planned-motion-joint-card-head">
-                                        <span>左臂</span>
-                                        <code id="planned-motion-joint-left-meta">0 joints</code>
-                                    </div>
-                                    <canvas id="planned-motion-joint-left-canvas" class="planned-motion-joint-canvas" width="280" height="90"></canvas>
-                                    <div id="planned-motion-joint-left-values" class="planned-motion-joint-values">-</div>
-                                </div>
-                                <div class="planned-motion-joint-card">
-                                    <div class="planned-motion-joint-card-head">
-                                        <span>右臂</span>
-                                        <code id="planned-motion-joint-right-meta">0 joints</code>
-                                    </div>
-                                    <canvas id="planned-motion-joint-right-canvas" class="planned-motion-joint-canvas" width="280" height="90"></canvas>
-                                    <div id="planned-motion-joint-right-values" class="planned-motion-joint-values">-</div>
-                                </div>
-                                <div class="planned-motion-joint-card">
-                                    <div class="planned-motion-joint-card-head">
-                                        <span>头部</span>
-                                        <code id="planned-motion-joint-head-meta">0 joints</code>
-                                    </div>
-                                    <canvas id="planned-motion-joint-head-canvas" class="planned-motion-joint-canvas" width="280" height="90"></canvas>
-                                    <div id="planned-motion-joint-head-values" class="planned-motion-joint-values">-</div>
-                                </div>
-                            </div>
-                        </div>
-                        <div id="planned-motion-status" class="planned-motion-status">
-                            就绪
-                        </div>
-                    </div>
                 </div>
         </div>
     </div>
@@ -485,43 +310,36 @@
     <!-- 右下角浮动信息面板 -->
     <div class="floating-panel info-panel" id="info-panel">
         <div class="panel-header">
-            <h2>机器人状态</h2>
+            <h2 data-i18n="Robot Status">Robot Status</h2>
             <button class="panel-toggle" id="info-toggle">−</button>
         </div>
         <div class="battery-info" style="padding: 0.75rem; border-bottom: 1px solid #334155;">
             <div class="info-item">
-                <label>电池状态</label>
+                <label data-i18n="Battery Status">Battery Status</label>
                 <div class="value-display" style="flex-direction: column; gap: 0.5rem;">
                     <div style="display: flex; align-items: center; gap: 0.75rem;">
-                        <span>电量:</span>
+                        <span data-i18n="Charge:">Charge:</span>
                         <code id="battery-percentage">--</code>
                         <div id="battery-bar-container" style="flex: 1; height: 20px; background: #1e293b; border-radius: 4px; overflow: hidden; border: 1px solid #334155;">
                             <div id="battery-bar" style="height: 100%; width: 0%; background: linear-gradient(90deg, #ef4444 0%, #f59e0b 50%, #10b981 100%); transition: width 0.3s ease, background 0.3s ease;"></div>
                         </div>
                     </div>
                     <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
-                        <span>电压: <code id="battery-voltage">--</code> V</span>
-                        <span>电流: <code id="battery-current">--</code> A</span>
-                        <span>状态: <code id="battery-status">--</code></span>
+                        <span><span data-i18n="Voltage:">Voltage:</span> <code id="battery-voltage">--</code> V</span>
+                        <span><span data-i18n="Current:">Current:</span> <code id="battery-current">--</code> A</span>
+                        <span><span data-i18n="Status:">Status:</span> <code id="battery-status">--</code></span>
                     </div>
                 </div>
             </div>
         </div>
         <div class="panel-body">
             <div class="info-panel-content">
-                    <div class="info-tabs">
-                        <button class="tab-btn active" data-tab="pose">末端位姿</button>
-                        <button class="tab-btn" data-tab="jacobian">雅可比矩阵</button>
-                        <button class="tab-btn" data-tab="dq">DQ 表示</button>
-                    </div>
-
-                    <div class="tab-content">
-                        <!-- 单臂模式显示 -->
-                        <div id="pose-tab" class="tab-pane active single-arm-pose">
-                            <h3>末端执行器位姿</h3>
+                    <div class="info-panel-sections">
+                        <div id="pose-tab" class="single-arm-pose info-panel-section">
+                            <h3 data-i18n="End-Effector Pose">End-Effector Pose</h3>
                             <div class="info-grid">
                                 <div class="info-item">
-                                    <label>位置 (m)</label>
+                                    <label data-i18n="Position (m)">Position (m)</label>
                                     <div class="value-display">
                                         <span>X: <code id="pos-x">0.000</code></span>
                                         <span>Y: <code id="pos-y">0.000</code></span>
@@ -529,7 +347,7 @@
                                     </div>
                                 </div>
                                 <div class="info-item">
-                                    <label>旋转四元数</label>
+                                    <label data-i18n="Rotation Quaternion">Rotation Quaternion</label>
                                     <div class="value-display">
                                         <span>W: <code id="quat-w">1.000</code></span>
                                         <span>X: <code id="quat-x">0.000</code></span>
@@ -538,7 +356,7 @@
                                     </div>
                                 </div>
                                 <div class="info-item">
-                                    <label>欧拉角 (deg)</label>
+                                    <label data-i18n="Euler Angles (deg)">Euler Angles (deg)</label>
                                     <div class="value-display">
                                         <span>Roll: <code id="euler-roll">0.0</code></span>
                                         <span>Pitch: <code id="euler-pitch">0.0</code></span>
@@ -547,15 +365,12 @@
                                 </div>
                             </div>
                         </div>
-                        
-                        <!-- 双臂模式显示 -->
-                        <div id="dual-arm-pose-tab" class="tab-pane dual-arm-pose" style="display: none;">
-                            <h3>双臂机器人位姿</h3>
-                            
-                            <!-- 机器人1位姿 -->
+
+                        <div id="dual-arm-pose-tab" class="dual-arm-pose info-panel-section" style="display: none;">
+                            <h3 data-i18n="Dual-Arm Robot Pose">Dual-Arm Robot Pose</h3>
                             <div class="info-grid">
                                 <div class="info-item">
-                                    <label id="dual-arm-robot1-pos-label" style="color: #3b82f6;">机器人1位置 (m)</label>
+                                    <label id="dual-arm-robot1-pos-label" style="color: #3b82f6;" data-i18n="Robot 1 Position (m)">Robot 1 Position (m)</label>
                                     <div class="value-display">
                                         <span>X: <code id="robot1-pos-x">0.000</code></span>
                                         <span>Y: <code id="robot1-pos-y">0.000</code></span>
@@ -563,7 +378,7 @@
                                     </div>
                                 </div>
                                 <div class="info-item">
-                                    <label id="dual-arm-robot1-quat-label" style="color: #3b82f6;">机器人1四元数</label>
+                                    <label id="dual-arm-robot1-quat-label" style="color: #3b82f6;" data-i18n="Robot 1 Quaternion">Robot 1 Quaternion</label>
                                     <div class="value-display">
                                         <span>W: <code id="robot1-quat-w">1.000</code></span>
                                         <span>X: <code id="robot1-quat-x">0.000</code></span>
@@ -572,18 +387,17 @@
                                     </div>
                                 </div>
                                 <div class="info-item">
-                                    <label id="dual-arm-robot1-dq-label" style="color: #3b82f6;">机器人1 DQ</label>
+                                    <label id="dual-arm-robot1-dq-label" style="color: #3b82f6;" data-i18n="Robot 1 DQ">Robot 1 DQ</label>
                                     <div class="dq-display-small" id="robot1-dq">
-                                        <div>实部: <code id="robot1-dq-primary">0 0 0 0</code></div>
-                                        <div>对偶: <code id="robot1-dq-dual">0 0 0 0</code></div>
+                                        <div><span data-i18n="Primary">Primary</span>: <code id="robot1-dq-primary">0 0 0 0</code></div>
+                                        <div><span data-i18n="Dual">Dual</span>: <code id="robot1-dq-dual">0 0 0 0</code></div>
                                     </div>
                                 </div>
                             </div>
-                            
-                            <!-- 机器人2位姿 -->
+
                             <div class="info-grid">
                                 <div class="info-item">
-                                    <label id="dual-arm-robot2-pos-label" style="color: #10b981;">机器人2位置 (m)</label>
+                                    <label id="dual-arm-robot2-pos-label" style="color: #10b981;" data-i18n="Robot 2 Position (m)">Robot 2 Position (m)</label>
                                     <div class="value-display">
                                         <span>X: <code id="robot2-pos-x">0.000</code></span>
                                         <span>Y: <code id="robot2-pos-y">0.000</code></span>
@@ -591,7 +405,7 @@
                                     </div>
                                 </div>
                                 <div class="info-item">
-                                    <label id="dual-arm-robot2-quat-label" style="color: #10b981;">机器人2四元数</label>
+                                    <label id="dual-arm-robot2-quat-label" style="color: #10b981;" data-i18n="Robot 2 Quaternion">Robot 2 Quaternion</label>
                                     <div class="value-display">
                                         <span>W: <code id="robot2-quat-w">1.000</code></span>
                                         <span>X: <code id="robot2-quat-x">0.000</code></span>
@@ -600,18 +414,17 @@
                                     </div>
                                 </div>
                                 <div class="info-item">
-                                    <label id="dual-arm-robot2-dq-label" style="color: #10b981;">机器人2 DQ</label>
+                                    <label id="dual-arm-robot2-dq-label" style="color: #10b981;" data-i18n="Robot 2 DQ">Robot 2 DQ</label>
                                     <div class="dq-display-small" id="robot2-dq">
-                                        <div>实部: <code id="robot2-dq-primary">0 0 0 0</code></div>
-                                        <div>对偶: <code id="robot2-dq-dual">0 0 0 0</code></div>
+                                        <div><span data-i18n="Primary">Primary</span>: <code id="robot2-dq-primary">0 0 0 0</code></div>
+                                        <div><span data-i18n="Dual">Dual</span>: <code id="robot2-dq-dual">0 0 0 0</code></div>
                                     </div>
                                 </div>
                             </div>
-                            
-                            <!-- 绝对位姿 -->
+
                             <div class="info-grid">
                                 <div class="info-item">
-                                    <label style="color: #fbbf24;">绝对位姿位置 (m)</label>
+                                    <label style="color: #fbbf24;" data-i18n="Absolute Pose Position (m)">Absolute Pose Position (m)</label>
                                     <div class="value-display">
                                         <span>X: <code id="absolute-pos-x">0.000</code></span>
                                         <span>Y: <code id="absolute-pos-y">0.000</code></span>
@@ -619,7 +432,7 @@
                                     </div>
                                 </div>
                                 <div class="info-item">
-                                    <label style="color: #fbbf24;">绝对位姿四元数</label>
+                                    <label style="color: #fbbf24;" data-i18n="Absolute Pose Quaternion">Absolute Pose Quaternion</label>
                                     <div class="value-display">
                                         <span>W: <code id="absolute-quat-w">1.000</code></span>
                                         <span>X: <code id="absolute-quat-x">0.000</code></span>
@@ -628,29 +441,28 @@
                                     </div>
                                 </div>
                                 <div class="info-item">
-                                    <label style="color: #fbbf24;">绝对位姿 DQ</label>
+                                    <label style="color: #fbbf24;" data-i18n="Absolute Pose DQ">Absolute Pose DQ</label>
                                     <div class="dq-display-small" id="absolute-dq">
-                                        <div>实部: <code id="absolute-dq-primary">0 0 0 0</code></div>
-                                        <div>对偶: <code id="absolute-dq-dual">0 0 0 0</code></div>
+                                        <div><span data-i18n="Primary">Primary</span>: <code id="absolute-dq-primary">0 0 0 0</code></div>
+                                        <div><span data-i18n="Dual">Dual</span>: <code id="absolute-dq-dual">0 0 0 0</code></div>
                                     </div>
                                 </div>
                             </div>
-                            
-                            <!-- 相对位姿 -->
+
                             <div class="info-grid">
                                 <div class="info-item">
-                                    <label style="color: #ef4444;">相对位姿位置 (m)</label>
+                                    <label style="color: #ef4444;" data-i18n="Relative Pose Position (m)">Relative Pose Position (m)</label>
                                     <div class="value-display">
                                         <span>X: <code id="relative-pos-x">0.000</code></span>
                                         <span>Y: <code id="relative-pos-y">0.000</code></span>
                                         <span>Z: <code id="relative-pos-z">0.000</code></span>
                                     </div>
                                     <div style="font-size: 0.75rem; color: #666; margin-top: 0.25rem;">
-                                        距离: <code id="relative-distance">0.000</code> m
+                                        <span data-i18n="Distance:">Distance:</span> <code id="relative-distance">0.000</code> m
                                     </div>
                                 </div>
                                 <div class="info-item">
-                                    <label style="color: #ef4444;">相对位姿四元数</label>
+                                    <label style="color: #ef4444;" data-i18n="Relative Pose Quaternion">Relative Pose Quaternion</label>
                                     <div class="value-display">
                                         <span>W: <code id="relative-quat-w">1.000</code></span>
                                         <span>X: <code id="relative-quat-x">0.000</code></span>
@@ -659,40 +471,43 @@
                                     </div>
                                 </div>
                                 <div class="info-item">
-                                    <label style="color: #ef4444;">相对位姿 DQ</label>
+                                    <label style="color: #ef4444;" data-i18n="Relative Pose DQ">Relative Pose DQ</label>
                                     <div class="dq-display-small" id="relative-dq">
-                                        <div>实部: <code id="relative-dq-primary">0 0 0 0</code></div>
-                                        <div>对偶: <code id="relative-dq-dual">0 0 0 0</code></div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div id="jacobian-tab" class="tab-pane">
-                            <h3>位姿雅可比矩阵</h3>
-                            <div class="matrix-display" id="jacobian-matrix">
-                                <!-- 动态生成 -->
-                            </div>
-                        </div>
-
-                        <div id="dq-tab" class="tab-pane">
-                            <h3>双四元数表示</h3>
-                            <div class="dq-display">
-                                <div class="info-item">
-                                    <label>实部 (Primary)</label>
-                                    <div class="value-display dq-values" id="dq-primary">
-                                        <!-- 动态生成 -->
-                                    </div>
-                                </div>
-                                <div class="info-item">
-                                    <label>对偶部 (Dual)</label>
-                                    <div class="value-display dq-values" id="dq-dual">
-                                        <!-- 动态生成 -->
+                                        <div><span data-i18n="Primary">Primary</span>: <code id="relative-dq-primary">0 0 0 0</code></div>
+                                        <div><span data-i18n="Dual">Dual</span>: <code id="relative-dq-dual">0 0 0 0</code></div>
                                     </div>
                                 </div>
                             </div>
                         </div>
                     </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="floating-panel parameter-panel hidden" id="parameter-panel">
+        <div class="panel-header">
+            <h2>参数面板</h2>
+            <button class="panel-toggle" id="parameter-toggle">+</button>
+        </div>
+        <div class="panel-body">
+            <div class="panel-section">
+                <h2>人形 VFI</h2>
+                <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                    <label for="humanoid-joint-limit-eta-input" style="font-size: 0.85rem; color: #e2e8f0;">
+                        关节极限 VFI η_θ
+                    </label>
+                    <input
+                        id="humanoid-joint-limit-eta-input"
+                        type="number"
+                        step="0.1"
+                        min="0.1"
+                        placeholder="η_θ"
+                        style="width: 100%; padding: 0.5rem 0.6rem; font-size: 0.9rem; background: #1e293b; color: #e2e8f0; border: 1px solid #334155; border-radius: 6px;"
+                    >
+                    <div id="humanoid-joint-limit-eta-status" style="font-size: 0.78rem; color: #94a3b8;">
+                        当前值已应用
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -765,6 +580,7 @@
                         <input type="number" id="dq-calculator-quat-y" placeholder="Y" value="0" step="0.001" style="padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;">
                         <input type="number" id="dq-calculator-quat-z" placeholder="Z" value="0" step="0.001" style="padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;">
                     </div>
+                    <button id="dq-calculator-load-current-quaternion" class="demo-btn" style="width: 100%;">加载当前四元数</button>
                 </div>
                 <div style="margin-bottom: 0.75rem;">
                     <label style="font-size: 0.85rem; color: #cbd5e1; display: block; margin-bottom: 0.25rem;">
@@ -775,6 +591,7 @@
                         <input type="number" id="dq-calculator-pos-y" placeholder="Y (m)" value="0" step="0.001" style="padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;">
                         <input type="number" id="dq-calculator-pos-z" placeholder="Z (m)" value="0" step="0.001" style="padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;">
                     </div>
+                    <button id="dq-calculator-load-current-position" class="demo-btn" style="width: 100%;">加载当前位置</button>
                 </div>
                 <button id="dq-calculator-create-from-quat" class="demo-btn" style="width: 100%;">计算对偶四元数</button>
                 <div id="dq-calculator-quat-status" style="font-size: 0.75rem; color: #94a3b8; margin-top: 0.5rem;">
@@ -1018,6 +835,10 @@
         <button class="dock-item" data-panel="info-panel">
             <span class="dock-icon">📊</span>
             <span class="dock-label">信息面板</span>
+        </button>
+        <button class="dock-item" data-panel="parameter-panel">
+            <span class="dock-icon">⚙️</span>
+            <span class="dock-label">参数面板</span>
         </button>
         <button class="dock-item" data-panel="environment-panel">
             <span class="dock-icon">🌿</span>

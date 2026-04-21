@@ -15,8 +15,26 @@ function normalizeSolverMode(solverMode) {
     return solverMode === 'mj_restore_tr' ? 'mj_restore_tr' : 'mj_restore';
 }
 
-function getRestoreSolveFunctionName(solverMode) {
-    return normalizeSolverMode(solverMode) === 'mj_restore_tr'
+function normalizeSolveVariant(solveVariant) {
+    if (solveVariant === 'cooperative_dq_setpoint') return 'cooperative_dq_setpoint';
+    if (solveVariant === 'absolute_dq_setpoint') return 'absolute_dq_setpoint';
+    return 'absolute_target';
+}
+
+function getRestoreSolveFunctionName(solverMode, solveVariant = 'absolute_target') {
+    const normalizedSolverMode = normalizeSolverMode(solverMode);
+    const normalizedSolveVariant = normalizeSolveVariant(solveVariant);
+    if (normalizedSolveVariant === 'cooperative_dq_setpoint') {
+        return normalizedSolverMode === 'mj_restore_tr'
+            ? 'solveCooperativeDQSetpointMJRestoreTrustRegion'
+            : 'solveCooperativeDQSetpointMJRestore';
+    }
+    if (normalizedSolveVariant === 'absolute_dq_setpoint') {
+        return normalizedSolverMode === 'mj_restore_tr'
+            ? 'solveAbsoluteDQSetpointMJRestoreTrustRegion'
+            : 'solveAbsoluteDQSetpointMJRestore';
+    }
+    return normalizedSolverMode === 'mj_restore_tr'
         ? 'solveAbsoluteTargetMJRestoreTrustRegion'
         : 'solveAbsoluteTargetMJRestore';
 }
@@ -828,7 +846,10 @@ function runRestoreFromActive(model, request, qActive, restoreMaxIterations) {
             ? Math.max(1, Math.floor(restoreMaxIterations))
             : request.maxIterations
     };
-    const solveFunctionName = getRestoreSolveFunctionName(request?.solverMode);
+    const solveFunctionName = getRestoreSolveFunctionName(
+        request?.solverMode,
+        request?.solveVariant
+    );
     return model[solveFunctionName](restoreRequest);
 }
 
@@ -951,6 +972,10 @@ function attemptSecondaryMetricRefinement(model, dqModule, request, secondaryMet
 }
 
 function applySecondaryMetric(model, dqModule, request, secondaryMetricRequest, restoreResult) {
+    const solveVariant = normalizeSolveVariant(request?.solveVariant);
+    if (solveVariant !== 'absolute_target' && solveVariant !== 'absolute_dq_setpoint') {
+        return null;
+    }
     const overallMetric = secondaryMetricRequest?.metric;
     if (!overallMetric) return null;
     if (!restoreResult || restoreResult.converged !== true || !Array.isArray(restoreResult.qApplied)) return null;
@@ -1121,7 +1146,10 @@ self.onmessage = async (event) => {
         }
         if (data.type === 'solve') {
             const payload = data.payload ?? {};
-            const solveFunctionName = getRestoreSolveFunctionName(payload.solverMode);
+            const solveFunctionName = getRestoreSolveFunctionName(
+                payload.solverMode,
+                payload.solveVariant ?? payload.request?.solveVariant
+            );
             if (!currentModel || typeof currentModel[solveFunctionName] !== 'function') {
                 throw new Error('mj_restore_worker_model_uninitialized');
             }

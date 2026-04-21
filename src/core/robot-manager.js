@@ -23,6 +23,7 @@ import { computeEffectorPoseFromURDF } from '../features/joint-clipboard.js';
 import { resolveHumanoidInitialQ } from './humanoid-default-q-profiles.js';
 
 const ENABLE_SINGLE_ARM_FKM_LOG = false;
+const TEACH_MULTIPLICATION_ORDER_STORAGE_KEY = 'teach-multiply-order-delta-first';
 
 // ---------------------------------------------------------------------------
 // initVisualizer
@@ -40,7 +41,12 @@ export async function initVisualizer() {
     // 根据UI初始化点动乘法顺序
     const teachOrderToggle = document.getElementById('teach-multiply-order-toggle');
     if (teachOrderToggle && appState.visualizer?.setTeachMultiplicationOrder) {
-        const initialOrder = teachOrderToggle.checked ? 'delta-first' : 'current-first';
+        const savedTeachOrder = (() => {
+            try { return localStorage.getItem(TEACH_MULTIPLICATION_ORDER_STORAGE_KEY); } catch (_) { return null; }
+        })();
+        const isDeltaFirst = savedTeachOrder != null ? savedTeachOrder === '1' : Boolean(teachOrderToggle.checked);
+        teachOrderToggle.checked = isDeltaFirst;
+        const initialOrder = isDeltaFirst ? 'delta-first' : 'current-first';
         appState.visualizer.setTeachMultiplicationOrder(initialOrder);
     }
 }
@@ -120,12 +126,6 @@ export function updateSingleArmPose() {
         // 更新位姿信息显示
         callbacks.updatePoseDisplay(displayPose);
 
-        // 更新 DQ 显示
-        callbacks.updateDQDisplay();
-
-        // 更新雅可比矩阵显示
-        callbacks.updateJacobianDisplay();
-
         // 更新 3D 可视化
         if (appState.visualizer) {
             const orderedNames = appState.customRobotConfig?.joint_chain?.joints || [];
@@ -165,7 +165,7 @@ export function updateHumanoidPose() {
         const dq1 = appState.humanoidModel.fkmEffector(appState.humanoidQ, 1);
         const dq2 = appState.humanoidModel.fkmEffector(appState.humanoidQ, 2);
         // 注意：DQWrapper.pose 在当前 WASM 实现中等价于 R*T（平移在局部坐标）
-        // 这里基座位姿需要世界坐标语义，统一使用 T*R，与规划运动模块保持一致。
+        // 这里基座位姿需要世界坐标语义，因此统一使用 T*R。
         const baseX = appState.humanoidBasePose.x || 0;
         const baseY = appState.humanoidBasePose.y || 0;
         const baseYaw = appState.humanoidBasePose.yaw || 0;

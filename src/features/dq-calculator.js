@@ -8,6 +8,9 @@
 import { appState, callbacks } from '../core/state.js';
 import { getDQModule } from '../dqrobotics.js';
 import { getCurrentRobotDQ, formatDualQuaternion } from './ik-controller.js';
+import { onLanguageChange, t } from '../i18n.js';
+
+let dqCalculatorLanguageBound = false;
 
 // ──────────────────────────────────────────────────────────────
 // parseDualQuaternionInput
@@ -47,7 +50,7 @@ export function updateDQCalculatorRobotSelection() {
 
     const prevValue = select.value;
     select.innerHTML = '';
-    const arm1LabelCalc = appState.humanoidMode ? '左臂' : (appState.dualArmMode ? '机器人1' : '机器人');
+    const arm1LabelCalc = appState.humanoidMode ? t('Left Arm') : (appState.dualArmMode ? t('Robot 1') : t('Robot'));
     const opt1 = document.createElement('option');
     opt1.value = 'robot1';
     opt1.textContent = arm1LabelCalc;
@@ -57,17 +60,17 @@ export function updateDQCalculatorRobotSelection() {
     if (showDualOpts) {
         const opt2 = document.createElement('option');
         opt2.value = 'robot2';
-        opt2.textContent = appState.humanoidMode ? '右臂' : '机器人2';
+        opt2.textContent = appState.humanoidMode ? t('Right Arm') : t('Robot 2');
         select.appendChild(opt2);
 
         const optAbs = document.createElement('option');
         optAbs.value = 'absolute';
-        optAbs.textContent = '绝对位姿';
+        optAbs.textContent = t('Absolute Pose');
         select.appendChild(optAbs);
 
         const optRel = document.createElement('option');
         optRel.value = 'relative';
-        optRel.textContent = '相对位姿';
+        optRel.textContent = t('Relative Pose');
         select.appendChild(optRel);
 
         select.disabled = false;
@@ -89,6 +92,8 @@ export function updateDQCalculatorRobotSelection() {
 
 export function setupDQCalculatorPanel() {
     const loadBtn = document.getElementById('dq-calculator-load-current');
+    const loadCurrentQuaternionBtn = document.getElementById('dq-calculator-load-current-quaternion');
+    const loadCurrentPositionBtn = document.getElementById('dq-calculator-load-current-position');
     const applyBtn = document.getElementById('dq-calculator-apply');
     const copyInputBtn = document.getElementById('dq-calculator-copy-input');
     const copyOutputBtn = document.getElementById('dq-calculator-copy-output');
@@ -107,25 +112,73 @@ export function setupDQCalculatorPanel() {
             const robotChoice = document.getElementById('dq-calculator-robot')?.value || 'robot1';
             const dqArray = getCurrentRobotDQ(robotChoice);
             if (!dqArray) {
-                setDQCalculatorStatus('无法获取当前姿态的双四元数', 'error');
+                setDQCalculatorStatus(t('Unable to get the current pose dual quaternion'), 'error');
                 return;
             }
             if (inputEl) {
                 inputEl.value = formatDualQuaternion(dqArray);
             }
-            setDQCalculatorStatus('已加载当前姿态的双四元数', 'success');
+            setDQCalculatorStatus(t('Loaded current pose dual quaternion'), 'success');
+        });
+    }
+
+    if (loadCurrentQuaternionBtn) {
+        loadCurrentQuaternionBtn.addEventListener('click', () => {
+            const currentPose = getCurrentSelectedRobotPose();
+            if (!currentPose) {
+                return;
+            }
+
+            const quatW = document.getElementById('dq-calculator-quat-w');
+            const quatX = document.getElementById('dq-calculator-quat-x');
+            const quatY = document.getElementById('dq-calculator-quat-y');
+            const quatZ = document.getElementById('dq-calculator-quat-z');
+
+            if (!quatW || !quatX || !quatY || !quatZ) {
+                setDQCalculatorQuatStatus(t('Quaternion input fields are unavailable'), 'error');
+                return;
+            }
+
+            quatW.value = formatScalarInput(currentPose.rotation[0]);
+            quatX.value = formatScalarInput(currentPose.rotation[1]);
+            quatY.value = formatScalarInput(currentPose.rotation[2]);
+            quatZ.value = formatScalarInput(currentPose.rotation[3]);
+            setDQCalculatorQuatStatus(t('Loaded the current quaternion into the quaternion inputs'), 'success');
+        });
+    }
+
+    if (loadCurrentPositionBtn) {
+        loadCurrentPositionBtn.addEventListener('click', () => {
+            const currentPose = getCurrentSelectedRobotPose();
+            if (!currentPose) {
+                return;
+            }
+
+            const posX = document.getElementById('dq-calculator-pos-x');
+            const posY = document.getElementById('dq-calculator-pos-y');
+            const posZ = document.getElementById('dq-calculator-pos-z');
+
+            if (!posX || !posY || !posZ) {
+                setDQCalculatorQuatStatus(t('Translation input fields are unavailable'), 'error');
+                return;
+            }
+
+            posX.value = formatScalarInput(currentPose.translation[1]);
+            posY.value = formatScalarInput(currentPose.translation[2]);
+            posZ.value = formatScalarInput(currentPose.translation[3]);
+            setDQCalculatorQuatStatus(t('Loaded the current position into the translation inputs'), 'success');
         });
     }
 
     if (copyInputBtn && inputEl) {
         copyInputBtn.addEventListener('click', async () => {
-            await copyTextToClipboard(inputEl.value || '', '输入双四元数');
+            await copyTextToClipboard(inputEl.value || '', t('Input dual quaternion'));
         });
     }
 
     if (copyOutputBtn && outputEl) {
         copyOutputBtn.addEventListener('click', async () => {
-            await copyTextToClipboard(outputEl.value || '', '输出双四元数');
+            await copyTextToClipboard(outputEl.value || '', t('Output dual quaternion'));
         });
     }
 
@@ -137,7 +190,7 @@ export function setupDQCalculatorPanel() {
 
             const dqArray = parseDualQuaternionInput(inputEl.value || '');
             if (!dqArray) {
-                setDQCalculatorStatus('请输入 8 个双四元数元素', 'error');
+                setDQCalculatorStatus(t('Please enter 8 dual quaternion elements'), 'error');
                 return;
             }
 
@@ -147,7 +200,7 @@ export function setupDQCalculatorPanel() {
             const mode = document.querySelector('input[name="dq-calculator-mode"]:checked')?.value || 'left';
 
             if (!window.DQModule || !window.DQModule.DQWrapper) {
-                setDQCalculatorStatus('DQ 模块未加载，无法计算', 'error');
+                setDQCalculatorStatus(t('DQ module is not loaded; cannot calculate'), 'error');
                 return;
             }
 
@@ -164,10 +217,10 @@ export function setupDQCalculatorPanel() {
                 const dqResultArray = dqWrapper.toArray(dqResult);
                 const formatted = formatDualQuaternion(dqResultArray);
                 outputEl.value = formatted;
-                setDQCalculatorStatus('计算完成，可复制结果', 'success');
+                setDQCalculatorStatus(t('Calculation complete, result ready to copy'), 'success');
             } catch (error) {
                 console.error('DQ 计算失败:', error);
-                setDQCalculatorStatus(`计算失败：${error.message}`, 'error');
+                setDQCalculatorStatus(t('Calculation failed: {{message}}', { message: error.message }), 'error');
             }
         });
     }
@@ -191,7 +244,7 @@ export function setupDQCalculatorPanel() {
             const tz = parseFloat(document.getElementById('dq-calculator-pos-z')?.value || '0') || 0;
 
             if (!window.DQModule || !window.DQModule.DQWrapper) {
-                setDQCalculatorQuatStatus('DQ 模块未加载，无法计算', 'error');
+                setDQCalculatorQuatStatus(t('DQ module is not loaded; cannot calculate'), 'error');
                 return;
             }
 
@@ -208,7 +261,7 @@ export function setupDQCalculatorPanel() {
                     // 从四元数创建旋转DQ（四元数需要归一化）
                     const quatNorm = Math.sqrt(qw*qw + qx*qx + qy*qy + qz*qz);
                     if (quatNorm < 1e-10) {
-                        throw new Error('四元数不能为零');
+                        throw new Error(t('Quaternion cannot be zero'));
                     }
                     const normalizedQw = qw / quatNorm;
                     const normalizedQx = qx / quatNorm;
@@ -241,20 +294,27 @@ export function setupDQCalculatorPanel() {
                     const maxDiff = Math.max(diffX, diffY, diffZ);
 
                     if (maxDiff < 1e-6) {
-                        setDQCalculatorQuatStatus('计算完成，验证通过（平移一致）', 'success');
+                        setDQCalculatorQuatStatus(t('Calculation complete, verification passed (translation matches)'), 'success');
                     } else {
-                        setDQCalculatorQuatStatus(`计算完成，但平移验证失败（差异: ${maxDiff.toFixed(6)}）`, 'error');
+                        setDQCalculatorQuatStatus(t('Calculation complete, but translation verification failed (difference: {{difference}})', { difference: maxDiff.toFixed(6) }), 'error');
                         console.log('输入平移:', tx, ty, tz);
                         console.log('提取平移:', extractedX, extractedY, extractedZ);
                     }
                 } catch (verifyError) {
-                    setDQCalculatorQuatStatus('计算完成，但验证失败', 'error');
+                    setDQCalculatorQuatStatus(t('Calculation complete, but verification failed'), 'error');
                     console.error('验证失败:', verifyError);
                 }
             } catch (error) {
                 console.error('从四元数创建DQ失败:', error);
-                setDQCalculatorQuatStatus(`计算失败：${error.message}`, 'error');
+                setDQCalculatorQuatStatus(t('Calculation failed: {{message}}', { message: error.message }), 'error');
             }
+        });
+    }
+
+    if (!dqCalculatorLanguageBound) {
+        dqCalculatorLanguageBound = true;
+        onLanguageChange(() => {
+            updateDQCalculatorRobotSelection();
         });
     }
 
@@ -270,9 +330,42 @@ export function setupDQCalculatorPanel() {
         quatStatusEl.style.color = type === 'success' ? '#10b981' : '#f87171';
     }
 
+    function getCurrentSelectedRobotPose() {
+        const robotChoice = document.getElementById('dq-calculator-robot')?.value || 'robot1';
+        const dqArray = getCurrentRobotDQ(robotChoice);
+        if (!dqArray) {
+            setDQCalculatorQuatStatus(t('Unable to get the current pose dual quaternion'), 'error');
+            return null;
+        }
+
+        const dqModule = getDQModule() || window.DQModule;
+        if (!dqModule?.DQWrapper) {
+            setDQCalculatorQuatStatus(t('DQ module is not loaded; cannot calculate'), 'error');
+            return null;
+        }
+
+        try {
+            const dqWrapper = dqModule.DQWrapper;
+            const dqObject = dqWrapper.createFromArray(dqArray);
+            return {
+                rotation: dqWrapper.getRotation(dqObject),
+                translation: dqWrapper.getTranslation(dqObject)
+            };
+        } catch (error) {
+            console.error('提取当前姿态失败:', error);
+            setDQCalculatorQuatStatus(t('Failed to extract the current pose: {{message}}', { message: error.message }), 'error');
+            return null;
+        }
+    }
+
+    function formatScalarInput(value) {
+        const rounded = Number(Number(value || 0).toFixed(6));
+        return Number.isFinite(rounded) ? String(rounded) : '0';
+    }
+
     async function copyTextToClipboard(text, label) {
         if (!text) {
-            setDQCalculatorStatus(`没有可复制的${label}`, 'error');
+            setDQCalculatorStatus(t('Nothing to copy for {{label}}', { label }), 'error');
             return;
         }
         try {
@@ -286,10 +379,10 @@ export function setupDQCalculatorPanel() {
                 document.execCommand('copy');
                 document.body.removeChild(tempInput);
             }
-            setDQCalculatorStatus(`已复制${label}`, 'success');
+            setDQCalculatorStatus(t('Copied {{label}}', { label }), 'success');
         } catch (error) {
             console.error('复制失败:', error);
-            setDQCalculatorStatus(`复制失败：${error.message}`, 'error');
+            setDQCalculatorStatus(t('Copy failed: {{message}}', { message: error.message }), 'error');
         }
     }
 }

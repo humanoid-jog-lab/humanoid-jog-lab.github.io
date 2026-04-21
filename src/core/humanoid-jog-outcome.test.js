@@ -80,6 +80,63 @@ test('evaluateHumanoidJogCommandOutcome accepts practical convergence before har
     assert.equal(outcome.converged, true);
 });
 
+test('evaluateHumanoidJogCommandOutcome upgrades best-effort progress to practical convergence when practical tolerances are satisfied', () => {
+    const outcome = evaluateHumanoidJogCommandOutcome({
+        stopReason: 'best_effort',
+        initialCommandNorm: 0.02,
+        finalCommandNorm: 8e-5,
+        finalInvariantNorm: 2e-4,
+        hardCommandTol: 1e-6,
+        hardInvariantTol: 5e-5,
+        practicalCommandTol: 1e-4,
+        practicalInvariantTol: 2.5e-4,
+        mismatchTol: 1e-3,
+        mismatchRequiredReduction: 0.8
+    });
+
+    assert.equal(outcome.reason, 'practical_converged');
+    assert.equal(outcome.applyResult, true);
+    assert.equal(outcome.converged, true);
+});
+
+test('evaluateHumanoidJogCommandOutcome upgrades polish-best-effort progress to practical convergence when practical tolerances are satisfied', () => {
+    const outcome = evaluateHumanoidJogCommandOutcome({
+        stopReason: 'polish_best_effort',
+        initialCommandNorm: 0.02,
+        finalCommandNorm: 8e-5,
+        finalInvariantNorm: 2e-4,
+        hardCommandTol: 1e-6,
+        hardInvariantTol: 5e-5,
+        practicalCommandTol: 1e-4,
+        practicalInvariantTol: 2.5e-4,
+        mismatchTol: 1e-3,
+        mismatchRequiredReduction: 0.8
+    });
+
+    assert.equal(outcome.reason, 'practical_converged');
+    assert.equal(outcome.applyResult, true);
+    assert.equal(outcome.converged, true);
+});
+
+test('evaluateHumanoidJogCommandOutcome treats polish-converged as converged', () => {
+    const outcome = evaluateHumanoidJogCommandOutcome({
+        stopReason: 'polish_converged',
+        initialCommandNorm: 0.02,
+        finalCommandNorm: 8e-7,
+        finalInvariantNorm: 2e-6,
+        hardCommandTol: 1e-6,
+        hardInvariantTol: 5e-5,
+        practicalCommandTol: 1e-4,
+        practicalInvariantTol: 2.5e-4,
+        mismatchTol: 1e-3,
+        mismatchRequiredReduction: 0.8
+    });
+
+    assert.equal(outcome.reason, 'converged');
+    assert.equal(outcome.applyResult, true);
+    assert.equal(outcome.converged, true);
+});
+
 test('evaluateHumanoidJogCommandOutcome keeps partial progress when mismatch tolerance is satisfied', () => {
     const outcome = evaluateHumanoidJogCommandOutcome({
         stopReason: 'max_iter',

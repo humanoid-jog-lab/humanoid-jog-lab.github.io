@@ -1,3 +1,5 @@
+import { JOINT2_LOCK_TRAJECTORY_CASE } from './humanoid-joint2-lock-trajectory.js';
+
 function asFinite(value) {
     return Number.isFinite(value) ? value : Number.NaN;
 }
@@ -41,7 +43,10 @@ export function buildHumanoidStaticManipTasks({
                         metricKey,
                         controlMode,
                         includeWaist: structure === 'full-body',
-                        keepBodyZVertical: controlMode === 'decoupled-upright'
+                        keepBodyZVertical: controlMode === 'decoupled-upright',
+                        defaultBaseQ: structure === JOINT2_LOCK_TRAJECTORY_CASE.structure && locked === true
+                            ? JOINT2_LOCK_TRAJECTORY_CASE.baseQ.slice()
+                            : null
                     });
                 }
             }
@@ -55,10 +60,10 @@ export function summarizeHumanoidStaticManipRow({
     before = null,
     after = null
 } = {}) {
-    const wHierBefore = asFinite(before?.cctsm?.w_abs_arm ?? before?.wHier);
-    const wHierAfter = asFinite(after?.cctsm?.w_abs_arm ?? after?.wHier);
-    const wHierVfiBefore = asFinite(before?.cctsm?.w_abs_arm_vfi ?? before?.wHierVfi);
-    const wHierVfiAfter = asFinite(after?.cctsm?.w_abs_arm_vfi ?? after?.wHierVfi);
+    const wHierBefore = asFinite(before?.cctsm?.w_abs_hier ?? before?.wHier);
+    const wHierAfter = asFinite(after?.cctsm?.w_abs_hier ?? after?.wHier);
+    const wHierVfiBefore = asFinite(before?.cctsm?.w_abs_hier_vfi ?? before?.wHierVfi);
+    const wHierVfiAfter = asFinite(after?.cctsm?.w_abs_hier_vfi ?? after?.wHierVfi);
     const dminBefore = asFinite(before?.dmin);
     const dminAfter = asFinite(after?.dmin);
     return {

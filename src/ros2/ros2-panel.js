@@ -7,6 +7,7 @@
 
 import { JOINT_POSITION_PUBLISH_INTERVAL, ROS2_MAX_LOG_ENTRIES, ROS2_BATTERY_STATE_TOPIC } from '../core/constants.js';
 import { appState, callbacks } from '../core/state.js';
+import { onLanguageChange, t } from '../i18n.js';
 import ROS2Communicator from '../ros2-communicator.js';
 import {
     DEFAULT_REAL_JOINT_STATE_TOPIC,
@@ -17,6 +18,66 @@ import {
     buildRobotArmServoMessageData,
     buildRobotServoMessageData
 } from './servo-message-payloads.js';
+
+let ros2PanelLanguageBound = false;
+
+function getRos2ConnectionStatusText(status) {
+    return {
+        disconnected: t('Disconnected'),
+        connecting: t('Connecting...'),
+        connected: t('Connected'),
+        error: t('Error')
+    }[status] || status;
+}
+
+function getRos2BatteryStatusText(powerSupplyStatus) {
+    return {
+        0: t('Unknown'),
+        1: t('Charging'),
+        2: t('Discharging'),
+        3: t('Not Charging'),
+        4: t('Full')
+    }[powerSupplyStatus] || t('Unknown');
+}
+
+function refreshROS2LanguageState() {
+    updateROS2StatusDisplay(appState.ros2Communicator?.getStatus?.() || 'disconnected');
+    callbacks.updateROS2ControlModeDisplay?.(document.getElementById('ros2-control-mode')?.value || 'manual');
+
+    if (appState.ros2JointStateSubscribed && appState.ros2JointStateTopic) {
+        setRos2JointStatus(t('Subscribed to {{topic}}', { topic: appState.ros2JointStateTopic }), 'success');
+    } else {
+        setRos2JointStatus(t('Not subscribed to real joint state'), 'info');
+    }
+
+    const jointTopic = document.getElementById('ros2-joint-position-topic')?.value.trim();
+    if (appState.jointPositionPublishTimer !== null && jointTopic) {
+        updateJointPositionStatus(
+            t('Continuously publishing to: {{topic}} ({{hz}}Hz)', {
+                topic: jointTopic,
+                hz: 1000 / JOINT_POSITION_PUBLISH_INTERVAL
+            }),
+            'success'
+        );
+    } else {
+        updateJointPositionStatus(t('Switch is off; no messages published'), 'info');
+    }
+
+    const waistTopic = document.getElementById('ros2-waist-position-topic')?.value.trim();
+    if (appState.waistPositionPublishTimer !== null && waistTopic) {
+        updateWaistPositionStatus(
+            t('Continuously publishing to: {{topic}} ({{hz}}Hz)', {
+                topic: waistTopic,
+                hz: 1000 / JOINT_POSITION_PUBLISH_INTERVAL
+            }),
+            'success'
+        );
+    } else {
+        updateWaistPositionStatus(t('Switch is off; no messages published'), 'info');
+    }
+
+    updateROS2LogDisplay();
+}
 
 // ═══════════════════════════════════════════
 //  ROS2 Event Listeners Setup
@@ -42,12 +103,12 @@ function setupROS2EventListeners() {
             const url = websocketUrlInput.value.trim();
             
             if (!url) {
-                addROS2LogEntry('请输入有效的地址', 'warn');
+                addROS2LogEntry(t('Please enter a valid URL'), 'warn');
                 return;
             }
             
             if (!url.startsWith('ws://') && !url.startsWith('wss://')) {
-                addROS2LogEntry('地址必须以 ws:// 或 wss:// 开头', 'warn');
+                addROS2LogEntry(t('The URL must start with ws:// or wss://'), 'warn');
                 return;
             }
             
@@ -62,7 +123,7 @@ function setupROS2EventListeners() {
             }
             
             localStorage.setItem('ros2-websocket-url', url);
-            addROS2LogEntry(`✓ 地址已保存: ${url}，请重新连接`, 'info');
+            addROS2LogEntry(t('Saved URL: {{url}}. Please reconnect.', { url }), 'info');
         });
         
         // 回车保存
@@ -90,8 +151,13 @@ function setupROS2EventListeners() {
                         appState.ros2Communicator.unsubscribe(appState.ros2JointStateTopic);
                         appState.ros2JointStateSubscribed = false;
                         updateJointStateSubscribeButton();
-                        setRos2JointStatus('已取消订阅（准备断开连接）', 'warn');
-                        addROS2LogEntry(`断开前已取消真机关节订阅: ${appState.ros2JointStateTopic}`, 'info');
+                        setRos2JointStatus(t('Unsubscribed (preparing to disconnect)'), 'warn');
+                        addROS2LogEntry(
+                            t('Unsubscribed from real joint state before disconnecting: {{topic}}', {
+                                topic: appState.ros2JointStateTopic
+                            }),
+                            'info'
+                        );
                     }
                 } catch (error) {
                     console.warn('断开前取消真机关节订阅失败:', error);
@@ -123,7 +189,7 @@ function setupROS2EventListeners() {
             }
 
             if (!appState.ros2Communicator || !appState.ros2Communicator.isInitialized) {
-                addROS2LogEntry('ROS 2 未连接', 'error');
+                addROS2LogEntry(t('ROS 2 is not connected'), 'error');
                 return;
             }
 
@@ -133,23 +199,16 @@ function setupROS2EventListeners() {
             // 设置处理中状态
             switchModeBtnProcessing = true;
             const originalText = switchModeBtn.textContent;
-            switchModeBtn.textContent = '切换中...';
+            switchModeBtn.textContent = t('Switching...');
             switchModeBtn.disabled = true;
             switchModeBtn.style.opacity = '0.6';
 
             try {
                 await appState.ros2Communicator.switchMode(selectedMode);
-                addROS2LogEntry(`切换控制模式: ${selectedMode}`, 'info');
-
-                // 更新状态显示
-                const modeStatusEl = document.getElementById('ros2-mode-status');
-                if (modeStatusEl) {
-                    const modeText = selectedMode === 'manual' ? '手动模式 - 可直接控制机器人关节' :
-                                   selectedMode === 'teleop' ? '遥操作模式 - 通过输入设备控制' : '未知模式';
-                    modeStatusEl.textContent = `当前模式：${modeText}`;
-                }
+                addROS2LogEntry(t('Switched control mode: {{mode}}', { mode: selectedMode }), 'info');
+                callbacks.updateROS2ControlModeDisplay?.(selectedMode);
             } catch (error) {
-                addROS2LogEntry(`切换模式失败: ${error.message}`, 'error');
+                addROS2LogEntry(t('Failed to switch mode: {{message}}', { message: error.message }), 'error');
             } finally {
                 // 重置按钮状态
                 switchModeBtnProcessing = false;
@@ -188,6 +247,13 @@ function setupROS2EventListeners() {
             }
         });
     }
+
+    if (!ros2PanelLanguageBound) {
+        onLanguageChange(() => {
+            refreshROS2LanguageState();
+        });
+        ros2PanelLanguageBound = true;
+    }
 }
 
 // ═══════════════════════════════════════════
@@ -223,18 +289,18 @@ function updateServoPublishStatus(elementId, message, type = 'info') {
  */
 async function publishJointPositionMessage() {
     if (!appState.ros2Communicator || !appState.ros2Communicator.isInitialized) {
-        updateJointPositionStatus('ROS 2 未连接', 'error');
+        updateJointPositionStatus(t('ROS 2 is not connected'), 'error');
         return false;
     }
 
     const topicName = document.getElementById('ros2-joint-position-topic')?.value.trim();
     if (!topicName) {
-        updateJointPositionStatus('话题名称未设置', 'error');
+        updateJointPositionStatus(t('Topic name is not set'), 'error');
         return false;
     }
 
     if (appState.humanoidMode && (!Array.isArray(appState.humanoidQ) || appState.humanoidQ.length < 18)) {
-        updateJointPositionStatus('humanoidQ 未就绪，无法发布人形手臂关节', 'warn');
+        updateJointPositionStatus(t('humanoidQ is not ready, so humanoid arm joints cannot be published'), 'warn');
         return false;
     }
 
@@ -254,27 +320,30 @@ async function publishJointPositionMessage() {
         // 发布消息
         const result = await appState.ros2Communicator.publishRobotArmServoMsg(topicName, messageData);
         if (result) {
-            updateJointPositionStatus(`已发送到 ${topicName}（来源: ${source}）`, 'success');
+            updateJointPositionStatus(
+                t('Sent to {{topic}} (source: {{source}})', { topic: topicName, source }),
+                'success'
+            );
         } else {
-            updateJointPositionStatus(`发送失败: ${topicName}`, 'error');
+            updateJointPositionStatus(t('Send failed: {{topic}}', { topic: topicName }), 'error');
         }
         return result;
     } catch (error) {
         console.error('发布关节位置消息失败:', error);
-        updateJointPositionStatus(`发布失败: ${error.message}`, 'error');
+        updateJointPositionStatus(t('Publish failed: {{message}}', { message: error.message }), 'error');
         return false;
     }
 }
 
 async function publishWaistPositionMessage() {
     if (!appState.ros2Communicator || !appState.ros2Communicator.isInitialized) {
-        updateWaistPositionStatus('ROS 2 未连接', 'error');
+        updateWaistPositionStatus(t('ROS 2 is not connected'), 'error');
         return false;
     }
 
     const topicName = document.getElementById('ros2-waist-position-topic')?.value.trim();
     if (!topicName) {
-        updateWaistPositionStatus('话题名称未设置', 'error');
+        updateWaistPositionStatus(t('Topic name is not set'), 'error');
         return false;
     }
 
@@ -285,19 +354,19 @@ async function publishWaistPositionMessage() {
     });
 
     if (!valid) {
-        updateWaistPositionStatus('仅人形模式可发布腰部关节', 'warn');
+        updateWaistPositionStatus(t('Waist joints can only be published in humanoid mode'), 'warn');
         return false;
     }
 
     try {
         const result = await appState.ros2Communicator.publishRobotServoMsg(topicName, messageData);
         if (result) {
-            updateWaistPositionStatus(`已发送到 ${topicName}`, 'success');
+            updateWaistPositionStatus(t('Sent to {{topic}}', { topic: topicName }), 'success');
         }
         return result;
     } catch (error) {
         console.error('发布腰部位置消息失败:', error);
-        updateWaistPositionStatus(`发布失败: ${error.message}`, 'error');
+        updateWaistPositionStatus(t('Publish failed: {{message}}', { message: error.message }), 'error');
         return false;
     }
 }
@@ -309,10 +378,16 @@ async function publishWaistPositionMessage() {
 function startJointPositionPublishing() {
     // 与真机关节订阅互锁：若当前已订阅真机关节状态，则不允许开启持续发布
     if (appState.ros2JointStateSubscribed) {
-        updateJointPositionStatus('当前已订阅真机关节状态，如需持续发布关节位置，请先取消真机关节订阅。', 'warn');
+        updateJointPositionStatus(
+            t('Real joint state is currently subscribed. Please unsubscribe before starting continuous joint publishing.'),
+            'warn'
+        );
         const toggle = document.getElementById('ros2-joint-position-toggle');
         if (toggle) toggle.checked = false;
-        addROS2LogEntry('开启持续发布关节位置被阻止：已订阅真机关节状态，请先取消订阅。', 'warn');
+        addROS2LogEntry(
+            t('Continuous joint publishing was blocked because real joint state is subscribed. Please unsubscribe first.'),
+            'warn'
+        );
         return;
     }
 
@@ -323,7 +398,7 @@ function startJointPositionPublishing() {
 
     // 检查ROS2连接
     if (!appState.ros2Communicator || !appState.ros2Communicator.isInitialized) {
-        updateJointPositionStatus('ROS 2 未连接，无法发布', 'error');
+        updateJointPositionStatus(t('ROS 2 is not connected, so publishing is unavailable'), 'error');
         const toggle = document.getElementById('ros2-joint-position-toggle');
         if (toggle) toggle.checked = false;
         return;
@@ -331,14 +406,14 @@ function startJointPositionPublishing() {
 
     const topicName = document.getElementById('ros2-joint-position-topic')?.value.trim();
     if (!topicName) {
-        updateJointPositionStatus('请设置话题名称', 'error');
+        updateJointPositionStatus(t('Please set a topic name'), 'error');
         const toggle = document.getElementById('ros2-joint-position-toggle');
         if (toggle) toggle.checked = false;
         return;
     }
 
     if (appState.humanoidMode && (!Array.isArray(appState.humanoidQ) || appState.humanoidQ.length < 18)) {
-        updateJointPositionStatus('humanoidQ 未就绪，无法发布人形手臂关节', 'warn');
+        updateJointPositionStatus(t('humanoidQ is not ready, so humanoid arm joints cannot be published'), 'warn');
         const toggle = document.getElementById('ros2-joint-position-toggle');
         if (toggle) toggle.checked = false;
         return;
@@ -352,8 +427,14 @@ function startJointPositionPublishing() {
         publishJointPositionMessage();
     }, JOINT_POSITION_PUBLISH_INTERVAL);
 
-    updateJointPositionStatus(`正在持续发布到: ${topicName} (${1000/JOINT_POSITION_PUBLISH_INTERVAL}Hz)`, 'success');
-    addROS2LogEntry(`开始持续发布关节位置到: ${topicName}`, 'info');
+    updateJointPositionStatus(
+        t('Continuously publishing to: {{topic}} ({{hz}}Hz)', {
+            topic: topicName,
+            hz: 1000 / JOINT_POSITION_PUBLISH_INTERVAL
+        }),
+        'success'
+    );
+    addROS2LogEntry(t('Started continuous joint publishing to: {{topic}}', { topic: topicName }), 'info');
 }
 
 /**
@@ -364,17 +445,23 @@ function stopJointPositionPublishing() {
         clearInterval(appState.jointPositionPublishTimer);
         appState.jointPositionPublishTimer = null;
     }
-    updateJointPositionStatus('已停止发布', 'info');
-    addROS2LogEntry('已停止关节位置发布', 'info');
+    updateJointPositionStatus(t('Publishing stopped'), 'info');
+    addROS2LogEntry(t('Continuous joint publishing stopped'), 'info');
 }
 
 function startWaistPositionPublishing() {
     // 与真机关节订阅互锁：若当前已订阅真机关节状态，则不允许开启持续发布
     if (appState.ros2JointStateSubscribed) {
-        updateWaistPositionStatus('当前已订阅真机关节状态，如需持续发布腰部关节，请先取消真机关节订阅。', 'warn');
+        updateWaistPositionStatus(
+            t('Real joint state is currently subscribed. Please unsubscribe before starting continuous waist publishing.'),
+            'warn'
+        );
         const toggle = document.getElementById('ros2-waist-position-toggle');
         if (toggle) toggle.checked = false;
-        addROS2LogEntry('开启持续发布腰部关节被阻止：已订阅真机关节状态，请先取消订阅。', 'warn');
+        addROS2LogEntry(
+            t('Continuous waist publishing was blocked because real joint state is subscribed. Please unsubscribe first.'),
+            'warn'
+        );
         return;
     }
 
@@ -383,7 +470,7 @@ function startWaistPositionPublishing() {
     }
 
     if (!appState.ros2Communicator || !appState.ros2Communicator.isInitialized) {
-        updateWaistPositionStatus('ROS 2 未连接，无法发布', 'error');
+        updateWaistPositionStatus(t('ROS 2 is not connected, so publishing is unavailable'), 'error');
         const toggle = document.getElementById('ros2-waist-position-toggle');
         if (toggle) toggle.checked = false;
         return;
@@ -391,14 +478,14 @@ function startWaistPositionPublishing() {
 
     const topicName = document.getElementById('ros2-waist-position-topic')?.value.trim();
     if (!topicName) {
-        updateWaistPositionStatus('请设置话题名称', 'error');
+        updateWaistPositionStatus(t('Please set a topic name'), 'error');
         const toggle = document.getElementById('ros2-waist-position-toggle');
         if (toggle) toggle.checked = false;
         return;
     }
 
     if (!appState.humanoidMode || !Array.isArray(appState.humanoidQ) || appState.humanoidQ.length < 4) {
-        updateWaistPositionStatus('仅人形模式可发布腰部关节', 'warn');
+        updateWaistPositionStatus(t('Waist joints can only be published in humanoid mode'), 'warn');
         const toggle = document.getElementById('ros2-waist-position-toggle');
         if (toggle) toggle.checked = false;
         return;
@@ -410,8 +497,14 @@ function startWaistPositionPublishing() {
         publishWaistPositionMessage();
     }, JOINT_POSITION_PUBLISH_INTERVAL);
 
-    updateWaistPositionStatus(`正在持续发布到: ${topicName} (${1000 / JOINT_POSITION_PUBLISH_INTERVAL}Hz)`, 'success');
-    addROS2LogEntry(`开始持续发布腰部关节到: ${topicName}`, 'info');
+    updateWaistPositionStatus(
+        t('Continuously publishing to: {{topic}} ({{hz}}Hz)', {
+            topic: topicName,
+            hz: 1000 / JOINT_POSITION_PUBLISH_INTERVAL
+        }),
+        'success'
+    );
+    addROS2LogEntry(t('Started continuous waist publishing to: {{topic}}', { topic: topicName }), 'info');
 }
 
 function stopWaistPositionPublishing() {
@@ -419,8 +512,8 @@ function stopWaistPositionPublishing() {
         clearInterval(appState.waistPositionPublishTimer);
         appState.waistPositionPublishTimer = null;
     }
-    updateWaistPositionStatus('已停止发布', 'info');
-    addROS2LogEntry('已停止腰部关节发布', 'info');
+    updateWaistPositionStatus(t('Publishing stopped'), 'info');
+    addROS2LogEntry(t('Continuous waist publishing stopped'), 'info');
 }
 
 // ═══════════════════════════════════════════
@@ -438,11 +531,16 @@ function setupRealJointStateControls() {
     }
 
     updateJointStateSubscribeButton();
-    setRos2JointStatus(appState.ros2JointStateSubscribed ? `已订阅 ${appState.ros2JointStateTopic}` : '未订阅真机关节状态', 'info');
+    setRos2JointStatus(
+        appState.ros2JointStateSubscribed
+            ? t('Subscribed to {{topic}}', { topic: appState.ros2JointStateTopic })
+            : t('Not subscribed to real joint state'),
+        'info'
+    );
 
     subscribeBtn.addEventListener('click', async () => {
         if (!appState.ros2Communicator || !appState.ros2Communicator.isInitialized) {
-            setRos2JointStatus('请先连接 ROS 2', 'error');
+            setRos2JointStatus(t('Please connect to ROS 2 first'), 'error');
             return;
         }
 
@@ -451,8 +549,14 @@ function setupRealJointStateControls() {
         if (!appState.ros2JointStateSubscribed) {
             // 与持续发布互锁：若当前已开启任一持续发布，则不允许订阅真机关节状态
             if (appState.jointPositionPublishTimer !== null || appState.waistPositionPublishTimer !== null) {
-                setRos2JointStatus('当前已开启持续发布关节/腰部关节，请先关闭相应发布，再订阅真机关节状态。', 'warn');
-                addROS2LogEntry('订阅真机关节状态被阻止：存在持续发布关节/腰部关节，请先关闭相应发布。', 'warn');
+                setRos2JointStatus(
+                    t('Continuous joint or waist publishing is active. Please stop publishing before subscribing to real joint state.'),
+                    'warn'
+                );
+                addROS2LogEntry(
+                    t('Subscribing to real joint state was blocked because continuous publishing is active. Please stop publishing first.'),
+                    'warn'
+                );
                 return;
             }
 
@@ -461,17 +565,17 @@ function setupRealJointStateControls() {
                 appState.ros2JointStateSubscribed = true;
                 appState.ros2JointStateTopic = topic;
                 updateJointStateSubscribeButton();
-                setRos2JointStatus(`已订阅 ${topic}`, 'success');
-                addROS2LogEntry(`已订阅真机关节: ${topic}`, 'info');
+                setRos2JointStatus(t('Subscribed to {{topic}}', { topic }), 'success');
+                addROS2LogEntry(t('Subscribed to real joint state: {{topic}}', { topic }), 'info');
             } else {
-                setRos2JointStatus('订阅失败，请检查话题', 'error');
+                setRos2JointStatus(t('Subscription failed. Please check the topic.'), 'error');
             }
         } else {
             appState.ros2Communicator.unsubscribe(appState.ros2JointStateTopic);
             appState.ros2JointStateSubscribed = false;
             updateJointStateSubscribeButton();
-            setRos2JointStatus('已取消订阅', 'warn');
-            addROS2LogEntry('已取消真机关节订阅', 'info');
+            setRos2JointStatus(t('Unsubscribed'), 'warn');
+            addROS2LogEntry(t('Unsubscribed from real joint state'), 'info');
         }
     });
 }
@@ -491,7 +595,10 @@ async function autoSubscribeRealJointState() {
 
     // 与持续发布互锁：若当前已开启任一持续发布，则跳过自动订阅，仅给出提示
     if (appState.jointPositionPublishTimer !== null || appState.waistPositionPublishTimer !== null) {
-        addROS2LogEntry('检测到已开启持续发布关节/腰部关节，已跳过自动订阅真机关节状态。如需订阅，请先关闭持续发布。', 'warn');
+        addROS2LogEntry(
+            t('Continuous joint or waist publishing is active, so automatic real joint state subscription was skipped. Stop publishing first if you want to subscribe.'),
+            'warn'
+        );
         return;
     }
 
@@ -507,8 +614,8 @@ async function autoSubscribeRealJointState() {
             appState.ros2JointStateSubscribed = true;
             appState.ros2JointStateTopic = topic;
             updateJointStateSubscribeButton();
-            setRos2JointStatus(`已订阅 ${topic}`, 'success');
-            addROS2LogEntry(`已订阅真机关节: ${topic}`, 'info');
+            setRos2JointStatus(t('Subscribed to {{topic}}', { topic }), 'success');
+            addROS2LogEntry(t('Subscribed to real joint state: {{topic}}', { topic }), 'info');
         }
     } catch (error) {
         console.warn('自动订阅真机关节状态失败:', error);
@@ -543,9 +650,20 @@ function handleRealJointStateMessage(message) {
             if (callbacks.updateRobotPose) {
                 callbacks.updateRobotPose();
             }
-            setRos2JointStatus(`已接收 ${new Date().toLocaleTimeString()}，匹配 ${humanoidResult.updatedCount} 个关节`, 'success');
+            setRos2JointStatus(
+                t('Received at {{time}}; matched {{count}} joints', {
+                    time: new Date().toLocaleTimeString(),
+                    count: humanoidResult.updatedCount
+                }),
+                'success'
+            );
         } else {
-            setRos2JointStatus(`收到 ${new Date().toLocaleTimeString()}，但未匹配到可更新的人形关节`, 'warn');
+            setRos2JointStatus(
+                t('Received at {{time}}, but no updatable humanoid joints were matched', {
+                    time: new Date().toLocaleTimeString()
+                }),
+                'warn'
+            );
         }
         return;
     }
@@ -565,7 +683,7 @@ function handleRealJointStateMessage(message) {
         if (callbacks.updateRobotPose) {
             callbacks.updateRobotPose();
         }
-        setRos2JointStatus(`已接收 ${new Date().toLocaleTimeString()}`, 'success');
+        setRos2JointStatus(t('Received at {{time}}', { time: new Date().toLocaleTimeString() }), 'success');
     }
 }
 
@@ -694,7 +812,9 @@ function updateRobotAnglesFromJointState(names, positions, robotKey) {
 
 function updateJointStateSubscribeButton() {
     if (appState.ros2JointStateButton) {
-        appState.ros2JointStateButton.textContent = appState.ros2JointStateSubscribed ? '取消订阅' : '订阅';
+        appState.ros2JointStateButton.textContent = appState.ros2JointStateSubscribed
+            ? t('Unsubscribe')
+            : t('Subscribe');
     }
 }
 
@@ -821,16 +941,7 @@ function updateBatteryStateDisplay(batteryState) {
     if (statusElement) {
         const powerSupplyStatus = batteryState.power_supply_status;
         if (typeof powerSupplyStatus === 'number') {
-            // power_supply_status 枚举值:
-            // 0 = UNKNOWN, 1 = CHARGING, 2 = DISCHARGING, 3 = NOT_CHARGING, 4 = FULL
-            const statusMap = {
-                0: '未知',
-                1: '充电中',
-                2: '放电中',
-                3: '未充电',
-                4: '已充满'
-            };
-            statusElement.textContent = statusMap[powerSupplyStatus] || '未知';
+            statusElement.textContent = getRos2BatteryStatusText(powerSupplyStatus);
             
             // 根据状态设置颜色
             if (powerSupplyStatus === 1) {
@@ -873,7 +984,7 @@ function updateROS2LogDisplay() {
     if (!logContainer) return;
     
     if (appState.ros2MessageLog.length === 0) {
-        logContainer.innerHTML = '<div style="color: #94a3b8; font-size: 0.85rem;">暂无消息</div>';
+        logContainer.innerHTML = `<div style="color: #94a3b8; font-size: 0.85rem;">${t('No messages yet')}</div>`;
         return;
     }
     
@@ -900,17 +1011,11 @@ async function initROS2Communication(customUrl = null) {
         // 注册状态变化回调
         appState.ros2Communicator.onStatusChange((status) => {
             updateROS2StatusDisplay(status);
-            const statusText = {
-                'disconnected': '未连接',
-                'connecting': '连接中...',
-                'connected': '已连接',
-                'error': '错误'
-            }[status] || status;
-            addROS2LogEntry(`状态: ${statusText}`, 'info');
+            addROS2LogEntry(t('Status: {{status}}', { status: getRos2ConnectionStatusText(status) }), 'info');
             if (status === 'disconnected' && appState.ros2JointStateSubscribed) {
                 appState.ros2JointStateSubscribed = false;
                 updateJointStateSubscribeButton();
-                setRos2JointStatus('连接断开，已停止订阅', 'error');
+                setRos2JointStatus(t('Connection lost; subscription stopped'), 'error');
             }
             // 如果断开连接，停止电池状态订阅
             if (status === 'disconnected' && appState.ros2BatteryStateSubscribed) {
@@ -934,16 +1039,19 @@ async function initROS2Communication(customUrl = null) {
         // 注册模式变化回调
         appState.ros2Communicator.onModeChange((mode) => {
             callbacks.updateROS2ControlModeDisplay?.(mode);
-            addROS2LogEntry(`当前控制模式: ${mode}`, 'info');
+            addROS2LogEntry(t('Current control mode: {{mode}}', { mode }), 'info');
         });
         
         // 显示连接的 URL
-        addROS2LogEntry(`连接地址: ${appState.ros2Communicator.getWebSocketUrl()}`, 'info');
+        addROS2LogEntry(
+            t('Connection URL: {{url}}', { url: appState.ros2Communicator.getWebSocketUrl() }),
+            'info'
+        );
         
         // 尝试初始化
         const result = await appState.ros2Communicator.init();
         if (result) {
-            addROS2LogEntry('ROS 2 初始化成功', 'info');
+            addROS2LogEntry(t('ROS 2 initialized successfully'), 'info');
             // 查询当前控制模式
             try {
                 await appState.ros2Communicator.getMode();
@@ -959,11 +1067,11 @@ async function initROS2Communication(customUrl = null) {
             // 连接成功后自动订阅真机关节状态（使用设置的话题）
             await autoSubscribeRealJointState();
         } else {
-            addROS2LogEntry('ROS 2 初始化失败', 'error');
+            addROS2LogEntry(t('ROS 2 initialization failed'), 'error');
         }
     } catch (error) {
         console.error('ROS 2 初始化异常:', error);
-        addROS2LogEntry(`初始化异常: ${error.message}`, 'error');
+        addROS2LogEntry(t('Initialization exception: {{message}}', { message: error.message }), 'error');
     }
 }
 
@@ -983,18 +1091,11 @@ function updateROS2StatusDisplay(status) {
     });
     
     indicator.classList.add(status);
-    
-    const statusMap = {
-        'disconnected': '未连接',
-        'connecting': '连接中...',
-        'connected': '已连接',
-        'error': '错误'
-    };
-    text.textContent = statusMap[status] || status;
+    text.textContent = getRos2ConnectionStatusText(status);
     
     // 未连接时按钮显示「连接」，已连接时显示「断开」
     if (connectBtn) {
-        connectBtn.textContent = status === 'connected' ? '断开' : '连接';
+        connectBtn.textContent = status === 'connected' ? t('Disconnect') : t('Connect');
     }
 }
 

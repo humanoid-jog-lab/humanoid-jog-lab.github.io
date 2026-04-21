@@ -64,3 +64,54 @@ test('buildHumanoidJogMJProblem disables the w_vfi floor when lower bound is zer
     assert.equal(problem.inequalities.wvfiFloor.enabled, false);
     assert.equal(problem.inequalities.wvfiFloor.violation, 0);
 });
+
+test('buildHumanoidJogMJProblem exposes joint-limit VFI step rows for TR restoration', () => {
+    const problem = buildHumanoidJogMJProblem({
+        q: [0.8, -0.9],
+        qCurrent: [0, 0],
+        absoluteTarget: [1],
+        relativeTarget: [2],
+        absolutePose: () => [0.7],
+        relativePose: () => [1.5],
+        absoluteJacobian: () => [[1, 0]],
+        relativeJacobian: () => [[0, 1]],
+        lowerBounds: [-1, -1],
+        upperBounds: [1, 1],
+        stepBounds: [1, 1],
+        jointLimitEta: 2
+    });
+
+    assert.deepEqual(problem.inequalities.jointLimitVFI.rows, [
+        [1, 0],
+        [-1, 0],
+        [0, 1],
+        [0, -1]
+    ]);
+    assertCloseArray(problem.inequalities.jointLimitVFI.rhs, [0.4, 1, 1, 0.2]);
+    assert.equal(problem.inequalities.jointLimitVFI.count, 4);
+});
+
+test('buildHumanoidJogMJProblem can disable joint-limit VFI rows while preserving other problem data', () => {
+    const problem = buildHumanoidJogMJProblem({
+        q: [0.8, -0.9],
+        qCurrent: [0, 0],
+        absoluteTarget: [1],
+        relativeTarget: [2],
+        absolutePose: () => [0.7],
+        relativePose: () => [1.5],
+        absoluteJacobian: () => [[1, 0]],
+        relativeJacobian: () => [[0, 1]],
+        lowerBounds: [-1, -1],
+        upperBounds: [1, 1],
+        stepBounds: [1, 1],
+        jointLimitEta: 2,
+        enableJointLimitVFI: false
+    });
+
+    assert.equal(problem.inequalities.jointLimitVFI.enabled, false);
+    assert.deepEqual(problem.inequalities.jointLimitVFI.rows, []);
+    assert.deepEqual(problem.inequalities.jointLimitVFI.rhs, []);
+    assert.equal(problem.inequalities.jointLimitVFI.count, 0);
+    assert.equal(problem.bounds.effectiveUpper[0], 1);
+    assert.equal(problem.bounds.effectiveLower[1], -1);
+});

@@ -7,9 +7,10 @@ export function supportsHumanoidJogMJRestoreMode(modeTag = '') {
         || modeTag === 'robot1-waist-target'
         || modeTag === 'robot2-waist-target'
         || modeTag === 'waist-body-link-xz-target'
-        || modeTag === 'surface-slide-target'
-        || modeTag === 'dual-independent-surface-slide-target'
-        || modeTag === 'cooperative-ruled-surface-polishing-target';
+        || modeTag === 'left-ruled-surface-polishing-target'
+        || modeTag === 'cooperative-ruled-surface-polishing-target'
+        || modeTag === 'cooperative-ruled-surface-polishing-dq-setpoint-target'
+        || modeTag === 'cooperative-ruled-surface-polishing-dq-setpoint-arm-only-target';
 }
 
 export default supportsHumanoidJogMJRestoreMode;

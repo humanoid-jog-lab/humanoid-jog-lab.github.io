@@ -1,8 +1,8 @@
 export const JOINT2_LOCK_TRAJECTORY_CASE = {
     taskKind: 'absolute',
-    structure: 'full-body',
-    controlMode: 'decoupled',
-    includeWaist: true,
+    structure: 'dual-arm',
+    controlMode: 'absolute',
+    includeWaist: false,
     keepBodyZVertical: false,
     solverMode: 'mj_restore',
     repeatCountDefault: 200,
@@ -47,7 +47,7 @@ export function buildJoint2LockTrajectoryPlotPayload({
     samplesByMetric = {}
 } = {}) {
     return {
-        title: 'Absolute | full-body | joint2 lock',
+        title: 'Absolute | dual-arm | joint2 lock',
         repeatCount,
         metrics: JOINT2_LOCK_TRAJECTORY_CASE.metrics.map(({ key, label }) => ({ key, label })),
         joints: JOINT2_LOCK_TRAJECTORY_CASE.joints.map((joint) => ({

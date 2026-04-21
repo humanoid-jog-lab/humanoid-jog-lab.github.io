@@ -12,6 +12,10 @@ test('supportsHumanoidJogMJRestoreMode supports all unified mj_restore humanoid 
     assert.equal(supportsHumanoidJogMJRestoreMode('robot1-waist-target'), true);
     assert.equal(supportsHumanoidJogMJRestoreMode('robot2-waist-target'), true);
     assert.equal(supportsHumanoidJogMJRestoreMode('waist-body-link-xz-target'), true);
-    assert.equal(supportsHumanoidJogMJRestoreMode('dual-independent-surface-slide-target'), true);
+    assert.equal(supportsHumanoidJogMJRestoreMode('left-ruled-surface-polishing-target'), true);
+    assert.equal(supportsHumanoidJogMJRestoreMode('surface-slide-target'), false);
+    assert.equal(supportsHumanoidJogMJRestoreMode('dual-independent-surface-slide-target'), false);
     assert.equal(supportsHumanoidJogMJRestoreMode('cooperative-ruled-surface-polishing-target'), true);
+    assert.equal(supportsHumanoidJogMJRestoreMode('cooperative-ruled-surface-polishing-dq-setpoint-target'), true);
+    assert.equal(supportsHumanoidJogMJRestoreMode('cooperative-ruled-surface-polishing-dq-setpoint-arm-only-target'), true);
 });

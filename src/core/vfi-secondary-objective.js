@@ -89,7 +89,7 @@ export function buildManipulabilityVFIConstraints({
             const dUp = Number.isFinite(lim.upper) ? Math.max(0, lim.upper - qi) : Infinity;
             const dLo = Number.isFinite(lim.lower) ? Math.max(0, qi - lim.lower) : Infinity;
             const dMin = Math.min(dUp, dLo);
-            if (!Number.isFinite(dMin) || dMin >= threshold) continue;
+            if (!Number.isFinite(dMin)) continue;
             const row = new Array(n).fill(0);
             row[i] = 1;
             constraints.push({ row, distance: dMin, threshold, source: 'joint_limit' });

@@ -20,7 +20,6 @@
 #include <dqrobotics/robots/KukaLw4Robot.h>
 #include <Eigen/Dense>
 #include "mj_restore_humanoid_solver.hpp"
-#include "nlopt_humanoid_solver.hpp"
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
@@ -759,11 +758,17 @@ private:
 
     static HumanoidAbsoluteMJRestoreRequest parseAbsoluteTargetMJRestoreRequest(const val& request_js) {
         HumanoidAbsoluteMJRestoreRequest request;
+        request.solve_variant =
+            request_js["solveVariant"].isUndefined()
+                ? request.solve_variant
+                : request_js["solveVariant"].as<std::string>();
         request.q_current = jsArrayToStdVectorDouble(request_js["qCurrent"]);
         request.active_start = getOptionalIntField(request_js, "activeStart", request.active_start);
         request.active_count = getOptionalIntField(request_js, "activeCount", request.active_count);
         request.absolute_target = jsArrayToStdVectorDouble(request_js["absoluteTarget"]);
         request.relative_target = jsArrayToStdVectorDouble(request_js["relativeTarget"]);
+        request.left_target = jsArrayToStdVectorDouble(request_js["leftTarget"]);
+        request.right_target = jsArrayToStdVectorDouble(request_js["rightTarget"]);
         request.keep_body_z_vertical =
             request_js["keepBodyZVertical"].isUndefined()
                 ? request.keep_body_z_vertical
@@ -802,6 +807,13 @@ private:
             "jointLimitActivationThreshold",
             request.joint_limit_activation_threshold
         );
+        const val joint_limit_vfi_js = request_js["jointLimitVFI"];
+        request.joint_limit_vfi.enabled =
+            joint_limit_vfi_js.isUndefined()
+                ? request.joint_limit_vfi.enabled
+                : joint_limit_vfi_js["enabled"].as<bool>();
+        request.joint_limit_vfi.rows = jsArrayToNestedStdVectorDouble(joint_limit_vfi_js["rows"]);
+        request.joint_limit_vfi.rhs = jsArrayToStdVectorDouble(joint_limit_vfi_js["rhs"]);
 
         const val waist_corridor_js = request_js["waistXCorridor"];
         request.waist_x_corridor.enabled =
@@ -967,6 +979,10 @@ private:
         out.set("lastPredictedReduction", result.last_predicted_reduction);
         out.set("lastActualReduction", result.last_actual_reduction);
         out.set("acceptedBy", result.accepted_by);
+        out.set("lastRejectedRho", result.last_rejected_rho);
+        out.set("lastRejectedPredictedReduction", result.last_rejected_predicted_reduction);
+        out.set("lastRejectedActualReduction", result.last_rejected_actual_reduction);
+        out.set("lastRejectedReason", result.last_rejected_reason);
         out.set("bestConstraintViolation", result.best_constraint_violation);
         out.set("filterSize", result.filter_size);
         out.set("referenceResidual", stdVectorToJsArray(result.reference_residual));
@@ -1055,110 +1071,6 @@ public:
         return matrixXdToJsArray(J);
     }
 
-    val solveAbsoluteTargetNlopt(const val& request_js) {
-        HumanoidAbsoluteNloptRequest request;
-        request.q0 = jsArrayToStdVectorDouble(request_js["q0"]);
-        request.absolute_target = jsArrayToStdVectorDouble(request_js["absoluteTarget"]);
-        request.relative_reference = jsArrayToStdVectorDouble(request_js["relativeReference"]);
-        request.active_indices = jsArrayToStdVectorInt(request_js["activeIndices"]);
-        request.lower_bounds = jsArrayToStdVectorDouble(request_js["lowerBounds"]);
-        request.upper_bounds = jsArrayToStdVectorDouble(request_js["upperBounds"]);
-        request.step_bounds = jsArrayToStdVectorDouble(request_js["stepBounds"]);
-        request.wvfi_min = getOptionalNumberField(request_js, "wvfiMin", request.wvfi_min);
-        request.weight_absolute = getOptionalNumberField(
-            request_js,
-            "weightAbsolute",
-            request.weight_absolute
-        );
-        request.weight_delta = getOptionalNumberField(
-            request_js,
-            "weightDelta",
-            request.weight_delta
-        );
-        request.weight_wvfi_reward = getOptionalNumberField(
-            request_js,
-            "weightWvfiReward",
-            request.weight_wvfi_reward
-        );
-        request.enforce_relative_pose_constraint =
-            request_js["enforceRelativePoseConstraint"].isUndefined()
-                ? request.enforce_relative_pose_constraint
-                : request_js["enforceRelativePoseConstraint"].as<bool>();
-        request.relative_equality_tolerance = getOptionalNumberField(
-            request_js,
-            "relativeEqualityTolerance",
-            request.relative_equality_tolerance
-        );
-        request.weight_relative_penalty = getOptionalNumberField(
-            request_js,
-            "weightRelativePenalty",
-            request.weight_relative_penalty
-        );
-        request.keep_body_z_vertical =
-            request_js["keepBodyZVertical"].isUndefined()
-                ? request.keep_body_z_vertical
-                : request_js["keepBodyZVertical"].as<bool>();
-        request.body_vertical_tolerance = getOptionalNumberField(
-            request_js,
-            "bodyVerticalTolerance",
-            request.body_vertical_tolerance
-        );
-        request.weight_body_vertical_penalty = getOptionalNumberField(
-            request_js,
-            "weightBodyVerticalPenalty",
-            request.weight_body_vertical_penalty
-        );
-        request.enforce_waist_x_corridor =
-            request_js["enforceWaistXCorridor"].isUndefined()
-                ? request.enforce_waist_x_corridor
-                : request_js["enforceWaistXCorridor"].as<bool>();
-        request.waist_x_min = getOptionalNumberField(
-            request_js,
-            "waistXMin",
-            request.waist_x_min
-        );
-        request.waist_x_max = getOptionalNumberField(
-            request_js,
-            "waistXMax",
-            request.waist_x_max
-        );
-        request.joint_limit_activation_threshold = getOptionalNumberField(
-            request_js,
-            "jointLimitActivationThreshold",
-            request.joint_limit_activation_threshold
-        );
-        request.repair_max_iter = getOptionalIntField(
-            request_js,
-            "repairMaxIter",
-            request.repair_max_iter
-        );
-        request.repair_damping = getOptionalNumberField(
-            request_js,
-            "repairDamping",
-            request.repair_damping
-        );
-        request.max_eval = getOptionalIntField(request_js, "maxEval", request.max_eval);
-        request.xtol_rel = getOptionalNumberField(request_js, "xtolRel", request.xtol_rel);
-        request.ftol_rel = getOptionalNumberField(request_js, "ftolRel", request.ftol_rel);
-
-        const HumanoidAbsoluteNloptResult result =
-            solveHumanoidAbsoluteTargetNlopt(robot, request);
-
-        val out = val::object();
-        out.set("converged", result.converged);
-        out.set("reason", result.reason);
-        out.set("iterations", result.iterations);
-        out.set("finalCost", result.final_cost);
-        out.set("finalAbsoluteResidual", result.final_absolute_residual);
-        out.set("finalRelativeResidual", result.final_relative_residual);
-        out.set("finalBodyVerticalResidual", result.final_body_vertical_residual);
-        out.set("repairIterations", result.repair_iterations);
-        out.set("repairConverged", result.repair_converged);
-        out.set("finalWvfi", result.final_wvfi);
-        out.set("qNext", stdVectorToJsArray(result.q_next));
-        return out;
-    }
-
     val solveAbsoluteTargetMJRestore(const val& request_js) {
         const HumanoidAbsoluteMJRestoreRequest request =
             parseAbsoluteTargetMJRestoreRequest(request_js);
@@ -1172,6 +1084,42 @@ public:
             parseAbsoluteTargetMJRestoreRequest(request_js);
         const HumanoidAbsoluteMJRestoreResult result =
             solveHumanoidAbsoluteTargetMJRestoreTrustRegion(robot, request);
+        return absoluteTargetMJRestoreResultToJs(result);
+    }
+
+    val solveAbsoluteDQSetpointMJRestore(const val& request_js) {
+        HumanoidAbsoluteMJRestoreRequest request =
+            parseAbsoluteTargetMJRestoreRequest(request_js);
+        request.solve_variant = "absolute_dq_setpoint";
+        const HumanoidAbsoluteMJRestoreResult result =
+            solveHumanoidAbsoluteDQSetpointMJRestore(robot, request);
+        return absoluteTargetMJRestoreResultToJs(result);
+    }
+
+    val solveAbsoluteDQSetpointMJRestoreTrustRegion(const val& request_js) {
+        HumanoidAbsoluteMJRestoreRequest request =
+            parseAbsoluteTargetMJRestoreRequest(request_js);
+        request.solve_variant = "absolute_dq_setpoint";
+        const HumanoidAbsoluteMJRestoreResult result =
+            solveHumanoidAbsoluteDQSetpointMJRestoreTrustRegion(robot, request);
+        return absoluteTargetMJRestoreResultToJs(result);
+    }
+
+    val solveCooperativeDQSetpointMJRestore(const val& request_js) {
+        HumanoidAbsoluteMJRestoreRequest request =
+            parseAbsoluteTargetMJRestoreRequest(request_js);
+        request.solve_variant = "cooperative_dq_setpoint";
+        const HumanoidAbsoluteMJRestoreResult result =
+            solveHumanoidCooperativeDQSetpointMJRestore(robot, request);
+        return absoluteTargetMJRestoreResultToJs(result);
+    }
+
+    val solveCooperativeDQSetpointMJRestoreTrustRegion(const val& request_js) {
+        HumanoidAbsoluteMJRestoreRequest request =
+            parseAbsoluteTargetMJRestoreRequest(request_js);
+        request.solve_variant = "cooperative_dq_setpoint";
+        const HumanoidAbsoluteMJRestoreResult result =
+            solveHumanoidCooperativeDQSetpointMJRestoreTrustRegion(robot, request);
         return absoluteTargetMJRestoreResultToJs(result);
     }
 };
@@ -1594,9 +1542,12 @@ EMSCRIPTEN_BINDINGS(dqrobotics_module) {
         .function("absolutePoseDualArm", &HumanoidURDF_Wrapper::absolutePoseDualArm)
         .function("relativePoseJacobianDualArm", &HumanoidURDF_Wrapper::relativePoseJacobianDualArm)
         .function("absolutePoseJacobianDualArm", &HumanoidURDF_Wrapper::absolutePoseJacobianDualArm)
-        .function("solveAbsoluteTargetNlopt", &HumanoidURDF_Wrapper::solveAbsoluteTargetNlopt)
         .function("solveAbsoluteTargetMJRestore", &HumanoidURDF_Wrapper::solveAbsoluteTargetMJRestore)
-        .function("solveAbsoluteTargetMJRestoreTrustRegion", &HumanoidURDF_Wrapper::solveAbsoluteTargetMJRestoreTrustRegion);
+        .function("solveAbsoluteTargetMJRestoreTrustRegion", &HumanoidURDF_Wrapper::solveAbsoluteTargetMJRestoreTrustRegion)
+        .function("solveAbsoluteDQSetpointMJRestore", &HumanoidURDF_Wrapper::solveAbsoluteDQSetpointMJRestore)
+        .function("solveAbsoluteDQSetpointMJRestoreTrustRegion", &HumanoidURDF_Wrapper::solveAbsoluteDQSetpointMJRestoreTrustRegion)
+        .function("solveCooperativeDQSetpointMJRestore", &HumanoidURDF_Wrapper::solveCooperativeDQSetpointMJRestore)
+        .function("solveCooperativeDQSetpointMJRestoreTrustRegion", &HumanoidURDF_Wrapper::solveCooperativeDQSetpointMJRestoreTrustRegion);
 
     // 差速底盘
     class_<DifferentialDriveRobot_Wrapper>("DifferentialDriveRobot")

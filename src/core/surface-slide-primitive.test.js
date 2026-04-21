@@ -7,6 +7,7 @@ import {
     evaluateSurfacePatch,
     buildSurfaceAttachedFrame,
     buildSurfaceAttachedPoseTarget,
+    buildSurfaceAttachedPoseJacobian,
     buildPluckerTube,
     blendUnitQuaternions,
     interpolatePosesScLERP,
@@ -179,6 +180,34 @@ test('buildSurfaceAttachedPoseTarget can offset along the opposite contact side 
     assertApproxVector(target.position, [0.2, -0.1, -0.05]);
     assert.equal(target.surface.normalOffset, 0.05);
     assert.equal(target.surface.normalOffsetSign, -1);
+});
+
+test('buildSurfaceAttachedPoseJacobian returns explicit planar DQ columns for [u, v, n]', () => {
+    const surface = {
+        position: (u, v) => [u, v, 0],
+        du: () => [1, 0, 0],
+        dv: () => [0, 1, 0]
+    };
+
+    const model = buildSurfaceAttachedPoseJacobian({
+        surface,
+        u: 0.2,
+        v: -0.1,
+        normalOffset: 0.05,
+        normalOffsetSign: 1,
+        bounds: {
+            u: [-1, 1],
+            v: [-1, 1]
+        }
+    });
+
+    assert.equal(model.pose.kind, 'surface_attached_pose');
+    assert.equal(model.jacobian.length, 8);
+    assert.equal(model.jacobian[0].length, 3);
+    assertApproxVector(model.dqPose, [1, 0, 0, 0, 0, 0.1, -0.05, 0.025], 1e-9);
+    assertApproxVector(model.jacobian.map((row) => row[0]), [0, 0, 0, 0, 0, 0.5, 0, 0], 1e-6);
+    assertApproxVector(model.jacobian.map((row) => row[1]), [0, 0, 0, 0, 0, 0, 0.5, 0], 1e-6);
+    assertApproxVector(model.jacobian.map((row) => row[2]), [0, 0, 0, 0, 0, 0, 0, 0.5], 1e-6);
 });
 
 test('createDQMotionRuledSurface produces a regular DQ-motion-generated ruled patch with analytic tangents', () => {

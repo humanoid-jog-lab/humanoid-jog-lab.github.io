@@ -325,67 +325,9 @@ export function updateDualArmPoseDisplay(pose1, pose2, optionalAbsolutePose, opt
 }
 
 /**
- * 更新 DQ 显示
- */
-export function updateDQDisplay() {
-    try {
-        const dqArray = appState.currentRobot.fkm(appState.jointAngles);
-        
-        // 实部 (primary) - 前4个元素
-        const primaryDiv = document.getElementById('dq-primary');
-        primaryDiv.innerHTML = '';
-        for (let i = 0; i < 4; i++) {
-            const code = document.createElement('code');
-            code.textContent = dqArray[i].toFixed(4);
-            primaryDiv.appendChild(code);
-        }
-        
-        // 对偶部 (dual) - 后4个元素
-        const dualDiv = document.getElementById('dq-dual');
-        dualDiv.innerHTML = '';
-        for (let i = 4; i < 8; i++) {
-            const code = document.createElement('code');
-            code.textContent = dqArray[i].toFixed(4);
-            dualDiv.appendChild(code);
-        }
-    } catch (error) {
-        console.error('更新 DQ 显示失败:', error);
-    }
-}
-
-/**
- * 更新雅可比矩阵显示
- */
-export function updateJacobianDisplay() {
-    try {
-        const jacobian = appState.currentRobot.poseJacobian(appState.jointAngles);
-        
-        const container = document.getElementById('jacobian-matrix');
-        
-        // 创建表格
-        let html = '<table>';
-        for (let i = 0; i < Math.min(8, jacobian.length); i++) {
-            html += '<tr>';
-            for (let j = 0; j < jacobian[i].length; j++) {
-                const value = jacobian[i][j].toFixed(4);
-                html += `<td>${value}</td>`;
-            }
-            html += '</tr>';
-        }
-        html += '</table>';
-        
-        container.innerHTML = html;
-    } catch (error) {
-        console.error('更新雅可比矩阵失败:', error);
-    }
-}
-
-/**
  * 注册显示回调到全局 callbacks
  */
 export function registerDisplayCallbacks() {
     callbacks.updatePoseDisplay = updatePoseDisplay;
     callbacks.updateDualArmPoseDisplay = updateDualArmPoseDisplay;
-    callbacks.updateDQDisplay = updateDQDisplay;
-    callbacks.updateJacobianDisplay = updateJacobianDisplay;
 }

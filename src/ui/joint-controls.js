@@ -5,8 +5,113 @@
 
 import { DEG_TO_RAD, RAD_TO_DEG, CM_TO_M } from '../core/constants.js';
 import { appState, callbacks } from '../core/state.js';
+import { onLanguageChange, t } from '../i18n.js';
 import { angleToDisplay, displayToAngle, getSliderPrecision, getInputPrecision, displayStep, getAnglePlaceholder, formatDisplayValue, formatDisplayAngle, getActiveJointConfig, wrapAngle } from '../utils/math-utils.js';
 import { resetRPPState } from '../humanoid/base-control.js';
+
+let jointControlsLanguageBound = false;
+
+function getJointFallbackName(index) {
+    return t('Joint {{number}}', { number: index + 1 });
+}
+
+function getRobotFallbackName(number) {
+    return t('Robot {{number}}', { number });
+}
+
+function getHumanoidBaseModeLabel(mode) {
+    return mode === 'point' ? t('Point Stabilization') : t('Path Tracking (RPP)');
+}
+
+function getRppRunButtonLabel(isRunning) {
+    return isRunning ? t('■ Stop') : t('▶ Run');
+}
+
+function getRppParamsToggleLabel(isExpanded) {
+    return `${isExpanded ? '▼' : '▶'} ${t('RPP Parameters')}`;
+}
+
+function getHumanoidPathStatusText() {
+    const pathLen = appState.humanoidBasePath.length;
+    const state = appState.humanoidBaseRPPState;
+
+    if (pathLen === 0) {
+        return t('Click the 3D ground to add waypoints (at least 2)');
+    }
+    if (pathLen === 1) {
+        return t('Added 1 waypoint. Add at least 1 more.');
+    }
+
+    const lastWaypoint = appState.humanoidBasePath[pathLen - 1];
+    const goalYaw = lastWaypoint.yaw !== undefined
+        ? t(' | Goal heading: {{angle}}°', {
+            angle: (lastWaypoint.yaw * RAD_TO_DEG).toFixed(1)
+        })
+        : '';
+
+    let statusText;
+    if (state.isFinished) {
+        statusText = t('✓ Reached');
+    } else if (state.isRunning) {
+        statusText = state.isRotatingToHeading ? t('Rotating...') : t('Tracking...');
+    } else {
+        statusText = t('Ready (click ▶ Run)');
+    }
+
+    return t('{{count}} waypoints{{goalYaw}} | {{status}}', {
+        count: pathLen,
+        goalYaw,
+        status: statusText
+    });
+}
+
+function getHumanoidBaseWheelStatusText() {
+    const modeText = appState.humanoidBaseControlMode === 'path' ? 'RPP' : t('Point');
+    const currentYawDisplay = angleToDisplay(Number(appState.humanoidBasePose.yaw) || 0);
+
+    let errorText;
+    if (appState.humanoidBaseControlMode === 'path' && appState.humanoidBasePath.length >= 2) {
+        const goal = appState.humanoidBasePath[appState.humanoidBasePath.length - 1];
+        const positionError = Math.hypot(
+            (goal.x || 0) - (appState.humanoidBasePose.x || 0),
+            (goal.y || 0) - (appState.humanoidBasePose.y || 0)
+        );
+        const rotating = appState.humanoidBaseRPPState.isRotatingToHeading ? t(' [Rotating]') : '';
+        errorText = t('Distance to goal: {{distance}}m{{rotating}}', {
+            distance: positionError.toFixed(3),
+            rotating
+        });
+    } else {
+        const dx = (appState.humanoidBaseTargetPose.x || 0) - (appState.humanoidBasePose.x || 0);
+        const dy = (appState.humanoidBaseTargetPose.y || 0) - (appState.humanoidBasePose.y || 0);
+        const positionError = Math.hypot(dx, dy);
+        const yawErrorDisplay = angleToDisplay(
+            wrapAngle((appState.humanoidBaseTargetPose.yaw || 0) - (appState.humanoidBasePose.yaw || 0))
+        );
+        errorText = t(
+            'Error: pos={{position}}m, yaw={{yaw}} {{unit}}',
+            {
+                position: positionError.toFixed(3),
+                yaw: yawErrorDisplay.toFixed(2),
+                unit: appState.angleDisplayMode === 'deg' ? 'deg' : 'rad'
+            }
+        );
+    }
+
+    return (
+        `${modeText} | ` +
+        t('Wheel speed: L={{left}}, R={{right}} rad/s', {
+            left: (appState.humanoidBaseWheelVelocity.left || 0).toFixed(2),
+            right: (appState.humanoidBaseWheelVelocity.right || 0).toFixed(2)
+        }) +
+        ` | ${t('Pose: ({{x}}, {{y}}, {{yaw}}{{unit}})', {
+            x: (appState.humanoidBasePose.x || 0).toFixed(3),
+            y: (appState.humanoidBasePose.y || 0).toFixed(3),
+            yaw: currentYawDisplay.toFixed(2),
+            unit: appState.angleDisplayMode === 'deg' ? '°' : 'rad'
+        })} | ${errorText}`
+    );
+}
 
 /**
  * 获取关节限位
@@ -188,7 +293,7 @@ export function createJointControls(numJoints, config = null) {
         const jointDiv = document.createElement('div');
         jointDiv.className = 'joint-control';
         
-        const jointName = config?.joint_chain?.joints?.[i] || `关节 ${i + 1}`;
+        const jointName = config?.joint_chain?.joints?.[i] || getJointFallbackName(i);
         
         // 获取关节限位
         const limits = getJointLimits(jointName, urdfRobot, config);
@@ -309,7 +414,7 @@ export function createDualArmJointControls(config) {
     // 机器人1的关节控制
     const robot1Section = document.createElement('div');
     robot1Section.className = 'joint-control-section';
-    robot1Section.innerHTML = `<h3 style="color: #3b82f6; margin-bottom: 0.5rem; font-size: 1rem;">${config.robot1?.name || '机器人1'}</h3>`;
+    robot1Section.innerHTML = `<h3 style="color: #3b82f6; margin-bottom: 0.5rem; font-size: 1rem;">${config.robot1?.name || getRobotFallbackName(1)}</h3>`;
     
     const robot1Controls = document.createElement('div');
     const numJoints1 = config.robot1?.joint_chain?.joints?.length || appState.jointAngles1.length;
@@ -317,7 +422,7 @@ export function createDualArmJointControls(config) {
         const jointDiv = document.createElement('div');
         jointDiv.className = 'joint-control';
         
-        const jointName = config.robot1?.joint_chain?.joints?.[i] || `关节 ${i + 1}`;
+        const jointName = config.robot1?.joint_chain?.joints?.[i] || getJointFallbackName(i);
         
         // 获取关节限位（优先从配置文件，其次从URDF）
         const limits = getJointLimits(jointName, robot1URDF, config.robot1);
@@ -385,7 +490,7 @@ export function createDualArmJointControls(config) {
     const robot2Section = document.createElement('div');
     robot2Section.className = 'joint-control-section';
     robot2Section.style.marginTop = '1.5rem';
-    robot2Section.innerHTML = `<h3 style="color: #10b981; margin-bottom: 0.5rem; font-size: 1rem;">${config.robot2?.name || '机器人2'}</h3>`;
+    robot2Section.innerHTML = `<h3 style="color: #10b981; margin-bottom: 0.5rem; font-size: 1rem;">${config.robot2?.name || getRobotFallbackName(2)}</h3>`;
     
     const robot2Controls = document.createElement('div');
     const numJoints2 = config.robot2?.joint_chain?.joints?.length || appState.jointAngles2.length;
@@ -393,7 +498,7 @@ export function createDualArmJointControls(config) {
         const jointDiv = document.createElement('div');
         jointDiv.className = 'joint-control';
         
-        const jointName = config.robot2?.joint_chain?.joints?.[i] || `关节 ${i + 1}`;
+        const jointName = config.robot2?.joint_chain?.joints?.[i] || getJointFallbackName(i);
         
         // 获取关节限位（优先从配置文件，其次从URDF）
         const limits = getJointLimits(jointName, robot2URDF, config.robot2);
@@ -490,7 +595,7 @@ export function createHumanoidJointControls(config) {
     // ── 差速底盘控制区域 ──
     const baseHeader = document.createElement('div');
     baseHeader.className = 'joint-group-header';
-    baseHeader.innerHTML = '<span class="group-title">🚗 差速底盘</span><span class="group-count" id="humanoid-base-mode-label">点稳定</span>';
+    baseHeader.innerHTML = `<span class="group-title">${t('🚗 Differential Base')}</span><span class="group-count" id="humanoid-base-mode-label">${getHumanoidBaseModeLabel(appState.humanoidBaseControlMode)}</span>`;
     baseHeader.style.cssText = `
         display: flex;
         justify-content: space-between;
@@ -530,7 +635,7 @@ export function createHumanoidJointControls(config) {
             pathControlsDiv.style.display = mode === 'path' ? '' : 'none';
             // 更新模式标签
             const modeLabel = document.getElementById('humanoid-base-mode-label');
-            if (modeLabel) modeLabel.textContent = mode === 'point' ? '点稳定' : '路径跟踪(RPP)';
+            if (modeLabel) modeLabel.textContent = getHumanoidBaseModeLabel(mode);
             // 切换到路径模式时启用航点添加
             if (appState.visualizer) {
                 appState.visualizer.setAddWaypointMode(mode === 'path');
@@ -550,8 +655,8 @@ export function createHumanoidJointControls(config) {
         });
         return btn;
     };
-    modeToggleRow.appendChild(createModeBtn('点稳定', 'point'));
-    modeToggleRow.appendChild(createModeBtn('路径跟踪 (RPP)', 'path'));
+    modeToggleRow.appendChild(createModeBtn(t('Point Stabilization'), 'point'));
+    modeToggleRow.appendChild(createModeBtn(t('Path Tracking (RPP)'), 'path'));
     container.appendChild(modeToggleRow);
 
     // ── 点稳定控件容器 ──
@@ -659,7 +764,7 @@ export function createHumanoidJointControls(config) {
     runBtn.id = 'rpp-run-btn';
     const updateRunBtnStyle = () => {
         const running = appState.humanoidBaseRPPState.isRunning;
-        runBtn.textContent = running ? '■ 停止' : '▶ 运行';
+        runBtn.textContent = getRppRunButtonLabel(running);
         runBtn.style.cssText = `
             padding:4px 14px; border:1px solid ${running ? '#ef4444' : '#10b981'}; border-radius:4px;
             background:${running ? '#991b1b' : '#065f46'}; color:#e5e7eb; font-size:0.76rem;
@@ -680,7 +785,7 @@ export function createHumanoidJointControls(config) {
         } else {
             // 启动运行
             if (appState.humanoidBasePath.length < 2) {
-                alert('请先添加至少 2 个航点');
+                alert(t('Please add at least 2 waypoints first'));
                 return;
             }
             // 重置跟踪状态但保留路径
@@ -705,7 +810,7 @@ export function createHumanoidJointControls(config) {
 
     // 撤销最后一个航点
     const undoWpBtn = document.createElement('button');
-    undoWpBtn.textContent = '↩ 撤销航点';
+    undoWpBtn.textContent = t('↩ Undo Waypoint');
     undoWpBtn.style.cssText = pathBtnStyle;
     undoWpBtn.addEventListener('click', () => {
         if (appState.humanoidBasePath.length > 0) {
@@ -724,7 +829,7 @@ export function createHumanoidJointControls(config) {
 
     // 清除路径
     const clearPathBtn = document.createElement('button');
-    clearPathBtn.textContent = '🗑 清除路径';
+    clearPathBtn.textContent = t('🗑 Clear Path');
     clearPathBtn.style.cssText = pathBtnStyle;
     clearPathBtn.addEventListener('click', () => {
         appState.humanoidBasePath = [];
@@ -741,11 +846,11 @@ export function createHumanoidJointControls(config) {
 
     // 设置终点朝向
     const setGoalYawBtn = document.createElement('button');
-    setGoalYawBtn.textContent = '🧭 设终点朝向';
+    setGoalYawBtn.textContent = t('🧭 Set Goal Heading');
     setGoalYawBtn.style.cssText = pathBtnStyle;
     setGoalYawBtn.addEventListener('click', () => {
         if (appState.humanoidBasePath.length === 0) return;
-        const yawStr = prompt('请输入终点朝向角度 (deg):', '0');
+        const yawStr = prompt(t('Enter the goal heading angle (deg):'), '0');
         if (yawStr === null) return;
         const yawDeg = parseFloat(yawStr);
         if (Number.isFinite(yawDeg)) {
@@ -765,7 +870,7 @@ export function createHumanoidJointControls(config) {
     pathStatusDiv.id = 'humanoid-base-path-status';
     pathStatusDiv.className = 'panel-subtitle';
     pathStatusDiv.style.cssText = 'padding:2px 8px; font-size:0.75rem; color:#9ca3af;';
-    pathStatusDiv.textContent = '点击3D场景地面添加航点（至少2个）';
+    pathStatusDiv.textContent = getHumanoidPathStatusText();
     pathControlsDiv.appendChild(pathStatusDiv);
 
     // RPP 参数折叠面板
@@ -774,7 +879,7 @@ export function createHumanoidJointControls(config) {
         padding:3px 8px; font-size:0.75rem; color:#6ee7b7; cursor:pointer;
         user-select:none; margin-top:2px;
     `;
-    rppParamsToggle.textContent = '▶ RPP 参数';
+    rppParamsToggle.textContent = getRppParamsToggleLabel(false);
     let rppParamsExpanded = false;
     const rppParamsBody = document.createElement('div');
     rppParamsBody.style.display = 'none';
@@ -782,21 +887,21 @@ export function createHumanoidJointControls(config) {
     rppParamsToggle.addEventListener('click', () => {
         rppParamsExpanded = !rppParamsExpanded;
         rppParamsBody.style.display = rppParamsExpanded ? '' : 'none';
-        rppParamsToggle.textContent = (rppParamsExpanded ? '▼' : '▶') + ' RPP 参数';
+        rppParamsToggle.textContent = getRppParamsToggleLabel(rppParamsExpanded);
     });
     pathControlsDiv.appendChild(rppParamsToggle);
     pathControlsDiv.appendChild(rppParamsBody);
 
     // RPP 参数控件
     const rppParamDefs = [
-        { key: 'lookahead_dist', label: '前视距离 (m)', min: 0.1, max: 2.0, step: 0.05 },
-        { key: 'min_lookahead_dist', label: '最小前视距离 (m)', min: 0.05, max: 1.0, step: 0.05 },
-        { key: 'max_lookahead_dist', label: '最大前视距离 (m)', min: 0.3, max: 3.0, step: 0.1 },
-        { key: 'max_linear_vel', label: '最大线速度 (m/s)', min: 0.05, max: 2.0, step: 0.05 },
-        { key: 'max_angular_vel', label: '最大角速度 (rad/s)', min: 0.5, max: 5.0, step: 0.1 },
-        { key: 'regulated_linear_scaling_min_radius', label: '最小转弯半径 (m)', min: 0.1, max: 3.0, step: 0.1 },
-        { key: 'goal_dist_tol', label: '到达容差 (m)', min: 0.01, max: 0.5, step: 0.01 },
-        { key: 'rotate_to_heading_min_angle', label: '原地转向角度 (rad)', min: 0.1, max: 1.57, step: 0.05 },
+        { key: 'lookahead_dist', label: t('Lookahead Distance (m)'), min: 0.1, max: 2.0, step: 0.05 },
+        { key: 'min_lookahead_dist', label: t('Minimum Lookahead Distance (m)'), min: 0.05, max: 1.0, step: 0.05 },
+        { key: 'max_lookahead_dist', label: t('Maximum Lookahead Distance (m)'), min: 0.3, max: 3.0, step: 0.1 },
+        { key: 'max_linear_vel', label: t('Maximum Linear Velocity (m/s)'), min: 0.05, max: 2.0, step: 0.05 },
+        { key: 'max_angular_vel', label: t('Maximum Angular Velocity (rad/s)'), min: 0.5, max: 5.0, step: 0.1 },
+        { key: 'regulated_linear_scaling_min_radius', label: t('Minimum Turning Radius (m)'), min: 0.1, max: 3.0, step: 0.1 },
+        { key: 'goal_dist_tol', label: t('Goal Tolerance (m)'), min: 0.01, max: 0.5, step: 0.01 },
+        { key: 'rotate_to_heading_min_angle', label: t('Rotate-to-Heading Angle (rad)'), min: 0.1, max: 1.57, step: 0.05 },
     ];
     for (const def of rppParamDefs) {
         const row = document.createElement('div');
@@ -847,21 +952,7 @@ export function createHumanoidJointControls(config) {
     function updatePathStatusDisplay() {
         const el = document.getElementById('humanoid-base-path-status');
         if (!el) return;
-        const pathLen = appState.humanoidBasePath.length;
-        const st = appState.humanoidBaseRPPState;
-        if (pathLen === 0) {
-            el.textContent = '点击3D场景地面添加航点（至少2个）';
-        } else if (pathLen === 1) {
-            el.textContent = `已添加 1 个航点，再添加至少 1 个`;
-        } else {
-            const lastWP = appState.humanoidBasePath[pathLen - 1];
-            const goalYaw = lastWP.yaw !== undefined ? ` | 终点朝向: ${(lastWP.yaw * RAD_TO_DEG).toFixed(1)}°` : '';
-            let statusText;
-            if (st.isFinished) statusText = '✓ 已到达';
-            else if (st.isRunning) statusText = st.isRotatingToHeading ? '转向中...' : '跟踪中...';
-            else statusText = '就绪（点击 ▶ 运行）';
-            el.textContent = `${pathLen} 个航点${goalYaw} | ${statusText}`;
-        }
+        el.textContent = getHumanoidPathStatusText();
     }
     // 暴露更新函数供控制循环使用
     window._updatePathStatusDisplay = updatePathStatusDisplay;
@@ -882,14 +973,14 @@ export function createHumanoidJointControls(config) {
     const baseStatus = document.createElement('div');
     baseStatus.className = 'panel-subtitle';
     baseStatus.id = 'humanoid-base-wheel-status';
-    baseStatus.textContent = '轮速: left=0.00 rad/s, right=0.00 rad/s | 当前: x=0.000, y=0.000, yaw=0.00';
+    baseStatus.textContent = getHumanoidBaseWheelStatusText();
     container.appendChild(baseStatus);
     
     // 创建分组标题的辅助函数
     const createGroupHeader = (title, jointCount) => {
         const header = document.createElement('div');
         header.className = 'joint-group-header';
-        header.innerHTML = `<span class="group-title">${title}</span><span class="group-count">${jointCount} 关节</span>`;
+        header.innerHTML = `<span class="group-title">${title}</span><span class="group-count">${t('{{count}} Joints', { count: jointCount })}</span>`;
         header.style.cssText = `
             display: flex;
             justify-content: space-between;
@@ -917,13 +1008,13 @@ export function createHumanoidJointControls(config) {
     for (let i = 0; i < n; i++) {
         // 在各部分开始处添加分组标题
         if (i === waistStart && waistLen > 0) {
-            container.appendChild(createGroupHeader('🦴 腰部', waistLen));
+            container.appendChild(createGroupHeader(t('🦴 Waist'), waistLen));
         } else if (i === leftStart && leftLen > 0) {
-            container.appendChild(createGroupHeader('🦾 左臂', leftLen));
+            container.appendChild(createGroupHeader(t('🦾 Left Arm'), leftLen));
         } else if (i === rightStart && rightLen > 0) {
-            container.appendChild(createGroupHeader('🦿 右臂', rightLen));
+            container.appendChild(createGroupHeader(t('🦿 Right Arm'), rightLen));
         } else if (i === headStart && headLen > 0) {
-            container.appendChild(createGroupHeader('🗣️ 头部', headLen));
+            container.appendChild(createGroupHeader(t('🗣️ Head'), headLen));
         }
         
         const jointName = appState.humanoidJointNames[i] || `q${i}`;
@@ -1066,33 +1157,7 @@ export function updateHumanoidJointSlidersFromAngles() {
 
     const wheelStatus = document.getElementById('humanoid-base-wheel-status');
     if (wheelStatus) {
-        const modeText = appState.humanoidBaseControlMode === 'path' ? 'RPP' : 'point';
-        const currentYawDisplay = angleToDisplay(Number(appState.humanoidBasePose.yaw) || 0);
-
-        let posErr, yawErrText;
-        if (appState.humanoidBaseControlMode === 'path' && appState.humanoidBasePath.length >= 2) {
-            const goal = appState.humanoidBasePath[appState.humanoidBasePath.length - 1];
-            posErr = Math.hypot((goal.x || 0) - (appState.humanoidBasePose.x || 0), (goal.y || 0) - (appState.humanoidBasePose.y || 0));
-            const rotating = appState.humanoidBaseRPPState.isRotatingToHeading ? ' [转向]' : '';
-            yawErrText = `到终点: ${posErr.toFixed(3)}m${rotating}`;
-        } else {
-            const dx = (appState.humanoidBaseTargetPose.x || 0) - (appState.humanoidBasePose.x || 0);
-            const dy = (appState.humanoidBaseTargetPose.y || 0) - (appState.humanoidBasePose.y || 0);
-            posErr = Math.hypot(dx, dy);
-            const yawErrDisplay = angleToDisplay(
-                wrapAngle((appState.humanoidBaseTargetPose.yaw || 0) - (appState.humanoidBasePose.yaw || 0))
-            );
-            yawErrText = `误差: pos=${posErr.toFixed(3)}m, yaw=${yawErrDisplay.toFixed(2)} ${appState.angleDisplayMode === 'deg' ? 'deg' : 'rad'}`;
-        }
-
-        wheelStatus.textContent =
-            `${modeText} | ` +
-            `轮速: L=${(appState.humanoidBaseWheelVelocity.left || 0).toFixed(2)}, ` +
-            `R=${(appState.humanoidBaseWheelVelocity.right || 0).toFixed(2)} rad/s | ` +
-            `位姿: (${(appState.humanoidBasePose.x || 0).toFixed(3)}, ` +
-            `${(appState.humanoidBasePose.y || 0).toFixed(3)}, ` +
-            `${currentYawDisplay.toFixed(2)}${appState.angleDisplayMode === 'deg' ? '°' : 'rad'}) | ` +
-            yawErrText;
+        wheelStatus.textContent = getHumanoidBaseWheelStatusText();
     }
 
     // 更新路径状态显示
@@ -1144,4 +1209,17 @@ export function registerJointControlsCallbacks() {
     callbacks.getJointLimits = getJointLimits;
     callbacks.createDualArmJointControls = createDualArmJointControls;
     callbacks.createHumanoidJointControls = createHumanoidJointControls;
+
+    if (!jointControlsLanguageBound) {
+        onLanguageChange(() => {
+            refreshJointControlDisplay();
+            if (typeof window._updateRPPRunBtn === 'function') {
+                window._updateRPPRunBtn();
+            }
+            if (typeof window._updatePathStatusDisplay === 'function') {
+                window._updatePathStatusDisplay();
+            }
+        });
+        jointControlsLanguageBound = true;
+    }
 }

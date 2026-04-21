@@ -25,6 +25,22 @@ test('canUseHumanoidJogMJRestoreWasm checks the solver-specific wasm entry point
         canUseHumanoidJogMJRestoreWasm({ solveAbsoluteTargetMJRestoreTrustRegion: () => ({}) }, 'mj_restore_tr'),
         true
     );
+    assert.equal(
+        canUseHumanoidJogMJRestoreWasm(
+            { solveCooperativeDQSetpointMJRestoreTrustRegion: () => ({}) },
+            'mj_restore_tr',
+            'cooperative_dq_setpoint'
+        ),
+        true
+    );
+    assert.equal(
+        canUseHumanoidJogMJRestoreWasm(
+            { solveAbsoluteDQSetpointMJRestoreTrustRegion: () => ({}) },
+            'mj_restore_tr',
+            'absolute_dq_setpoint'
+        ),
+        true
+    );
 });
 
 test('buildHumanoidJogMJRestoreWasmRequest clones arrays and fills defaults', () => {
@@ -34,9 +50,17 @@ test('buildHumanoidJogMJRestoreWasmRequest clones arrays and fills defaults', ()
         activeCount: 2,
         absoluteTarget: new Array(8).fill(0).map((_, index) => index),
         relativeTarget: new Array(8).fill(0).map((_, index) => -index),
+        leftTarget: new Array(8).fill(0.1),
+        rightTarget: new Array(8).fill(-0.1),
         lowerBounds: [-1, -2],
         upperBounds: [1, 2],
         stepBounds: [0.4, 0.5],
+        jointLimitVFI: {
+            enabled: true,
+            rows: [[1, 0], [-1, 0]],
+            rhs: [0.1, 0.2],
+            count: 2
+        },
         waistXCorridor: {
             enabled: true,
             min: -0.01,
@@ -54,15 +78,24 @@ test('buildHumanoidJogMJRestoreWasmRequest clones arrays and fills defaults', ()
     assert.deepEqual(request.qCurrent, [0.1, -0.2, 0.3]);
     assert.equal(request.activeStart, 1);
     assert.equal(request.activeCount, 2);
+    assert.equal(request.solveVariant, 'absolute_target');
     assert.deepEqual(request.lowerBounds, [-1, -2]);
     assert.deepEqual(request.upperBounds, [1, 2]);
     assert.deepEqual(request.stepBounds, [0.4, 0.5]);
+    assert.deepEqual(request.leftTarget, new Array(8).fill(0.1));
+    assert.deepEqual(request.rightTarget, new Array(8).fill(-0.1));
     assert.equal(request.keepBodyZVertical, false);
     assert.equal(request.absoluteWeight, 1);
     assert.equal(request.relativeWeight, 1);
     assert.equal(request.bodyWeight, 1);
     assert.equal(request.wvfiLowerBound, 0);
     assert.equal(request.jointLimitActivationThreshold, HUMANOID_MJ_RESTORE_WASM_DEFAULTS.jointLimitActivationThreshold);
+    assert.deepEqual(request.jointLimitVFI, {
+        enabled: true,
+        rows: [[1, 0], [-1, 0]],
+        rhs: [0.1, 0.2],
+        count: 2
+    });
     assert.deepEqual(request.referenceModel, {
         absolute: { stiffness: 1.2, damping: 0.25 },
         relative: { stiffness: 1, damping: 0.35 },
@@ -267,6 +300,12 @@ test('attemptHumanoidJogMJRestoreWasm prefers wasm and normalizes the restoratio
         qCurrent: [0.1, 0.2, 0.3],
         equalities: { activeResidualNorm: Math.abs(q[0] ?? 0) + Math.abs(q[1] ?? 0) },
         inequalities: {
+            jointLimitVFI: {
+                enabled: true,
+                rows: [[1, 0], [-1, 0]],
+                rhs: [0.1, 0.2],
+                count: 2
+            },
             waistXCorridor: {
                 enabled: true,
                 min: -0.01,
@@ -301,6 +340,12 @@ test('attemptHumanoidJogMJRestoreWasm prefers wasm and normalizes the restoratio
     assert.equal(observed[0].activeStart, 1);
     assert.equal(observed[0].activeCount, 2);
     assert.deepEqual(observed[0].qCurrent, [0.1, 0.1, -0.2]);
+    assert.deepEqual(observed[0].jointLimitVFI, {
+        enabled: true,
+        rows: [[1, 0], [-1, 0]],
+        rhs: [0.1, 0.2],
+        count: 2
+    });
     assert.deepEqual(result.qApplied, [0.25, -0.15]);
     assert.equal(result.converged, true);
     assert.equal(result.reason, 'converged');
@@ -353,4 +398,91 @@ test('attemptHumanoidJogMJRestoreWasm dispatches trust-region requests to the de
     assert.equal(lineSearchCalled, false);
     assert.equal(trustRegionCalled, true);
     assert.equal(result?.reason, 'best_effort');
+});
+
+test('attemptHumanoidJogMJRestoreWasm dispatches cooperative DQ set-point requests to the dedicated wasm entry point', () => {
+    let cooperativeCalled = false;
+    const humanoidModel = {
+        solveCooperativeDQSetpointMJRestoreTrustRegion(request) {
+            cooperativeCalled = true;
+            assert.equal(request.solveVariant, 'cooperative_dq_setpoint');
+            assert.deepEqual(request.leftTarget, new Array(8).fill(0.25));
+            assert.deepEqual(request.rightTarget, new Array(8).fill(-0.25));
+            return {
+                converged: true,
+                reason: 'converged',
+                iterations: 4,
+                acceptedIterations: 3,
+                lastAcceptedScale: 1,
+                commandResidualNorm: 1e-7,
+                relativeResidualNorm: 0,
+                bodyResidualNorm: 0,
+                inequalityViolation: 0,
+                qApplied: [0.05, -0.05]
+            };
+        }
+    };
+
+    const result = attemptHumanoidJogMJRestoreWasm({
+        humanoidModel,
+        solveVariant: 'cooperative_dq_setpoint',
+        solverMode: 'mj_restore_tr',
+        qInitial: [0, 0],
+        evaluateProblem: (q) => ({
+            q: q.slice(),
+            qCurrent: q.slice(),
+            equalities: { activeResidualNorm: Math.abs(q[0]) + Math.abs(q[1]) }
+        }),
+        activeStart: 0,
+        activeCount: 2,
+        absoluteTarget: new Array(16).fill(0),
+        relativeTarget: [],
+        leftTarget: new Array(8).fill(0.25),
+        rightTarget: new Array(8).fill(-0.25)
+    });
+
+    assert.equal(cooperativeCalled, true);
+    assert.equal(result?.reason, 'converged');
+});
+
+test('attemptHumanoidJogMJRestoreWasm dispatches absolute DQ set-point requests to the dedicated wasm entry point', () => {
+    let absoluteDQSetpointCalled = false;
+    const humanoidModel = {
+        solveAbsoluteDQSetpointMJRestoreTrustRegion(request) {
+            absoluteDQSetpointCalled = true;
+            assert.equal(request.solveVariant, 'absolute_dq_setpoint');
+            assert.deepEqual(request.absoluteTarget, new Array(8).fill(0.5));
+            return {
+                converged: true,
+                reason: 'converged',
+                iterations: 3,
+                acceptedIterations: 2,
+                lastAcceptedScale: 1,
+                commandResidualNorm: 1e-7,
+                relativeResidualNorm: 0,
+                bodyResidualNorm: 0,
+                inequalityViolation: 0,
+                qApplied: [0.05, -0.05]
+            };
+        }
+    };
+
+    const result = attemptHumanoidJogMJRestoreWasm({
+        humanoidModel,
+        solveVariant: 'absolute_dq_setpoint',
+        solverMode: 'mj_restore_tr',
+        qInitial: [0, 0],
+        evaluateProblem: (q) => ({
+            q: q.slice(),
+            qCurrent: q.slice(),
+            equalities: { activeResidualNorm: Math.abs(q[0]) + Math.abs(q[1]) }
+        }),
+        activeStart: 0,
+        activeCount: 2,
+        absoluteTarget: new Array(8).fill(0.5),
+        relativeTarget: new Array(8).fill(0)
+    });
+
+    assert.equal(absoluteDQSetpointCalled, true);
+    assert.equal(result?.reason, 'converged');
 });

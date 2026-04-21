@@ -5,6 +5,7 @@
 
 import { RAD_TO_DEG, DEG_TO_RAD } from '../core/constants.js';
 import { appState } from '../core/state.js';
+import { t } from '../i18n.js';
 
 export function angleToDisplay(angleRad) {
     if (!Number.isFinite(angleRad)) {
@@ -33,7 +34,7 @@ export function displayStep() {
 }
 
 export function getAnglePlaceholder() {
-    return appState.angleDisplayMode === 'deg' ? '角度(°)' : '角度(rad)';
+    return appState.angleDisplayMode === 'deg' ? t('Angle (deg)') : t('Angle (rad)');
 }
 
 export function formatDisplayValue(value, digits) {

@@ -143,8 +143,8 @@ test('buildHumanoidJogMJDiagnostics derives task-aware metric labels for jog and
         preWMetric: 'w_abs_hier'
     });
 
-    assert.equal(payload.taskMetricLabel, 'w_rel_hier_vfi');
-    assert.equal(payload.taskPreWMetricLabel, 'w_rel_hier');
+    assert.equal(payload.taskMetricLabel, 'w_rel_vfi');
+    assert.equal(payload.taskPreWMetricLabel, 'w_rel');
 });
 
 test('buildHumanoidJogMJDiagnostics preserves the trust-region restoration solver id and diagnostics', () => {
@@ -158,12 +158,24 @@ test('buildHumanoidJogMJDiagnostics preserves the trust-region restoration solve
             lastAcceptedRho: 0.82,
             lastPredictedReduction: 0.6,
             lastActualReduction: 0.49,
-            acceptedBy: 'filter'
+            acceptedBy: 'filter',
+            lastRejectedRho: -0.15,
+            lastRejectedPredictedReduction: 0.08,
+            lastRejectedActualReduction: -0.01,
+            lastRejectedReason: 'poor_ratio'
         }
     });
 
     assert.equal(payload.solverMode, 'mj_restore_tr');
     assert.equal(payload.stopReason, 'best_effort');
+    assert.equal(payload.restoreAcceptedRho, 0.82);
+    assert.equal(payload.restorePredictedReduction, 0.6);
+    assert.equal(payload.restoreActualReduction, 0.49);
+    assert.equal(payload.restoreAcceptedBy, 'filter');
+    assert.equal(payload.restoreRejectedRho, -0.15);
+    assert.equal(payload.restoreRejectedPredictedReduction, 0.08);
+    assert.equal(payload.restoreRejectedActualReduction, -0.01);
+    assert.equal(payload.restoreRejectedReason, 'poor_ratio');
 });
 
 test('buildHumanoidJogMJDiagnostics falls back to the supported mj_restore solver id for removed variants', () => {

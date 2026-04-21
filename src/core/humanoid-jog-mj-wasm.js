@@ -1,4 +1,5 @@
 export const HUMANOID_MJ_RESTORE_WASM_DEFAULTS = Object.freeze({
+    solveVariant: 'absolute_target',
     solverMode: 'mj_restore',
     keepBodyZVertical: false,
     bodyEqualityTolerance: 0,
@@ -49,6 +50,10 @@ function cloneCorridorRows(waistXCorridor) {
     return cloneRows(waistXCorridor?.rows ?? waistXCorridor?.vfiRows);
 }
 
+function cloneJointLimitVFIRows(jointLimitVFI) {
+    return cloneRows(jointLimitVFI?.rows);
+}
+
 function cloneArray(values) {
     return Array.isArray(values) ? values.slice() : [];
 }
@@ -68,23 +73,48 @@ function normalizeSolverMode(solverMode) {
     return solverMode === 'mj_restore_tr' ? 'mj_restore_tr' : 'mj_restore';
 }
 
-function getHumanoidJogMJRestoreWasmSolveFunctionName(solverMode) {
-    return normalizeSolverMode(solverMode) === 'mj_restore_tr'
+function normalizeSolveVariant(solveVariant) {
+    if (solveVariant === 'cooperative_dq_setpoint') return 'cooperative_dq_setpoint';
+    if (solveVariant === 'absolute_dq_setpoint') return 'absolute_dq_setpoint';
+    return 'absolute_target';
+}
+
+function getHumanoidJogMJRestoreWasmSolveFunctionName(solverMode, solveVariant = 'absolute_target') {
+    const normalizedSolverMode = normalizeSolverMode(solverMode);
+    const normalizedSolveVariant = normalizeSolveVariant(solveVariant);
+    if (normalizedSolveVariant === 'cooperative_dq_setpoint') {
+        return normalizedSolverMode === 'mj_restore_tr'
+            ? 'solveCooperativeDQSetpointMJRestoreTrustRegion'
+            : 'solveCooperativeDQSetpointMJRestore';
+    }
+    if (normalizedSolveVariant === 'absolute_dq_setpoint') {
+        return normalizedSolverMode === 'mj_restore_tr'
+            ? 'solveAbsoluteDQSetpointMJRestoreTrustRegion'
+            : 'solveAbsoluteDQSetpointMJRestore';
+    }
+    return normalizedSolverMode === 'mj_restore_tr'
         ? 'solveAbsoluteTargetMJRestoreTrustRegion'
         : 'solveAbsoluteTargetMJRestore';
 }
 
-export function canUseHumanoidJogMJRestoreWasm(humanoidModel, solverMode = 'mj_restore') {
-    return typeof humanoidModel?.[getHumanoidJogMJRestoreWasmSolveFunctionName(solverMode)] === 'function';
+export function canUseHumanoidJogMJRestoreWasm(
+    humanoidModel,
+    solverMode = 'mj_restore',
+    solveVariant = 'absolute_target'
+) {
+    return typeof humanoidModel?.[getHumanoidJogMJRestoreWasmSolveFunctionName(solverMode, solveVariant)] === 'function';
 }
 
 export function buildHumanoidJogMJRestoreWasmRequest({
+    solveVariant,
     solverMode,
     qCurrent,
     activeStart,
     activeCount,
     absoluteTarget,
     relativeTarget,
+    leftTarget,
+    rightTarget,
     keepBodyZVertical,
     bodyEqualityTolerance,
     absoluteWeight,
@@ -95,6 +125,7 @@ export function buildHumanoidJogMJRestoreWasmRequest({
     stepBounds,
     wvfiLowerBound,
     jointLimitActivationThreshold,
+    jointLimitVFI,
     waistXCorridor,
     referenceModel,
     maxIterations,
@@ -119,12 +150,15 @@ export function buildHumanoidJogMJRestoreWasmRequest({
 } = {}) {
     const fallback = HUMANOID_MJ_RESTORE_WASM_DEFAULTS;
     return {
+        solveVariant: normalizeSolveVariant(solveVariant || fallback.solveVariant),
         solverMode: normalizeSolverMode(solverMode || fallback.solverMode),
         qCurrent: cloneArray(qCurrent),
         activeStart: Number.isFinite(activeStart) ? Math.max(0, Math.floor(activeStart)) : 0,
         activeCount: Number.isFinite(activeCount) ? Math.max(0, Math.floor(activeCount)) : 0,
         absoluteTarget: cloneArray(absoluteTarget),
         relativeTarget: cloneArray(relativeTarget),
+        leftTarget: cloneArray(leftTarget),
+        rightTarget: cloneArray(rightTarget),
         keepBodyZVertical: keepBodyZVertical === true,
         bodyEqualityTolerance: Math.max(0, finiteOr(bodyEqualityTolerance, fallback.bodyEqualityTolerance)),
         absoluteWeight: Math.max(0, finiteOr(absoluteWeight, fallback.absoluteWeight)),
@@ -139,6 +173,20 @@ export function buildHumanoidJogMJRestoreWasmRequest({
             0,
             finiteOr(jointLimitActivationThreshold, fallback.jointLimitActivationThreshold)
         ),
+        jointLimitVFI: {
+            enabled: jointLimitVFI?.enabled === true,
+            rows: cloneJointLimitVFIRows(jointLimitVFI),
+            rhs: cloneArray(jointLimitVFI?.rhs),
+            count: Math.max(
+                0,
+                Math.floor(
+                    finiteOr(
+                        jointLimitVFI?.count,
+                        Array.isArray(jointLimitVFI?.rows) ? jointLimitVFI.rows.length : 0
+                    )
+                )
+            )
+        },
         waistXCorridor: {
             enabled: waistXCorridor?.enabled === true,
             min: finiteOr(waistXCorridor?.min, Number.NEGATIVE_INFINITY),
@@ -228,6 +276,18 @@ export function normalizeHumanoidJogMJRestoreWasmResult(resultRaw, fallbackQAppl
         acceptedBy: typeof resultRaw?.acceptedBy === 'string' && resultRaw.acceptedBy.trim()
             ? resultRaw.acceptedBy.trim()
             : '',
+        lastRejectedRho: Number.isFinite(resultRaw?.lastRejectedRho)
+            ? resultRaw.lastRejectedRho
+            : Number.NaN,
+        lastRejectedPredictedReduction: Number.isFinite(resultRaw?.lastRejectedPredictedReduction)
+            ? resultRaw.lastRejectedPredictedReduction
+            : Number.NaN,
+        lastRejectedActualReduction: Number.isFinite(resultRaw?.lastRejectedActualReduction)
+            ? resultRaw.lastRejectedActualReduction
+            : Number.NaN,
+        lastRejectedReason: typeof resultRaw?.lastRejectedReason === 'string' && resultRaw.lastRejectedReason.trim()
+            ? resultRaw.lastRejectedReason.trim()
+            : '',
         bestConstraintViolation: Number.isFinite(resultRaw?.bestConstraintViolation)
             ? resultRaw.bestConstraintViolation
             : Number.POSITIVE_INFINITY,
@@ -266,6 +326,7 @@ export function normalizeHumanoidJogMJRestoreWasmResult(resultRaw, fallbackQAppl
 
 export function attemptHumanoidJogMJRestoreWasm({
     humanoidModel,
+    solveVariant = 'absolute_target',
     solverMode = 'mj_restore',
     qInitial,
     evaluateProblem,
@@ -273,6 +334,8 @@ export function attemptHumanoidJogMJRestoreWasm({
     activeCount,
     absoluteTarget,
     relativeTarget,
+    leftTarget,
+    rightTarget,
     keepBodyZVertical,
     bodyEqualityTolerance,
     absoluteWeight,
@@ -283,6 +346,7 @@ export function attemptHumanoidJogMJRestoreWasm({
     stepBounds,
     wvfiLowerBound,
     jointLimitActivationThreshold,
+    jointLimitVFI,
     referenceModel,
     maxIterations,
     damping,
@@ -305,8 +369,12 @@ export function attemptHumanoidJogMJRestoreWasm({
     inequalityTolerance
 } = {}) {
     const normalizedSolverMode = normalizeSolverMode(solverMode);
-    const solveFunctionName = getHumanoidJogMJRestoreWasmSolveFunctionName(normalizedSolverMode);
-    if (!canUseHumanoidJogMJRestoreWasm(humanoidModel, normalizedSolverMode) || typeof evaluateProblem !== 'function') {
+    const normalizedSolveVariant = normalizeSolveVariant(solveVariant);
+    const solveFunctionName = getHumanoidJogMJRestoreWasmSolveFunctionName(
+        normalizedSolverMode,
+        normalizedSolveVariant
+    );
+    if (!canUseHumanoidJogMJRestoreWasm(humanoidModel, normalizedSolverMode, normalizedSolveVariant) || typeof evaluateProblem !== 'function') {
         return null;
     }
 
@@ -318,12 +386,15 @@ export function attemptHumanoidJogMJRestoreWasm({
     }
 
     const request = buildHumanoidJogMJRestoreWasmRequest({
+        solveVariant: normalizedSolveVariant,
         solverMode: normalizedSolverMode,
         qCurrent: cloneArray(initialProblem?.metadata?.qFull ?? initialProblem?.qCurrent ?? []),
         activeStart,
         activeCount,
         absoluteTarget,
         relativeTarget,
+        leftTarget,
+        rightTarget,
         keepBodyZVertical,
         bodyEqualityTolerance,
         absoluteWeight,
@@ -334,6 +405,7 @@ export function attemptHumanoidJogMJRestoreWasm({
         stepBounds,
         wvfiLowerBound,
         jointLimitActivationThreshold,
+        jointLimitVFI: jointLimitVFI ?? initialProblem?.inequalities?.jointLimitVFI ?? null,
         waistXCorridor: initialProblem?.inequalities?.waistXCorridor ?? null,
         referenceModel,
         maxIterations,
@@ -425,6 +497,16 @@ export function buildHumanoidJogMJRestoreWasmEnvelope({
             ? attempt.lastActualReduction
             : Number.NaN,
         acceptedBy: typeof attempt.acceptedBy === 'string' ? attempt.acceptedBy : '',
+        lastRejectedRho: Number.isFinite(attempt.lastRejectedRho)
+            ? attempt.lastRejectedRho
+            : Number.NaN,
+        lastRejectedPredictedReduction: Number.isFinite(attempt.lastRejectedPredictedReduction)
+            ? attempt.lastRejectedPredictedReduction
+            : Number.NaN,
+        lastRejectedActualReduction: Number.isFinite(attempt.lastRejectedActualReduction)
+            ? attempt.lastRejectedActualReduction
+            : Number.NaN,
+        lastRejectedReason: typeof attempt.lastRejectedReason === 'string' ? attempt.lastRejectedReason : '',
         bestConstraintViolation: Number.isFinite(attempt.bestConstraintViolation)
             ? attempt.bestConstraintViolation
             : Number.POSITIVE_INFINITY,
@@ -447,6 +529,7 @@ export function buildHumanoidJogMJRestoreWasmEnvelope({
 export async function attemptHumanoidJogMJRestoreWasmWorker({
     workerClient,
     modelSpec,
+    solveVariant = 'absolute_target',
     solverMode = 'mj_restore',
     qInitial,
     evaluateProblem,
@@ -454,6 +537,8 @@ export async function attemptHumanoidJogMJRestoreWasmWorker({
     activeCount,
     absoluteTarget,
     relativeTarget,
+    leftTarget,
+    rightTarget,
     keepBodyZVertical,
     bodyEqualityTolerance,
     absoluteWeight,
@@ -464,6 +549,7 @@ export async function attemptHumanoidJogMJRestoreWasmWorker({
     stepBounds,
     wvfiLowerBound,
     jointLimitActivationThreshold,
+    jointLimitVFI,
     referenceModel,
     maxIterations,
     damping,
@@ -498,13 +584,17 @@ export async function attemptHumanoidJogMJRestoreWasmWorker({
     }
 
     const normalizedSolverMode = normalizeSolverMode(solverMode);
+    const normalizedSolveVariant = normalizeSolveVariant(solveVariant);
     const request = buildHumanoidJogMJRestoreWasmRequest({
+        solveVariant: normalizedSolveVariant,
         solverMode: normalizedSolverMode,
         qCurrent: cloneArray(initialProblem?.metadata?.qFull ?? initialProblem?.qCurrent ?? []),
         activeStart,
         activeCount,
         absoluteTarget,
         relativeTarget,
+        leftTarget,
+        rightTarget,
         keepBodyZVertical,
         bodyEqualityTolerance,
         absoluteWeight,
@@ -515,6 +605,7 @@ export async function attemptHumanoidJogMJRestoreWasmWorker({
         stepBounds,
         wvfiLowerBound,
         jointLimitActivationThreshold,
+        jointLimitVFI: jointLimitVFI ?? initialProblem?.inequalities?.jointLimitVFI ?? null,
         waistXCorridor: initialProblem?.inequalities?.waistXCorridor ?? null,
         referenceModel,
         maxIterations,
@@ -543,6 +634,7 @@ export async function attemptHumanoidJogMJRestoreWasmWorker({
     const rawResult = await workerClient.solve({
         modelSpec,
         solverMode: normalizedSolverMode,
+        solveVariant: normalizedSolveVariant,
         request,
         secondaryMetricRequest
     });

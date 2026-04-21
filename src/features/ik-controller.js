@@ -7,6 +7,9 @@
  */
 
 import { appState, callbacks } from '../core/state.js';
+import { onLanguageChange, t } from '../i18n.js';
+
+let ikLanguageBound = false;
 // ──────────────────────────────────────────────────────────────
 // formatDualQuaternion
 // ──────────────────────────────────────────────────────────────
@@ -37,7 +40,7 @@ export function updateIKRobotSelection() {
 
     const prevValue = ikSelect.value;
     ikSelect.innerHTML = '';
-    const arm1Label = appState.humanoidMode ? '左臂' : (appState.dualArmMode ? '机器人1' : '机器人');
+    const arm1Label = appState.humanoidMode ? t('Left Arm') : (appState.dualArmMode ? t('Robot 1') : t('Robot'));
     const opt1 = document.createElement('option');
     opt1.value = 'robot1';
     opt1.textContent = arm1Label;
@@ -47,29 +50,29 @@ export function updateIKRobotSelection() {
     if (showDualOptions) {
         const opt2 = document.createElement('option');
         opt2.value = 'robot2';
-        opt2.textContent = appState.humanoidMode ? '右臂' : '机器人2';
+        opt2.textContent = appState.humanoidMode ? t('Right Arm') : t('Robot 2');
         ikSelect.appendChild(opt2);
 
         const optAbs = document.createElement('option');
         optAbs.value = 'absolute';
-        optAbs.textContent = '绝对位姿';
+        optAbs.textContent = t('Absolute Pose');
         ikSelect.appendChild(optAbs);
 
         const optRel = document.createElement('option');
         optRel.value = 'relative';
-        optRel.textContent = '相对位姿';
+        optRel.textContent = t('Relative Pose');
         ikSelect.appendChild(optRel);
 
         ikSelect.disabled = false;
         if (ikStatus) {
             ikStatus.textContent = appState.humanoidMode
-                ? '人形模式：左臂/右臂/绝对位姿/相对位姿'
-                : '双臂模式：可选择机器人1/机器人2/绝对位姿/相对位姿';
+                ? t('Humanoid mode: left arm / right arm / absolute pose / relative pose')
+                : t('Dual-arm mode: choose robot 1 / robot 2 / absolute pose / relative pose');
         }
     } else {
         ikSelect.disabled = true;
         if (ikStatus) {
-            ikStatus.textContent = '单臂模式：只控制机器人1';
+            ikStatus.textContent = t('Single-arm mode: only control robot 1');
         }
     }
 
@@ -203,22 +206,28 @@ export function setupInverseKinematicsControls() {
         // 双臂或人形模式下允许求解 absolute/relative；人形下左臂=robot1、右臂=robot2
         if (!ikStatus) return;
         if (!appState.dualArmMode && !appState.humanoidMode) {
-            ikStatus.textContent = '单臂模式：使用雅可比伪逆更新当前机器人角度';
+            ikStatus.textContent = t('Single-arm mode: update current robot joints with Jacobian pseudoinverse');
             ikStatus.style.color = '#94a3b8';
             return;
         }
         const choice = ikSelect?.value || 'robot1';
         if (choice === 'absolute') {
-            ikStatus.textContent = appState.humanoidMode ? '人形绝对位姿：求解绝对位姿，保持相对位姿不变' : '双臂绝对位姿：求解绝对位姿，保持相对位姿不变';
+            ikStatus.textContent = appState.humanoidMode
+                ? t('Humanoid absolute pose: solve the absolute pose while keeping the relative pose unchanged')
+                : t('Dual-arm absolute pose: solve the absolute pose while keeping the relative pose unchanged');
             ikStatus.style.color = '#94a3b8';
             return;
         }
         if (choice === 'relative') {
-            ikStatus.textContent = appState.humanoidMode ? '人形相对位姿：求解相对位姿，保持绝对位姿不变' : '双臂相对位姿：求解相对位姿，保持绝对位姿不变';
+            ikStatus.textContent = appState.humanoidMode
+                ? t('Humanoid relative pose: solve the relative pose while keeping the absolute pose unchanged')
+                : t('Dual-arm relative pose: solve the relative pose while keeping the absolute pose unchanged');
             ikStatus.style.color = '#94a3b8';
             return;
         }
-        ikStatus.textContent = appState.humanoidMode ? '人形单臂求解：仅更新左臂或右臂角度' : '双臂单臂求解：仅更新机器人1或机器人2角度';
+        ikStatus.textContent = appState.humanoidMode
+            ? t('Humanoid single-arm solve: update only the left or right arm joints')
+            : t('Dual-arm single-arm solve: update only robot 1 or robot 2 joints');
         ikStatus.style.color = '#94a3b8';
     };
 
@@ -226,9 +235,9 @@ export function setupInverseKinematicsControls() {
         const dqText = document.getElementById('ik-dq-input')?.value || '';
         const dqArray = parseDualQuaternionInput(dqText);
         if (!dqArray) {
-            callbacks.addROS2LogEntry?.('请输入 8 个双四元数元素（逗号或空格分隔）', 'warn');
+            callbacks.addROS2LogEntry?.(t('Please enter 8 dual quaternion elements (comma or space separated)'), 'warn');
             if (ikStatus) {
-                ikStatus.textContent = '请输入 8 个双四元数元素（逗号或空格分隔）';
+                ikStatus.textContent = t('Please enter 8 dual quaternion elements (comma or space separated)');
                 ikStatus.style.color = '#f87171';
             }
             return;
@@ -237,9 +246,9 @@ export function setupInverseKinematicsControls() {
         const robotChoice = document.getElementById('ik-robot-select')?.value || 'robot1';
         const vis = appState.visualizer;
         if (!vis) {
-            callbacks.addROS2LogEntry?.('视觉器未初始化，无法求解逆运动学', 'error');
+            callbacks.addROS2LogEntry?.(t('Visualizer is not initialized; inverse kinematics unavailable'), 'error');
             if (ikStatus) {
-                ikStatus.textContent = '视觉器未初始化，无法求解逆运动学';
+                ikStatus.textContent = t('Visualizer is not initialized; inverse kinematics unavailable');
                 ikStatus.style.color = '#f87171';
             }
             return;
@@ -251,7 +260,7 @@ export function setupInverseKinematicsControls() {
             if (appState.humanoidMode && (robotChoice === 'absolute' || robotChoice === 'relative')) {
                 const allQ = appState.humanoidQ;
                 if (!allQ || allQ.length === 0) {
-                    if (ikStatus) { ikStatus.textContent = '人形关节未初始化'; ikStatus.style.color = '#f87171'; }
+                    if (ikStatus) { ikStatus.textContent = t('Humanoid joints are not initialized'); ikStatus.style.color = '#f87171'; }
                     return;
                 }
                 const enableLimitAvoidance = document.getElementById('joint-limit-avoidance-toggle')?.checked ?? true;
@@ -299,27 +308,27 @@ export function setupInverseKinematicsControls() {
                 success = vis.updateDualArmJointsFromRelativePoseTarget?.(dqArray, allJointAngles) === true;
             } else {
                 // 兜底：防止误选 absolute/relative 时错误调用 robot2
-                callbacks.addROS2LogEntry?.('当前逆运动学求解仅支持机器人1/机器人2', 'warn');
+                callbacks.addROS2LogEntry?.(t('The current inverse-kinematics solve supports only robot 1 / robot 2'), 'warn');
                 if (ikStatus) {
-                    ikStatus.textContent = '当前逆运动学求解仅支持机器人1/机器人2';
+                    ikStatus.textContent = t('The current inverse-kinematics solve supports only robot 1 / robot 2');
                     ikStatus.style.color = '#f59e0b';
                 }
                 return;
             }
             if (!success) {
                 const solveInfo = vis.lastIKSolveStatus;
-                let detail = '逆运动学求解失败：未达到目标精度';
+                let detail = t('Inverse kinematics failed: target accuracy not reached');
                 if (solveInfo?.solver === 'lbfgs') {
-                    detail = `逆运动学求解失败：未达到目标精度（reason=${solveInfo.reason || 'unknown'}, residual=${Number.isFinite(solveInfo.finalResidual) ? solveInfo.finalResidual.toExponential(2) : 'n/a'})`;
+                    detail = `Inverse kinematics failed: target accuracy not reached (reason=${solveInfo.reason || 'unknown'}, residual=${Number.isFinite(solveInfo.finalResidual) ? solveInfo.finalResidual.toExponential(2) : 'n/a'})`;
                 } else if (solveInfo?.solver === 'vfi') {
-                    detail = `逆运动学求解失败：${solveInfo.message || 'VFI 求解失败'}（reason=${solveInfo.reason || 'unknown'}, residual=${Number.isFinite(solveInfo.finalResidual) ? solveInfo.finalResidual.toExponential(2) : 'n/a'}${typeof solveInfo.qpConverged === 'boolean' ? `, qp=${solveInfo.qpConverged ? 'yes' : 'no'}` : ''}${solveInfo.qpMessage ? `, qp_message=${solveInfo.qpMessage}` : ''})`;
+                    detail = `Inverse kinematics failed: ${solveInfo.message || 'VFI solve failed'} (reason=${solveInfo.reason || 'unknown'}, residual=${Number.isFinite(solveInfo.finalResidual) ? solveInfo.finalResidual.toExponential(2) : 'n/a'}${typeof solveInfo.qpConverged === 'boolean' ? `, qp=${solveInfo.qpConverged ? 'yes' : 'no'}` : ''}${solveInfo.qpMessage ? `, qp_message=${solveInfo.qpMessage}` : ''})`;
                 } else if (typeof solveInfo?.message === 'string' && solveInfo.message.trim()) {
-                    detail = `逆运动学求解失败：${solveInfo.message.trim()}`;
+                    detail = `Inverse kinematics failed: ${solveInfo.message.trim()}`;
                 } else {
                     const backend = appState.humanoidMode
                         ? ((window.humanoidJogSolverMode || vis.humanoidJogSolverMode || 'unknown').toString())
                         : (appState.dualArmMode ? 'dual-arm' : 'single-arm');
-                    detail = `逆运动学求解失败：未达到目标精度（mode=${robotChoice}, humanoid=${appState.humanoidMode ? 'yes' : 'no'}, backend=${backend}, diagnostic=missing）`;
+                    detail = `Inverse kinematics failed: target accuracy not reached (mode=${robotChoice}, humanoid=${appState.humanoidMode ? 'yes' : 'no'}, backend=${backend}, diagnostic=missing)`;
                 }
                 callbacks.addROS2LogEntry?.(detail, 'warn');
                 if (ikStatus) {
@@ -331,24 +340,24 @@ export function setupInverseKinematicsControls() {
             callbacks.updateJointSlidersFromAngles?.();
             callbacks.updateDualArmJointSlidersFromAngles?.();
             const label = robotChoice === 'robot1'
-                ? (appState.humanoidMode ? '左臂' : '机器人1')
+                ? (appState.humanoidMode ? t('Left Arm') : t('Robot 1'))
                 : robotChoice === 'robot2'
-                    ? (appState.humanoidMode ? '右臂' : '机器人2')
+                    ? (appState.humanoidMode ? t('Right Arm') : t('Robot 2'))
                     : robotChoice === 'absolute'
-                        ? '绝对位姿（保持相对不变）'
+                        ? t('Absolute Pose (keep relative pose unchanged)')
                         : robotChoice === 'relative'
-                            ? '相对位姿（保持绝对不变）'
+                            ? t('Relative Pose (keep absolute pose unchanged)')
                             : robotChoice;
-            callbacks.addROS2LogEntry?.(`逆运动学求解成功，已更新 ${label}`, 'info');
+            callbacks.addROS2LogEntry?.(t('Inverse kinematics succeeded; updated {{label}}', { label }), 'info');
             if (ikStatus) {
-                ikStatus.textContent = `逆运动学求解成功，已更新 ${label}`;
+                ikStatus.textContent = t('Inverse kinematics succeeded; updated {{label}}', { label });
                 ikStatus.style.color = '#10b981';
             }
         } catch (error) {
             console.error('逆运动学求解失败:', error);
-            callbacks.addROS2LogEntry?.(`逆运动学失败：${error.message}`, 'error');
+            callbacks.addROS2LogEntry?.(t('Inverse kinematics failed: {{message}}', { message: error.message }), 'error');
             if (ikStatus) {
-                ikStatus.textContent = `逆运动学失败：${error.message}`;
+                ikStatus.textContent = t('Inverse kinematics failed: {{message}}', { message: error.message });
                 ikStatus.style.color = '#f87171';
             }
         }
@@ -356,6 +365,13 @@ export function setupInverseKinematicsControls() {
 
     updateIKRobotSelection();
     updateIkSolveAvailability();
+    if (!ikLanguageBound) {
+        ikLanguageBound = true;
+        onLanguageChange(() => {
+            updateIKRobotSelection();
+            updateIkSolveAvailability();
+        });
+    }
     if (ikSelect) {
         ikSelect.addEventListener('change', () => {
             updateIkSolveAvailability();
@@ -367,9 +383,9 @@ export function setupInverseKinematicsControls() {
             const robotChoice = document.getElementById('ik-robot-select')?.value || 'robot1';
             const dqArray = getCurrentRobotDQ(robotChoice);
             if (!dqArray) {
-                callbacks.addROS2LogEntry?.('无法获取当前姿态的双四元数', 'warn');
+                callbacks.addROS2LogEntry?.(t('Unable to get the current pose dual quaternion'), 'warn');
                 if (ikStatus) {
-                    ikStatus.textContent = '无法获取当前姿态的双四元数';
+                    ikStatus.textContent = t('Unable to get the current pose dual quaternion');
                     ikStatus.style.color = '#f87171';
                 }
                 return;
@@ -391,16 +407,16 @@ export function setupInverseKinematicsControls() {
                     document.execCommand('copy');
                     document.body.removeChild(tempInput);
                 }
-                callbacks.addROS2LogEntry?.(`已复制双四元数：${formatted}`, 'info');
+                callbacks.addROS2LogEntry?.(t('Copied dual quaternion: {{value}}', { value: formatted }), 'info');
                 if (ikStatus) {
-                    ikStatus.textContent = '已复制当前姿态的双四元数';
+                    ikStatus.textContent = t('Copied the current pose dual quaternion');
                     ikStatus.style.color = '#10b981';
                 }
             } catch (error) {
                 console.error('复制双四元数失败:', error);
-                callbacks.addROS2LogEntry?.(`复制双四元数失败：${error.message}`, 'error');
+                callbacks.addROS2LogEntry?.(t('Failed to copy dual quaternion: {{message}}', { message: error.message }), 'error');
                 if (ikStatus) {
-                    ikStatus.textContent = `复制失败：${error.message}`;
+                    ikStatus.textContent = t('Copy failed: {{message}}', { message: error.message });
                     ikStatus.style.color = '#f87171';
                 }
             }

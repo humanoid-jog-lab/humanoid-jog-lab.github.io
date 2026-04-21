@@ -24,12 +24,12 @@ function normalizeHumanoidTaskMetricContext(contextRaw = '') {
         return 'waist';
     }
     if (
-        context === 'surface-slide'
-        || context === 'surface-slide-target'
-        || context === 'dual-independent-surface-slide'
-        || context === 'dual-independent-surface-slide-target'
-        || context === 'cooperative-ruled-surface-polishing'
+        context === 'cooperative-ruled-surface-polishing'
         || context === 'cooperative-ruled-surface-polishing-target'
+        || context === 'cooperative-ruled-surface-polishing-dq-setpoint'
+        || context === 'cooperative-ruled-surface-polishing-dq-setpoint-target'
+        || context === 'cooperative-ruled-surface-polishing-dq-setpoint-arm-only'
+        || context === 'cooperative-ruled-surface-polishing-dq-setpoint-arm-only-target'
     ) {
         return 'surface';
     }

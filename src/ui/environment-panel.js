@@ -1,6 +1,16 @@
 import { CM_TO_M, DEFAULT_ENVIRONMENT_BOX_CM, DEFAULT_ENVIRONMENT_BOX_COLOR, ENVIRONMENT_BOX_BASE_OFFSET_X } from '../core/constants.js';
 import { appState, callbacks } from '../core/state.js';
 import { createWarehouseEnvironment, getWarehouseInfo } from '../environments/warehouse.js';
+import { onLanguageChange, t } from '../i18n.js';
+
+let environmentPanelLanguageBound = false;
+
+function getEnvironmentObjectTitle(object) {
+    if (object?.type === 'box' && Number.isFinite(object?.displayNameNumber)) {
+        return t('Box #{{number}}', { number: object.displayNameNumber });
+    }
+    return object?.displayName || t('Environment Object');
+}
 
 /**
  * 渲染环境物体列表
@@ -16,7 +26,7 @@ export function renderEnvironmentObjectList() {
     if (!appState.environmentObjects.length) {
         const empty = document.createElement('div');
         empty.className = 'env-empty-message';
-        empty.textContent = '当前场景没有环境物体';
+        empty.textContent = t('No environment objects in the current scene');
         list.appendChild(empty);
         return;
     }
@@ -48,7 +58,7 @@ export function renderEnvironmentObjectList() {
 
         const title = document.createElement('div');
         title.className = 'env-object-title';
-        title.textContent = object.displayName || '环境物体';
+        title.textContent = getEnvironmentObjectTitle(object);
 
         const dimsCm = object.dimensionsCm || {};
         const lengthCm = Number(dimsCm.length ?? 0).toFixed(1);
@@ -57,16 +67,26 @@ export function renderEnvironmentObjectList() {
 
         const dimensions = document.createElement('div');
         dimensions.className = 'env-object-meta';
-        dimensions.textContent = `尺寸：${lengthCm} × ${widthCm} × ${heightCm} cm`;
+        dimensions.textContent = t('Size: {{length}} × {{width}} × {{height}} cm', {
+            length: lengthCm,
+            width: widthCm,
+            height: heightCm
+        });
 
         const posInfo = document.createElement('div');
         posInfo.className = 'env-object-meta';
         const pos = object.position || { x: 0, y: 0, z: 0 };
-        posInfo.textContent = `位置 (m)：(${pos.x.toFixed(2)}, ${pos.y.toFixed(2)}, ${pos.z.toFixed(2)})`;
+        posInfo.textContent = t('Position (m): ({{x}}, {{y}}, {{z}})', {
+            x: pos.x.toFixed(2),
+            y: pos.y.toFixed(2),
+            z: pos.z.toFixed(2)
+        });
 
         const attachStatus = document.createElement('div');
         attachStatus.className = 'env-object-meta';
-        attachStatus.textContent = `附着：${getEnvironmentAttachmentLabel(object.attachedTo)}`;
+        attachStatus.textContent = t('Attachment: {{label}}', {
+            label: getEnvironmentAttachmentLabel(object.attachedTo)
+        });
 
         info.appendChild(title);
         info.appendChild(dimensions);
@@ -80,7 +100,17 @@ export function renderEnvironmentObjectList() {
         const offsetRot = offset.rotation || { x: 0, y: 0, z: 0 };
         const offsetInfo = document.createElement('div');
         offsetInfo.className = 'env-object-meta';
-        offsetInfo.textContent = `偏移(cm)：(${(offsetPos.x / CM_TO_M).toFixed(1)}, ${(offsetPos.y / CM_TO_M).toFixed(1)}, ${(offsetPos.z / CM_TO_M).toFixed(1)}) ｜ 旋转(°)：(${offsetRot.x.toFixed(1)}, ${offsetRot.y.toFixed(1)}, ${offsetRot.z.toFixed(1)})`;
+        offsetInfo.textContent = t(
+            'Offset (cm): ({{x}}, {{y}}, {{z}}) | Rotation (deg): ({{roll}}, {{pitch}}, {{yaw}})',
+            {
+                x: (offsetPos.x / CM_TO_M).toFixed(1),
+                y: (offsetPos.y / CM_TO_M).toFixed(1),
+                z: (offsetPos.z / CM_TO_M).toFixed(1),
+                roll: offsetRot.x.toFixed(1),
+                pitch: offsetRot.y.toFixed(1),
+                yaw: offsetRot.z.toFixed(1)
+            }
+        );
         info.appendChild(offsetInfo);
 
         const controls = document.createElement('div');
@@ -109,10 +139,10 @@ export function renderEnvironmentObjectList() {
 
         const adjustBtn = document.createElement('button');
         adjustBtn.className = 'env-adjust-btn';
-        adjustBtn.textContent = '调整';
+        adjustBtn.textContent = t('Adjust');
         if (!object.attachedTo) {
             adjustBtn.disabled = true;
-            adjustBtn.title = '附着后可调整偏移';
+            adjustBtn.title = t('Adjust offset after attaching');
         }
         adjustBtn.addEventListener('click', () => {
             promptEnvironmentObjectAdjustment(object.id);
@@ -121,7 +151,7 @@ export function renderEnvironmentObjectList() {
 
         const removeBtn = document.createElement('button');
         removeBtn.className = 'env-remove-btn';
-        removeBtn.textContent = '移除';
+        removeBtn.textContent = t('Remove');
         removeBtn.addEventListener('click', () => {
             removeEnvironmentObjectEntry(object.id);
         });
@@ -141,11 +171,11 @@ export function renderEnvironmentObjectList() {
 export function getEnvironmentAttachmentLabel(value) {
     switch (value) {
         case 'end-effector':
-            return '末端小球';
+            return t('End-Effector Marker');
         case 'dual-absolute':
-            return '双臂绝对姿态小球';
+            return t('Dual-Arm Absolute-Pose Marker');
         default:
-            return '未附着';
+            return t('Not Attached');
     }
 }
 
@@ -155,7 +185,7 @@ export function getEnvironmentAttachmentLabel(value) {
  */
 export function getEnvironmentAttachmentOptions() {
     const options = [
-        { value: 'none', label: '未附着', disabled: false }
+        { value: 'none', label: t('Not Attached'), disabled: false }
     ];
     const hasVisualizer = !!appState.visualizer;
     const hasEndEffector = hasVisualizer && typeof appState.visualizer.hasEndEffectorAnchor === 'function'
@@ -163,7 +193,7 @@ export function getEnvironmentAttachmentOptions() {
         : false;
     options.push({
         value: 'end-effector',
-        label: '末端小球',
+        label: t('End-Effector Marker'),
         disabled: !hasEndEffector
     });
     const hasAbsolute = hasVisualizer && typeof appState.visualizer.hasAbsolutePoseMarker === 'function'
@@ -172,7 +202,7 @@ export function getEnvironmentAttachmentOptions() {
     if (hasAbsolute) {
         options.push({
             value: 'dual-absolute',
-            label: '双臂绝对姿态小球',
+            label: t('Dual-Arm Absolute-Pose Marker'),
             disabled: false
         });
     }
@@ -189,11 +219,11 @@ export function promptEnvironmentObjectAdjustment(id) {
         return;
     }
     if (!entry.attachedTo) {
-        window.alert('请先将该物体附着到小球上，再进行调整。');
+        window.alert(t('Please attach this object to a marker before adjusting it.'));
         return;
     }
     if (!appState.visualizer || typeof appState.visualizer.setEnvironmentObjectOffset !== 'function') {
-        window.alert('当前可视化器不支持偏移调整');
+        window.alert(t('The current visualizer does not support offset adjustment'));
         return;
     }
 
@@ -211,9 +241,7 @@ export function promptEnvironmentObjectAdjustment(id) {
     ].join(', ');
 
     const input = window.prompt(
-        '输入偏移与旋转，格式：dx, dy, dz, roll, pitch, yaw\n' +
-        'dx/dy/dz 单位为厘米，roll/pitch/yaw 单位为度。\n' +
-        '正方向遵循右手定则，旋转顺序为 XYZ。',
+        t('Enter offset and rotation as: dx, dy, dz, roll, pitch, yaw\ndx/dy/dz are in centimeters, roll/pitch/yaw are in degrees.\nPositive directions follow the right-hand rule with XYZ rotation order.'),
         defaultInput
     );
     if (input === null) {
@@ -222,13 +250,13 @@ export function promptEnvironmentObjectAdjustment(id) {
 
     const parts = input.split(/[,\s]+/).filter(Boolean);
     if (parts.length !== 6) {
-        window.alert('请输入 6 个数值，格式示例：2, 0, 5, 0, 0, 90');
+        window.alert(t('Please enter 6 numeric values, for example: 2, 0, 5, 0, 0, 90'));
         return;
     }
 
     const numbers = parts.map((value) => Number.parseFloat(value));
     if (numbers.some((num) => Number.isNaN(num))) {
-        window.alert('输入包含非数值内容，请重新输入');
+        window.alert(t('The input contains non-numeric values. Please try again.'));
         return;
     }
 
@@ -263,7 +291,7 @@ export function promptEnvironmentObjectAdjustment(id) {
         renderEnvironmentObjectList();
     } catch (error) {
         console.error('调整环境物体偏移失败:', error);
-        window.alert(`调整失败：${error.message}`);
+        window.alert(t('Adjustment failed: {{message}}', { message: error.message }));
     }
 }
 
@@ -282,7 +310,7 @@ export function updateEnvironmentAttachment(id, targetValue) {
 
     try {
         if (!appState.visualizer) {
-            throw new Error('可视化器尚未初始化');
+            throw new Error(t('Visualizer is not initialized'));
         }
 
         if (!normalized) {
@@ -294,7 +322,7 @@ export function updateEnvironmentAttachment(id, targetValue) {
             appState.visualizer.attachEnvironmentObject(id, { target: normalized });
             entry.attachedTo = normalized;
         } else {
-            throw new Error('可视化器未实现环境附着功能');
+            throw new Error(t('The visualizer does not implement environment attachment'));
         }
 
         if (typeof appState.visualizer.getEnvironmentObjectWorldPosition === 'function') {
@@ -311,7 +339,7 @@ export function updateEnvironmentAttachment(id, targetValue) {
         }
     } catch (error) {
         console.error('更新环境物体附着失败:', error);
-        window.alert(`更新附着失败：${error.message}`);
+        window.alert(t('Attachment update failed: {{message}}', { message: error.message }));
     }
 
     renderEnvironmentObjectList();
@@ -323,7 +351,7 @@ export function updateEnvironmentAttachment(id, targetValue) {
  */
 export function addEnvironmentBoxToScene() {
     if (!appState.visualizer || typeof appState.visualizer.addEnvironmentBox !== 'function') {
-        throw new Error('可视化器尚未初始化，无法添加环境物体');
+        throw new Error(t('Unable to add environment objects because the visualizer is not initialized'));
     }
 
     appState.environmentObjectCounter += 1;
@@ -355,13 +383,13 @@ export function addEnvironmentBoxToScene() {
 
     if (!mesh) {
         appState.environmentObjectCounter -= 1;
-        throw new Error('添加环境物体失败，返回值为空');
+        throw new Error(t('Failed to add environment object because the visualizer returned no mesh'));
     }
 
     appState.environmentObjects.push({
         id,
         type: 'box',
-        displayName: `箱子 #${appState.environmentObjectCounter}`,
+        displayNameNumber: appState.environmentObjectCounter,
         dimensionsCm: { ...dimsCm },
         position,
         attachedTo: null,
@@ -403,11 +431,11 @@ export function removeEnvironmentObjectEntry(id) {
  * 可用的场景预设列表
  */
 const SCENE_PRESETS = [
-    { id: 'none', label: '无场景', description: '清空场景预设' },
+    { id: 'none', label: 'No Scene', description: 'Clear the current scene preset' },
     {
         id: 'warehouse',
-        label: '仓储机器人环境',
-        description: '包含货架、货箱、托盘和导航标线的典型仓库场景',
+        label: 'Warehouse Robot Environment',
+        description: 'A typical warehouse scene with shelves, crates, pallets, and navigation markings',
         builder: createWarehouseEnvironment,
         info: getWarehouseInfo,
     },
@@ -445,7 +473,7 @@ export function loadScenePreset(presetId) {
         console.log(`✓ 场景预设 "${preset.label}" 加载完成`);
     } catch (error) {
         console.error('加载场景预设失败:', error);
-        window.alert(`加载场景预设失败：${error.message}`);
+        window.alert(t('Failed to load scene preset: {{message}}', { message: error.message }));
     }
 }
 
@@ -472,10 +500,10 @@ function updateScenePresetUI() {
             const info = preset.info();
             infoEl.innerHTML = `
                 <div class="scene-preset-active">
-                    <strong>${info.name}</strong>
+                    <strong>${t(info.name)}</strong>
                     <span class="scene-preset-dims">${info.dimensions}</span>
                     <ul class="scene-preset-elements">
-                        ${info.elements.map((e) => `<li>${e}</li>`).join('')}
+                        ${info.elements.map((e) => `<li>${t(e)}</li>`).join('')}
                     </ul>
                 </div>
             `;
@@ -493,19 +521,21 @@ function updateScenePresetUI() {
 export function setupScenePresetListeners() {
     const select = document.getElementById('scene-preset-select');
     if (select) {
-        // 填充选项
         select.innerHTML = '';
         SCENE_PRESETS.forEach((preset) => {
             const opt = document.createElement('option');
             opt.value = preset.id;
-            opt.textContent = preset.label;
+            opt.textContent = t(preset.label);
             select.appendChild(opt);
         });
         select.value = appState.currentScenePreset || 'none';
 
-        select.addEventListener('change', (e) => {
-            loadScenePreset(e.target.value);
-        });
+        if (!select.dataset.environmentPanelBound) {
+            select.addEventListener('change', (e) => {
+                loadScenePreset(e.target.value);
+            });
+            select.dataset.environmentPanelBound = 'true';
+        }
     }
 }
 
@@ -517,4 +547,13 @@ export function registerEnvironmentPanelCallbacks() {
     callbacks.addEnvironmentBoxToScene = addEnvironmentBoxToScene;
     callbacks.loadScenePreset = loadScenePreset;
     callbacks.clearScenePreset = clearScenePreset;
+
+    if (!environmentPanelLanguageBound) {
+        onLanguageChange(() => {
+            setupScenePresetListeners();
+            updateScenePresetUI();
+            renderEnvironmentObjectList();
+        });
+        environmentPanelLanguageBound = true;
+    }
 }

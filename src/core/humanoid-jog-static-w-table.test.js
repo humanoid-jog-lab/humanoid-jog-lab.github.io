@@ -6,6 +6,7 @@ import {
     formatHumanoidStaticManipTaskLabel,
     summarizeHumanoidStaticManipRow
 } from './humanoid-jog-static-w-table.js';
+import { JOINT2_LOCK_TRAJECTORY_CASE } from './humanoid-joint2-lock-trajectory.js';
 
 test('buildHumanoidStaticManipTasks returns the 16 static absolute/relative task variants', () => {
     const tasks = buildHumanoidStaticManipTasks();
@@ -53,6 +54,17 @@ test('buildHumanoidStaticManipTasks can keep only locked rows', () => {
             'absolute | full-body | locked | w_hier_vfi+'
         ]
     );
+    assert.deepEqual(
+        tasks
+            .filter((task) => task.structure === 'dual-arm')
+            .map((task) => task.defaultBaseQ),
+        new Array(4).fill(JOINT2_LOCK_TRAJECTORY_CASE.baseQ)
+    );
+    assert.ok(
+        tasks
+            .filter((task) => task.structure === 'full-body')
+            .every((task) => task.defaultBaseQ === null)
+    );
 });
 
 test('summarizeHumanoidStaticManipRow computes deltas and uses the formatted task label', () => {
@@ -64,8 +76,8 @@ test('summarizeHumanoidStaticManipRow computes deltas and uses the formatted tas
             wHierVfi: 0.2,
             dmin: 0.01,
             cctsm: {
-                w_abs_arm: 0.11,
-                w_abs_arm_vfi: 0.07
+                w_abs_hier: 0.11,
+                w_abs_hier_vfi: 0.07
             }
         },
         after: {
@@ -73,8 +85,8 @@ test('summarizeHumanoidStaticManipRow computes deltas and uses the formatted tas
             wHierVfi: 0.28,
             dmin: 0.04,
             cctsm: {
-                w_abs_arm: 0.16,
-                w_abs_arm_vfi: 0.13
+                w_abs_hier: 0.16,
+                w_abs_hier_vfi: 0.13
             }
         }
     });

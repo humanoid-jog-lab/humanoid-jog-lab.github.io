@@ -1274,6 +1274,227 @@ export function buildSurfaceAttachedPoseTarget({
     };
 }
 
+function dotAny(a, b) {
+    const left = Array.isArray(a) ? a : [];
+    const right = Array.isArray(b) ? b : [];
+    const width = Math.min(left.length, right.length);
+    let sum = 0;
+    for (let index = 0; index < width; index++) {
+        sum += asFinite(left[index]) * asFinite(right[index]);
+    }
+    return sum;
+}
+
+function scaleAny(values, scalar) {
+    return (Array.isArray(values) ? values : []).map((value) => asFinite(value) * scalar);
+}
+
+function addAny(a, b) {
+    const left = Array.isArray(a) ? a : [];
+    const right = Array.isArray(b) ? b : [];
+    const width = Math.max(left.length, right.length);
+    return Array.from({ length: width }, (_, index) => asFinite(left[index]) + asFinite(right[index]));
+}
+
+function subtractAny(a, b) {
+    const left = Array.isArray(a) ? a : [];
+    const right = Array.isArray(b) ? b : [];
+    const width = Math.max(left.length, right.length);
+    return Array.from({ length: width }, (_, index) => asFinite(left[index]) - asFinite(right[index]));
+}
+
+function alignQuaternionToReference(quaternion, referenceQuaternion) {
+    const normalized = normalizeAny(quaternion, 'aligned quaternion');
+    const reference = normalizeAny(referenceQuaternion, 'aligned quaternion reference');
+    return dotAny(normalized, reference) < 0
+        ? normalized.map((value) => -value)
+        : normalized;
+}
+
+function buildPoseDualQuaternionArray(pose) {
+    const quaternion = normalizeAny(pose?.quaternion, 'dual quaternion pose quaternion');
+    const position = asVector3(pose?.position, 'dual quaternion pose position');
+    const translationQuaternion = [0, position[0], position[1], position[2]];
+    const dual = scaleAny(multiplyQuaternions(translationQuaternion, quaternion), 0.5);
+    return [...quaternion, ...dual];
+}
+
+function resolveFiniteDifferenceStencil(value, bounds, step) {
+    const resolvedStep = Math.max(1e-6, Math.abs(asFinite(step, 1e-4)));
+    const lower = Number.isFinite(bounds?.[0]) ? bounds[0] : Number.NEGATIVE_INFINITY;
+    const upper = Number.isFinite(bounds?.[1]) ? bounds[1] : Number.POSITIVE_INFINITY;
+    if ((value - resolvedStep) >= lower && (value + resolvedStep) <= upper) {
+        return {
+            type: 'central',
+            minus: value - resolvedStep,
+            plus: value + resolvedStep,
+            denominator: 2 * resolvedStep
+        };
+    }
+    if ((value + resolvedStep) <= upper) {
+        return {
+            type: 'forward',
+            base: value,
+            plus: value + resolvedStep,
+            denominator: resolvedStep
+        };
+    }
+    if ((value - resolvedStep) >= lower) {
+        return {
+            type: 'backward',
+            minus: value - resolvedStep,
+            base: value,
+            denominator: resolvedStep
+        };
+    }
+    return {
+        type: 'none',
+        base: value,
+        denominator: 1
+    };
+}
+
+function differentiateAttachedPose(buildPose, value, bounds, step, referenceQuaternion) {
+    const stencil = resolveFiniteDifferenceStencil(value, bounds, step);
+    if (stencil.type === 'none') {
+        return {
+            positionDerivative: [0, 0, 0],
+            quaternionDerivative: [0, 0, 0, 0]
+        };
+    }
+
+    if (stencil.type === 'central') {
+        const poseMinus = buildPose(stencil.minus);
+        const posePlus = buildPose(stencil.plus);
+        const alignedMinus = alignQuaternionToReference(poseMinus.quaternion, referenceQuaternion);
+        const alignedPlus = alignQuaternionToReference(posePlus.quaternion, referenceQuaternion);
+        return {
+            positionDerivative: scale(subtract(posePlus.position, poseMinus.position), 1 / stencil.denominator),
+            quaternionDerivative: scaleAny(subtractAny(alignedPlus, alignedMinus), 1 / stencil.denominator)
+        };
+    }
+
+    if (stencil.type === 'forward') {
+        const poseBase = buildPose(stencil.base);
+        const posePlus = buildPose(stencil.plus);
+        const alignedBase = alignQuaternionToReference(poseBase.quaternion, referenceQuaternion);
+        const alignedPlus = alignQuaternionToReference(posePlus.quaternion, referenceQuaternion);
+        return {
+            positionDerivative: scale(subtract(posePlus.position, poseBase.position), 1 / stencil.denominator),
+            quaternionDerivative: scaleAny(subtractAny(alignedPlus, alignedBase), 1 / stencil.denominator)
+        };
+    }
+
+    const poseMinus = buildPose(stencil.minus);
+    const poseBase = buildPose(stencil.base);
+    const alignedMinus = alignQuaternionToReference(poseMinus.quaternion, referenceQuaternion);
+    const alignedBase = alignQuaternionToReference(poseBase.quaternion, referenceQuaternion);
+    return {
+        positionDerivative: scale(subtract(poseBase.position, poseMinus.position), 1 / stencil.denominator),
+        quaternionDerivative: scaleAny(subtractAny(alignedBase, alignedMinus), 1 / stencil.denominator)
+    };
+}
+
+function poseTwistToDualQuaternionDerivative(pose, angularVelocity, translationalVelocity) {
+    const quaternion = normalizeAny(pose?.quaternion, 'pose twist quaternion');
+    const position = asVector3(pose?.position, 'pose twist position');
+    const dqPose = buildPoseDualQuaternionArray({ position, quaternion });
+    const dual = dqPose.slice(4, 8);
+    const omegaQuaternion = [0, ...asVector3(angularVelocity, 'pose twist angular velocity')];
+    const translationQuaternion = [0, ...asVector3(translationalVelocity, 'pose twist translational velocity')];
+    const realDerivative = scaleAny(multiplyQuaternions(omegaQuaternion, quaternion), 0.5);
+    const dualDerivative = scaleAny(
+        addAny(
+            multiplyQuaternions(translationQuaternion, quaternion),
+            multiplyQuaternions(omegaQuaternion, dual)
+        ),
+        0.5
+    );
+    return [...realDerivative, ...dualDerivative];
+}
+
+export function buildSurfaceAttachedPoseJacobian({
+    surface,
+    u = 0,
+    v = 0,
+    normalOffset = 0,
+    normalOffsetSign = 1,
+    quaternionOffset = null,
+    bounds = {
+        u: [0, 1],
+        v: [0, 1]
+    },
+    differentiationStep = 1e-4
+} = {}) {
+    const resolvedNormalOffsetSign = Number.isFinite(normalOffsetSign)
+        ? (Math.sign(normalOffsetSign) || 1)
+        : 1;
+    const buildPoseAt = (nextU, nextV) => {
+        const attachedPose = buildSurfaceAttachedPoseTarget({
+            surface,
+            u: nextU,
+            v: nextV,
+            normalOffset,
+            normalOffsetSign: resolvedNormalOffsetSign
+        });
+        if (Array.isArray(quaternionOffset) && quaternionOffset.length === 4) {
+            attachedPose.quaternion = normalizeAny(
+                multiplyQuaternions(attachedPose.quaternion, quaternionOffset),
+                'surface attached pose quaternion offset'
+            );
+        }
+        return attachedPose;
+    };
+
+    const pose = buildPoseAt(asFinite(u, 0), asFinite(v, 0));
+    const dqPose = buildPoseDualQuaternionArray(pose);
+    const quaternion = normalizeAny(pose.quaternion, 'surface attached pose base quaternion');
+    const uBounds = Array.isArray(bounds?.u) && bounds.u.length === 2 ? bounds.u : [0, 1];
+    const vBounds = Array.isArray(bounds?.v) && bounds.v.length === 2 ? bounds.v : [0, 1];
+
+    const duModel = differentiateAttachedPose(
+        (sampleU) => buildPoseAt(sampleU, v),
+        asFinite(u, 0),
+        uBounds,
+        differentiationStep,
+        quaternion
+    );
+    const dvModel = differentiateAttachedPose(
+        (sampleV) => buildPoseAt(u, sampleV),
+        asFinite(v, 0),
+        vBounds,
+        differentiationStep,
+        quaternion
+    );
+
+    const omegaUQuaternion = multiplyQuaternions(scaleAny(duModel.quaternionDerivative, 2), conjugateQuaternion(quaternion));
+    const omegaVQuaternion = multiplyQuaternions(scaleAny(dvModel.quaternionDerivative, 2), conjugateQuaternion(quaternion));
+    const omegaU = [omegaUQuaternion[1], omegaUQuaternion[2], omegaUQuaternion[3]];
+    const omegaV = [omegaVQuaternion[1], omegaVQuaternion[2], omegaVQuaternion[3]];
+    const vU = add(duModel.positionDerivative, cross(pose.position, omegaU));
+    const vV = add(dvModel.positionDerivative, cross(pose.position, omegaV));
+    const vN = scale(pose.surface.normal, resolvedNormalOffsetSign);
+
+    const twistColumns = {
+        u: [0, ...omegaU, 0, ...vU],
+        v: [0, ...omegaV, 0, ...vV],
+        n: [0, 0, 0, 0, 0, ...vN]
+    };
+    const columns = [
+        poseTwistToDualQuaternionDerivative(pose, omegaU, vU),
+        poseTwistToDualQuaternionDerivative(pose, omegaV, vV),
+        poseTwistToDualQuaternionDerivative(pose, [0, 0, 0], vN)
+    ];
+    const jacobian = Array.from({ length: 8 }, (_, rowIndex) => columns.map((column) => column[rowIndex]));
+
+    return {
+        pose,
+        dqPose,
+        twistColumns,
+        jacobian
+    };
+}
+
 export function createDQMotionRuledSurface({
     basePosition = [0, 0, 0],
     baseQuaternion = [1, 0, 0, 0],
@@ -1438,6 +1659,7 @@ export default {
     evaluateSurfacePatch,
     buildSurfaceAttachedFrame,
     buildSurfaceAttachedPoseTarget,
+    buildSurfaceAttachedPoseJacobian,
     createAnalyticCylindricalRuledSurface,
     createDQMotionRuledSurface,
     parseStructuredObjRuledSurfaceGrid,

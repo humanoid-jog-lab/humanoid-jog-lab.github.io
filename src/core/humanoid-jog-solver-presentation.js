@@ -1,3 +1,5 @@
+import { t } from '../i18n.js';
+
 export function normalizeHumanoidJogSolverMode(modeRaw) {
     return modeRaw === 'priority'
         || modeRaw === 'mj_restore'
@@ -8,17 +10,21 @@ export function normalizeHumanoidJogSolverMode(modeRaw) {
 }
 
 export function getHumanoidJogSolverDisplayName(mode) {
-    if (mode === 'priority') return '零空间投影';
-    if (mode === 'mj_restore') return 'MuJoCo 风格恢复';
-    if (mode === 'mj_restore_tr') return '恢复优化(TR)';
-    if (mode === 'mj_restore_pre_w') return 'MuJoCo 风格恢复 + w预优化';
+    if (mode === 'priority') return t('Null-space Projection');
+    if (mode === 'mj_restore') return t('Restore (LS)');
+    if (mode === 'mj_restore_tr') return t('Recovery Optimization (TR)');
+    if (mode === 'mj_restore_pre_w') return t('MuJoCo-style Recovery + w Pre-optimization');
     return 'new qpJ';
 }
 
 export function getHumanoidJogSolverReadyMessage(mode) {
-    return `${getHumanoidJogSolverDisplayName(mode)} 已启用，等待点动输入。`;
+    return t('{{solver}} is enabled and waiting for jog input.', {
+        solver: getHumanoidJogSolverDisplayName(mode)
+    });
 }
 
 export function getHumanoidJogCurrentCCTSMMessage(mode) {
-    return `当前为${getHumanoidJogSolverDisplayName(mode)}求解器，显示当前 CCTSM。`;
+    return t('Current solver: {{solver}}. Displaying the current CCTSM.', {
+        solver: getHumanoidJogSolverDisplayName(mode)
+    });
 }

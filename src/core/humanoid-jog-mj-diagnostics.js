@@ -1,4 +1,5 @@
 import { getHumanoidTaskMetricDisplayName } from './humanoid-jog-task-metric-labels.js';
+import { t } from '../i18n.js';
 
 function asFinite(value, fallback = Number.NaN) {
     return Number.isFinite(value) ? value : fallback;
@@ -31,6 +32,7 @@ export function buildHumanoidJogMJDiagnostics({
     bodyResidualNorm = Number.NaN,
     polishState = '',
     polishReason = '',
+    polishIterations = Number.NaN,
     polishResidualNorm = Number.NaN,
     timingPreMs = Number.NaN,
     timingWorkerInitMs = Number.NaN,
@@ -61,7 +63,7 @@ export function buildHumanoidJogMJDiagnostics({
     return {
         solverMode: normalizedSolverMode,
         modeTag,
-        message: 'MuJoCo 风格恢复 诊断已更新。',
+        message: t('Restore (LS) diagnostics updated.'),
         includeWaist,
         keepBodyZVertical,
         restoreIterations: Number.isFinite(restorationResult?.iterations) ? restorationResult.iterations : 0,
@@ -69,6 +71,19 @@ export function buildHumanoidJogMJDiagnostics({
         restoreResidualNorm: asFinite(restorationResult?.currentResidualNorm),
         restoreScale: asFinite(restorationResult?.lastAcceptedScale),
         stopReason: typeof restorationResult?.reason === 'string' ? restorationResult.reason : 'unknown',
+        restoreAcceptedRho: asFinite(restorationResult?.lastAcceptedRho),
+        restorePredictedReduction: asFinite(restorationResult?.lastPredictedReduction),
+        restoreActualReduction: asFinite(restorationResult?.lastActualReduction),
+        restoreAcceptedBy: typeof restorationResult?.acceptedBy === 'string'
+            ? restorationResult.acceptedBy
+            : '',
+        restoreRejectedRho: asFinite(restorationResult?.lastRejectedRho),
+        restoreRejectedPredictedReduction: asFinite(restorationResult?.lastRejectedPredictedReduction),
+        restoreRejectedActualReduction: asFinite(restorationResult?.lastRejectedActualReduction),
+        restoreRejectedReason: typeof restorationResult?.lastRejectedReason === 'string'
+            ? restorationResult.lastRejectedReason
+            : '',
+        polishIterations: asFinite(polishIterations),
         nullspaceAccepted: nullspaceResult?.accepted === true,
         nullspaceReason: typeof nullspaceResult?.reason === 'string' ? nullspaceResult.reason : null,
         nullspaceStepNorm: asFinite(nullspaceResult?.stepNorm),

@@ -8,20 +8,20 @@ import {
     summarizeManipulabilityVFIConstraints
 } from './vfi-secondary-objective.js';
 
-test('buildManipulabilityVFIConstraints combines near joint-limit and extra VFI constraints', () => {
+test('buildManipulabilityVFIConstraints collects all finite joint-limit distances and extra VFI constraints', () => {
     const constraints = buildManipulabilityVFIConstraints({
-        qActive: [0.95, 1.0],
+        qActive: [0.95, 0.0],
         activeLimits: [
             { lower: 0, upper: 1 },
             { lower: -2, upper: 2 }
         ],
         activationThreshold: 0.1,
         extraConstraints: [
-            { row: [0, 1], distance: 0.04, threshold: 0.2 }
+            { row: [1, 1], distance: 0.04, threshold: 0.2 }
         ]
     });
 
-    assert.equal(constraints.length, 2);
+    assert.equal(constraints.length, 3);
     assert.deepEqual(constraints[0], {
         row: [1, 0],
         distance: 0.050000000000000044,
@@ -30,6 +30,12 @@ test('buildManipulabilityVFIConstraints combines near joint-limit and extra VFI 
     });
     assert.deepEqual(constraints[1], {
         row: [0, 1],
+        distance: 2,
+        threshold: 0.1,
+        source: 'joint_limit'
+    });
+    assert.deepEqual(constraints[2], {
+        row: [1, 1],
         distance: 0.04,
         threshold: 0.2,
         source: 'extra'

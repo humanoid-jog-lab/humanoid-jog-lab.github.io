@@ -124,20 +124,32 @@ function buildReferenceResidual(problem = {}, previousStep = []) {
     return { referenceResidual, constraintMotion };
 }
 
-function buildActiveCorridorRows(problem = {}, width = 0) {
-    const corridor = problem?.inequalities?.waistXCorridor;
-    const rows = Array.isArray(corridor?.vfiRows) ? corridor.vfiRows : [];
-    const rhs = Array.isArray(corridor?.rhs) ? corridor.rhs : [];
-    if (rows.length === 0 || rows.length !== rhs.length) {
-        return { rows: [], rhs: [] };
-    }
+function collectLinearStepInequalities(problem = {}, width = 0) {
+    const sources = [
+        {
+            rows: problem?.inequalities?.jointLimitVFI?.rows,
+            rhs: problem?.inequalities?.jointLimitVFI?.rhs
+        },
+        {
+            rows: problem?.inequalities?.waistXCorridor?.vfiRows,
+            rhs: problem?.inequalities?.waistXCorridor?.rhs
+        }
+    ];
     const activeRows = [];
     const activeRhs = [];
-    for (let i = 0; i < rows.length; i++) {
-        const row = Array.isArray(rows[i]) ? rows[i] : null;
-        if (!row || row.length !== width) continue;
-        activeRows.push(row.slice());
-        activeRhs.push(asFinite(rhs[i], 0));
+    for (const source of sources) {
+        const rows = Array.isArray(source?.rows) ? source.rows : [];
+        const rhs = Array.isArray(source?.rhs) ? source.rhs : [];
+        if (rows.length === 0 || rows.length !== rhs.length) continue;
+        for (let i = 0; i < rows.length; i++) {
+            const row = Array.isArray(rows[i]) ? rows[i] : null;
+            if (!row || row.length !== width) continue;
+            activeRows.push(row.slice());
+            activeRhs.push(asFinite(rhs[i], 0));
+        }
+    }
+    if (activeRows.length === 0) {
+        return { rows: [], rhs: [] };
     }
     return { rows: activeRows, rhs: activeRhs };
 }
@@ -183,7 +195,7 @@ function solveUnconstrainedLeastSquares(
     return solveLinearSystem(H, g);
 }
 
-function selectViolatedCorridorRows(step = [], rows = [], rhs = []) {
+function selectViolatedStepRows(step = [], rows = [], rhs = []) {
     const activeRows = [];
     const activeRhs = [];
     for (let i = 0; i < rows.length; i++) {
@@ -240,7 +252,7 @@ function buildRestorationStep(problem = {}, previousStep = [], damping = 1e-6, r
         return { dq: new Array(width).fill(0), referenceResidual: [], constraintMotion: [] };
     }
     const { referenceResidual, constraintMotion } = buildReferenceResidual(problem, previousStep);
-    const corridorRows = buildActiveCorridorRows(problem, width);
+    const linearStepRows = collectLinearStepInequalities(problem, width);
     const unconstrainedDQ = solveUnconstrainedLeastSquares(
         jacobian,
         referenceResidual,
@@ -251,8 +263,8 @@ function buildRestorationStep(problem = {}, previousStep = [], damping = 1e-6, r
     if (!Array.isArray(unconstrainedDQ) || unconstrainedDQ.length !== width) {
         return { dq: null, referenceResidual, constraintMotion };
     }
-    const activeCorridor = selectViolatedCorridorRows(unconstrainedDQ, corridorRows.rows, corridorRows.rhs);
-    if (activeCorridor.rows.length === 0) {
+    const activeInequalities = selectViolatedStepRows(unconstrainedDQ, linearStepRows.rows, linearStepRows.rhs);
+    if (activeInequalities.rows.length === 0) {
         return { dq: unconstrainedDQ, referenceResidual, constraintMotion };
     }
     const constrainedDQ = solveEqualityConstrainedLeastSquares({
@@ -261,8 +273,8 @@ function buildRestorationStep(problem = {}, previousStep = [], damping = 1e-6, r
         width,
         damping,
         regularizationWeights,
-        activeRows: activeCorridor.rows,
-        activeRhs: activeCorridor.rhs
+        activeRows: activeInequalities.rows,
+        activeRhs: activeInequalities.rhs
     });
     return {
         dq: Array.isArray(constrainedDQ) && constrainedDQ.length === width ? constrainedDQ : unconstrainedDQ,
@@ -436,6 +448,10 @@ export function restoreHumanoidJogMJTrustRegion({
         lastPredictedReduction: Number.NaN,
         lastActualReduction: Number.NaN,
         acceptedBy: '',
+        lastRejectedRho: Number.NaN,
+        lastRejectedPredictedReduction: Number.NaN,
+        lastRejectedActualReduction: Number.NaN,
+        lastRejectedReason: '',
         bestConstraintViolation: Number.POSITIVE_INFINITY,
         filterSize: 1
     };
@@ -568,6 +584,10 @@ export function restoreHumanoidJogMJTrustRegion({
                     };
                     break;
                 }
+                result.lastRejectedRho = rho;
+                result.lastRejectedPredictedReduction = predictedReduction;
+                result.lastRejectedActualReduction = actualReduction;
+                result.lastRejectedReason = acceptance.reason;
                 candidateRadius = nextRadius;
                 if (candidateRadius <= minRadius + 1e-12) break;
             }

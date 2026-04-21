@@ -161,8 +161,6 @@ export const callbacks = {
     // display.js
     updatePoseDisplay: null,
     updateDualArmPoseDisplay: null,
-    updateDQDisplay: null,
-    updateJacobianDisplay: null,
 
     // environment-panel.js
     renderEnvironmentObjectList: null,
@@ -198,12 +196,6 @@ export const callbacks = {
     stopJointPositionPublishing: null,
     setupROS2EventListeners: null,
 
-    // planned-motion.js
-    planPlannedMotion: null,
-    executePlannedMotion: null,
-    cancelPlannedMotion: null,
-    setupPlannedMotionListeners: null,
-
     // humanoid/base-control.js
     stopHumanoidBaseControlLoop: null,
     startHumanoidBaseControlLoop: null,
@@ -212,7 +204,6 @@ export const callbacks = {
     getHumanoidBasePoseFromConfig: null,
 
     // event-handlers.js
-    switchTab: null,
     setupEventListeners: null,
 
     // joint-clipboard.js
