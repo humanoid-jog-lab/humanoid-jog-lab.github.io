@@ -25,6 +25,19 @@ test('mapHumanoidJointPositions updates humanoid joints by name and ignores whee
     assert.equal(result.updatedCount, 2);
 });
 
+test('mapHumanoidJointPositions flips hip_yaw_joint feedback to match the local humanoid convention', () => {
+    const result = mapHumanoidJointPositions({
+        messageNames: ['ankle_joint', 'knee_joint', 'hip_pitch_joint', 'hip_yaw_joint'],
+        positions: [0.1, 0.2, 0.3, -0.4],
+        jointNames: ['ankle_joint', 'knee_joint', 'hip_pitch_joint', 'hip_yaw_joint'],
+        currentQ: [0, 0, 0, 0]
+    });
+
+    assert.equal(result.updated, true);
+    assert.deepEqual(result.nextQ, [0.1, 0.2, 0.3, 0.4]);
+    assert.equal(result.updatedCount, 4);
+});
+
 test('mapHumanoidJointPositions skips invalid numeric values', () => {
     const result = mapHumanoidJointPositions({
         messageNames: ['ljoint1', 'rjoint1'],

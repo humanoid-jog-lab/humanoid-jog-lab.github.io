@@ -1082,6 +1082,9 @@ export function createAnalyticCylindricalRuledSurface({
     const resolvedSpanV = Math.max(1e-6, asFinite(spanV, 0.3));
     const resolvedAngleSpan = Math.max(1e-6, Math.abs(asFinite(angleSpan, Math.PI / 2)));
     const resolvedCenterOffset = asFinite(centerOffset, 0);
+    const halfAngle = 0.5 * resolvedAngleSpan;
+    const chordWidth = 2 * resolvedRadius * Math.sin(halfAngle);
+    const sagitta = resolvedRadius * (1 - Math.cos(halfAngle));
     const localToWorldPoint = (point) => add(rotateVectorByQuaternion(point, baseRotation), baseTranslation);
     const localToWorldVector = (vector) => rotateVectorByQuaternion(vector, baseRotation);
     const sampleAngularState = (u) => {
@@ -1126,6 +1129,14 @@ export function createAnalyticCylindricalRuledSurface({
             radius: resolvedRadius,
             spanV: resolvedSpanV,
             angleSpan: resolvedAngleSpan,
+            arcLength: resolvedRadius * resolvedAngleSpan,
+            chordWidth,
+            sagitta,
+            localBBox: {
+                x: chordWidth,
+                y: resolvedSpanV,
+                z: sagitta
+            },
             centerOffset: resolvedCenterOffset,
             flipU: Boolean(flipU)
         },

@@ -234,9 +234,15 @@ test('setupHumanoidParameterControls restores, applies, and validates humanoid j
     const originalDocument = globalThis.document;
     const originalLocalStorage = globalThis.localStorage;
     const originalVisualizer = appState.visualizer;
+    const originalRos2Defaults = appState.humanoidRos2PublishDefaults;
 
     const humanoidJointLimitEtaInput = createMockElement('');
     const humanoidJointLimitEtaStatus = createMockElement('');
+    const humanoidRos2ArmVelInput = createMockElement('');
+    const humanoidRos2ArmAccInput = createMockElement('');
+    const humanoidRos2WaistVelInput = createMockElement('');
+    const humanoidRos2WaistAccInput = createMockElement('');
+    const humanoidRos2PublishDefaultsStatus = createMockElement('');
     const etaCalls = [];
 
     globalThis.window = {};
@@ -244,11 +250,20 @@ test('setupHumanoidParameterControls restores, applies, and validates humanoid j
         getElementById(id) {
             if (id === 'humanoid-joint-limit-eta-input') return humanoidJointLimitEtaInput;
             if (id === 'humanoid-joint-limit-eta-status') return humanoidJointLimitEtaStatus;
+            if (id === 'humanoid-ros2-arm-vel-input') return humanoidRos2ArmVelInput;
+            if (id === 'humanoid-ros2-arm-acc-input') return humanoidRos2ArmAccInput;
+            if (id === 'humanoid-ros2-waist-vel-input') return humanoidRos2WaistVelInput;
+            if (id === 'humanoid-ros2-waist-acc-input') return humanoidRos2WaistAccInput;
+            if (id === 'humanoid-ros2-publish-defaults-status') return humanoidRos2PublishDefaultsStatus;
             return null;
         }
     };
     globalThis.localStorage = createMockLocalStorage([
-        ['humanoid-joint-limit-eta', '4.5']
+        ['humanoid-joint-limit-eta', '4.5'],
+        ['humanoid-ros2-arm-vel', '0.6'],
+        ['humanoid-ros2-arm-acc', '1.1'],
+        ['humanoid-ros2-waist-vel', '0.7'],
+        ['humanoid-ros2-waist-acc', '1.2']
     ]);
     appState.visualizer = {
         vfiConfig: {
@@ -267,6 +282,17 @@ test('setupHumanoidParameterControls restores, applies, and validates humanoid j
         assert.equal(humanoidJointLimitEtaStatus.textContent, '当前值已应用：η_θ=4.5');
         assert.equal(globalThis.window.humanoidJointLimitEta, 4.5);
         assert.deepEqual(etaCalls, [4.5]);
+        assert.equal(humanoidRos2ArmVelInput.value, '0.6');
+        assert.equal(humanoidRos2ArmAccInput.value, '1.1');
+        assert.equal(humanoidRos2WaistVelInput.value, '0.7');
+        assert.equal(humanoidRos2WaistAccInput.value, '1.2');
+        assert.equal(humanoidRos2PublishDefaultsStatus.textContent, '当前值已应用：双臂 vel/acc=0.6/1.1，腰部 vel/acc=0.7/1.2');
+        assert.deepEqual(appState.humanoidRos2PublishDefaults, {
+            armVel: 0.6,
+            armAcc: 1.1,
+            waistVel: 0.7,
+            waistAcc: 1.2
+        });
 
         humanoidJointLimitEtaInput.trigger('change', '6.2');
 
@@ -276,6 +302,18 @@ test('setupHumanoidParameterControls restores, applies, and validates humanoid j
         assert.equal(globalThis.localStorage.getItem('humanoid-joint-limit-eta'), '6.2');
         assert.deepEqual(etaCalls, [4.5, 6.2]);
 
+        humanoidRos2ArmVelInput.value = '0.9';
+        humanoidRos2ArmVelInput.trigger('change', '0.9');
+
+        assert.equal(humanoidRos2PublishDefaultsStatus.textContent, '当前值已应用：双臂 vel/acc=0.9/1.1，腰部 vel/acc=0.7/1.2');
+        assert.equal(globalThis.localStorage.getItem('humanoid-ros2-arm-vel'), '0.9');
+        assert.deepEqual(appState.humanoidRos2PublishDefaults, {
+            armVel: 0.9,
+            armAcc: 1.1,
+            waistVel: 0.7,
+            waistAcc: 1.2
+        });
+
         humanoidJointLimitEtaInput.trigger('change', 'bad');
 
         assert.equal(humanoidJointLimitEtaInput.value, '6.2');
@@ -283,6 +321,18 @@ test('setupHumanoidParameterControls restores, applies, and validates humanoid j
         assert.equal(globalThis.window.humanoidJointLimitEta, 6.2);
         assert.equal(globalThis.localStorage.getItem('humanoid-joint-limit-eta'), '6.2');
         assert.deepEqual(etaCalls, [4.5, 6.2]);
+
+        humanoidRos2WaistAccInput.value = 'bad';
+        humanoidRos2WaistAccInput.trigger('change', 'bad');
+
+        assert.equal(humanoidRos2WaistAccInput.value, '1.2');
+        assert.equal(humanoidRos2PublishDefaultsStatus.textContent, '输入无效，已恢复为 双臂(0.9/1.1) 腰部(0.7/1.2)');
+        assert.deepEqual(appState.humanoidRos2PublishDefaults, {
+            armVel: 0.9,
+            armAcc: 1.1,
+            waistVel: 0.7,
+            waistAcc: 1.2
+        });
     } finally {
         if (originalWindow === undefined) delete globalThis.window;
         else globalThis.window = originalWindow;
@@ -291,6 +341,7 @@ test('setupHumanoidParameterControls restores, applies, and validates humanoid j
         if (originalLocalStorage === undefined) delete globalThis.localStorage;
         else globalThis.localStorage = originalLocalStorage;
         appState.visualizer = originalVisualizer;
+        appState.humanoidRos2PublishDefaults = originalRos2Defaults;
     }
 });
 

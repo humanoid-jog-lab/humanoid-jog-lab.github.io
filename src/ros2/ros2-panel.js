@@ -284,6 +284,16 @@ function updateServoPublishStatus(elementId, message, type = 'info') {
     }[type] || '#94a3b8';
 }
 
+function getHumanoidRos2PublishDefaults() {
+    const defaults = appState.humanoidRos2PublishDefaults || {};
+    return {
+        armVel: Number.isFinite(defaults.armVel) ? defaults.armVel : 0.5,
+        armAcc: Number.isFinite(defaults.armAcc) ? defaults.armAcc : 1.0,
+        waistVel: Number.isFinite(defaults.waistVel) ? defaults.waistVel : 0.5,
+        waistAcc: Number.isFinite(defaults.waistAcc) ? defaults.waistAcc : 1.0
+    };
+}
+
 /**
  * 发布关节位置消息（内部函数）
  */
@@ -305,6 +315,7 @@ async function publishJointPositionMessage() {
     }
 
     try {
+        const publishDefaults = getHumanoidRos2PublishDefaults();
         const { messageData, source } = buildRobotArmServoMessageData({
             humanoidMode: !!appState.humanoidMode,
             humanoidQ: appState.humanoidQ,
@@ -314,7 +325,9 @@ async function publishJointPositionMessage() {
             jointAngles2: appState.jointAngles2,
             runMode: 1,
             robotPower: true,
-            runTime: 0
+            runTime: 0,
+            vel: publishDefaults.armVel,
+            acc: publishDefaults.armAcc
         });
 
         // 发布消息
@@ -347,10 +360,13 @@ async function publishWaistPositionMessage() {
         return false;
     }
 
+    const publishDefaults = getHumanoidRos2PublishDefaults();
     const { valid, messageData } = buildRobotServoMessageData({
         humanoidMode: !!appState.humanoidMode,
         humanoidQ: appState.humanoidQ,
-        runMode: 0
+        runMode: 0,
+        vel: publishDefaults.waistVel,
+        acc: publishDefaults.waistAcc
     });
 
     if (!valid) {

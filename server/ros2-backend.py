@@ -55,20 +55,29 @@ logger = logging.getLogger(__name__)
 
 # 导入自定义消息类型（需要先编译你的消息包）
 try:
-    from robot_control_msg.msg import Robotarmservomsg
+    from robot_control_msg.msg import Robotarmjoint
     ROBOT_ARM_MSG_AVAILABLE = True
 except ImportError:
-    Robotarmservomsg = None
+    Robotarmjoint = None
     ROBOT_ARM_MSG_AVAILABLE = False
-    logger.warning("Robotarmservomsg 未找到，将禁用机械臂自定义消息发布")
+    logger.warning("Robotarmjoint 未找到，将禁用机械臂自定义消息发布")
 
 try:
-    from robot_control_msg.msg import Robotservomsg
+    from robot_control_msg.msg import Robotlegjoint
     ROBOT_SERVO_MSG_AVAILABLE = True
 except ImportError:
-    Robotservomsg = None
+    Robotlegjoint = None
     ROBOT_SERVO_MSG_AVAILABLE = False
-    logger.warning("Robotservomsg 未找到，将禁用腰部自定义消息发布")
+    logger.warning("Robotlegjoint 未找到，将禁用腰部自定义消息发布")
+
+
+def _get_float_value(message_data: dict, primary_key: str, fallback_key: Optional[str] = None, default: float = 0.0) -> float:
+    """优先读取新字段名，兼容旧字段名，最后回退到默认值。"""
+    if primary_key in message_data:
+        return float(message_data.get(primary_key, default))
+    if fallback_key and fallback_key in message_data:
+        return float(message_data.get(fallback_key, default))
+    return float(default)
 
 
 class ROS2Node(Node):
@@ -148,17 +157,17 @@ class ROS2Node(Node):
             return self._topic_publishers[topic_name]
         
         try:
-            if message_type == 'robot_control_msg/msg/Robotarmservomsg':
+            if message_type in ('robot_control_msg/msg/Robotarmjoint', 'robot_control_msg/msg/Robotarmservomsg'):
                 if ROBOT_ARM_MSG_AVAILABLE:
-                    pub = self.create_publisher(Robotarmservomsg, topic_name, self.qos_profile)
+                    pub = self.create_publisher(Robotarmjoint, topic_name, self.qos_profile)
                 else:
-                    logger.error("Robotarmservomsg 不可用")
+                    logger.error("Robotarmjoint 不可用")
                     return None
-            elif message_type == 'robot_control_msg/msg/Robotservomsg':
+            elif message_type in ('robot_control_msg/msg/Robotlegjoint', 'robot_control_msg/msg/Robotservomsg'):
                 if ROBOT_SERVO_MSG_AVAILABLE:
-                    pub = self.create_publisher(Robotservomsg, topic_name, self.qos_profile)
+                    pub = self.create_publisher(Robotlegjoint, topic_name, self.qos_profile)
                 else:
-                    logger.error("Robotservomsg 不可用")
+                    logger.error("Robotlegjoint 不可用")
                     return None
             
             else:
@@ -384,40 +393,36 @@ class ROS2BackendServer:
         if not topic_name:
             raise Exception('话题名称不能为空')
         
-        message_type = 'robot_control_msg/msg/Robotarmservomsg'
+        message_type = 'robot_control_msg/msg/Robotarmjoint'
         publisher = self.ros2_node.create_publisher_for_topic(topic_name, message_type)
         
         if not publisher:
             raise Exception('创建发布者失败')
         
         if ROBOT_ARM_MSG_AVAILABLE:
-            msg = Robotarmservomsg()
+            msg = Robotarmjoint()
             
             # 填充左臂关节位置
-            msg.ljoint1_position = float(message_data.get('ljoint1_position', 0))
-            msg.ljoint2_position = float(message_data.get('ljoint2_position', 0))
-            msg.ljoint3_position = float(message_data.get('ljoint3_position', 0))
-            msg.ljoint4_position = float(message_data.get('ljoint4_position', 0))
-            msg.ljoint5_position = float(message_data.get('ljoint5_position', 0))
-            msg.ljoint6_position = float(message_data.get('ljoint6_position', 0))
-            msg.ljoint7_position = float(message_data.get('ljoint7_position', 0))
+            msg.ljoint1 = _get_float_value(message_data, 'ljoint1', 'ljoint1_position')
+            msg.ljoint2 = _get_float_value(message_data, 'ljoint2', 'ljoint2_position')
+            msg.ljoint3 = _get_float_value(message_data, 'ljoint3', 'ljoint3_position')
+            msg.ljoint4 = _get_float_value(message_data, 'ljoint4', 'ljoint4_position')
+            msg.ljoint5 = _get_float_value(message_data, 'ljoint5', 'ljoint5_position')
+            msg.ljoint6 = _get_float_value(message_data, 'ljoint6', 'ljoint6_position')
+            msg.ljoint7 = _get_float_value(message_data, 'ljoint7', 'ljoint7_position')
             
             # 填充右臂关节位置
-            msg.rjoint1_position = float(message_data.get('rjoint1_position', 0))
-            msg.rjoint2_position = float(message_data.get('rjoint2_position', 0))
-            msg.rjoint3_position = float(message_data.get('rjoint3_position', 0))
-            msg.rjoint4_position = float(message_data.get('rjoint4_position', 0))
-            msg.rjoint5_position = float(message_data.get('rjoint5_position', 0))
-            msg.rjoint6_position = float(message_data.get('rjoint6_position', 0))
-            msg.rjoint7_position = float(message_data.get('rjoint7_position', 0))
-            
-            # 其他字段
-            msg.run_mode = int(message_data.get('run_mode', 0))
-            msg.robot_power = bool(message_data.get('robot_power', False))
-            msg.run_time = float(message_data.get('run_time', 0))
-            
-            # 设置时间戳
-            msg.stamp = self.ros2_node.get_current_time().to_msg()
+            msg.rjoint1 = _get_float_value(message_data, 'rjoint1', 'rjoint1_position')
+            msg.rjoint2 = _get_float_value(message_data, 'rjoint2', 'rjoint2_position')
+            msg.rjoint3 = _get_float_value(message_data, 'rjoint3', 'rjoint3_position')
+            msg.rjoint4 = _get_float_value(message_data, 'rjoint4', 'rjoint4_position')
+            msg.rjoint5 = _get_float_value(message_data, 'rjoint5', 'rjoint5_position')
+            msg.rjoint6 = _get_float_value(message_data, 'rjoint6', 'rjoint6_position')
+            msg.rjoint7 = _get_float_value(message_data, 'rjoint7', 'rjoint7_position')
+
+            # 机械臂规划限制，默认速度 0.5、加速度 1.0
+            msg.vel = _get_float_value(message_data, 'vel', default=0.5)
+            msg.acc = _get_float_value(message_data, 'acc', default=1.0)
             
             publisher.publish(msg)
             
@@ -427,7 +432,7 @@ class ROS2BackendServer:
                 'message': f'机械臂控制消息已发送到: {topic_name}'
             }))
         else:
-            raise Exception('Robotarmservomsg 消息类型不可用')
+            raise Exception('Robotarmjoint 消息类型不可用')
 
     async def handle_publish_robot_servo_msg(self, ws: WebSocketServerProtocol, data: dict):
         """发布腰部/下肢控制消息"""
@@ -440,24 +445,20 @@ class ROS2BackendServer:
         if not topic_name:
             raise Exception('话题名称不能为空')
 
-        message_type = 'robot_control_msg/msg/Robotservomsg'
+        message_type = 'robot_control_msg/msg/Robotlegjoint'
         publisher = self.ros2_node.create_publisher_for_topic(topic_name, message_type)
 
         if not publisher:
             raise Exception('创建发布者失败')
 
         if ROBOT_SERVO_MSG_AVAILABLE:
-            msg = Robotservomsg()
-            msg.run_mode = int(message_data.get('run_mode', 0))
-            msg.ankle_position = float(message_data.get('ankle_position', 0))
-            msg.knee_position = float(message_data.get('knee_position', 0))
-            msg.hip_pitch_position = float(message_data.get('hip_pitch_position', 0))
-            msg.hip_yaw_position = float(message_data.get('hip_yaw_position', 0))
-            msg.x = float(message_data.get('x', 0))
-            msg.y = float(message_data.get('y', 0))
-            msg.phi = float(message_data.get('phi', 0))
-            msg.mode_leg_select = int(message_data.get('mode_leg_select', 0))
-            msg.vel = float(message_data.get('vel', 0.3))
+            msg = Robotlegjoint()
+            msg.ankle_joint = _get_float_value(message_data, 'ankle_joint', 'ankle_position')
+            msg.knee_joint = _get_float_value(message_data, 'knee_joint', 'knee_position')
+            msg.hip_pitch_joint = _get_float_value(message_data, 'hip_pitch_joint', 'hip_pitch_position')
+            msg.hip_yaw_joint = _get_float_value(message_data, 'hip_yaw_joint', 'hip_yaw_position')
+            msg.vel = _get_float_value(message_data, 'vel', default=0.5)
+            msg.acc = _get_float_value(message_data, 'acc', default=1.0)
 
             publisher.publish(msg)
 
@@ -467,7 +468,7 @@ class ROS2BackendServer:
                 'message': f'腰部控制消息已发送到: {topic_name}'
             }))
         else:
-            raise Exception('Robotservomsg 消息类型不可用')
+            raise Exception('Robotlegjoint 消息类型不可用')
     
     async def handle_unsubscribe(self, ws: WebSocketServerProtocol, data: dict):
         """取消订阅话题"""

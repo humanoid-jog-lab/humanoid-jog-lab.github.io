@@ -85,6 +85,117 @@ test('RobotVisualizer scales priority candidates to satisfy the waist x corridor
     assert.ok(result.dqApplied[0] <= 0.0010001);
 });
 
+test('RobotVisualizer safety-margin metric uses the tightest joint or waist corridor margin', () => {
+    const visualizer = new RobotVisualizer(null);
+    const problem = {
+        q: [0.95, 0.2],
+        bounds: {
+            effectiveLower: [-1, -1],
+            effectiveUpper: [1, 1]
+        },
+        inequalities: {
+            waistXCorridor: {
+                enabled: true,
+                value: 0.03,
+                min: -0.1,
+                max: 0.05,
+                violation: 0
+            }
+        }
+    };
+
+    const margin = visualizer._evaluateHumanoidJogManifoldMetricValue('safety_margin', null, '', { problem });
+
+    assert.ok(Math.abs(margin - 0.02) < 1e-12);
+});
+
+test('RobotVisualizer safety-margin gradient can use waist corridor distance before active VFI rows appear', () => {
+    const visualizer = new RobotVisualizer(null);
+    const problem = {
+        q: [0, 0],
+        bounds: {
+            effectiveLower: [-1, -1],
+            effectiveUpper: [1, 1]
+        },
+        inequalities: {
+            waistXCorridor: {
+                enabled: true,
+                value: 0.049,
+                min: Number.NEGATIVE_INFINITY,
+                max: 0.05,
+                violation: 0,
+                vfiRows: [],
+                vfiConstraints: [
+                    { row: [-2, 0], distance: 0.001, threshold: 0.12 }
+                ]
+            }
+        }
+    };
+
+    const gradient = visualizer._computeHumanoidJogManifoldMetricGradient({
+        problem,
+        metric: 'safety_margin',
+        activeCount: 2,
+        activeLimits: [
+            { lower: -1, upper: 1 },
+            { lower: -1, upper: 1 }
+        ]
+    });
+
+    assert.deepEqual(gradient, [-2, 0]);
+});
+
+test('RobotVisualizer safety-margin refinement moves away from a tight joint limit without task error', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const makeProblem = (qActive) => ({
+        q: qActive.slice(),
+        equalities: {
+            activeResidualNorm: 0,
+            residual: [],
+            jacobian: []
+        },
+        inequalities: {
+            wvfiFloor: {
+                value: 1,
+                violation: 0,
+                gradient: [0]
+            },
+            waistXCorridor: {
+                enabled: false,
+                violation: 0
+            }
+        },
+        bounds: {
+            effectiveLower: [0],
+            effectiveUpper: [1]
+        },
+        metadata: {
+            qFull: qActive.slice(),
+            cctsm: {}
+        }
+    });
+
+    const result = await visualizer._attemptHumanoidJogManifoldMetricRefinement({
+        baseProblem: makeProblem([0.99]),
+        baseQActive: [0.99],
+        metric: 'safety_margin',
+        direction: 'increase',
+        evaluateProblem: makeProblem,
+        activeCount: 1,
+        activeLimits: [{ lower: 0, upper: 1 }],
+        lowerBounds: [0],
+        upperBounds: [1],
+        stepBounds: [0.1],
+        equalityTolerance: 1e-12,
+        inequalityTolerance: 1e-12,
+        stepSize: 0.02
+    });
+
+    assert.equal(result.applied, true);
+    assert.ok(result.after > result.before);
+    assert.ok(result.refineResult.qApplied[0] < 0.99);
+});
+
 test('RobotVisualizer priority absolute full-body jog respects the waist x corridor when waist motion is active', () => {
     const visualizer = new RobotVisualizer(null);
     visualizer.humanoidMode = true;
@@ -385,7 +496,7 @@ test('RobotVisualizer local metric-only absolute w_abs_hier_vfi request skips th
         assert.equal(result, true);
         assert.equal(solveAbsoluteTargetMJRestoreCalled, false);
         assert.deepEqual(firstMetricAttempt, {
-            metric: 'w_abs_arm_vfi',
+            metric: 'safety_margin',
             preferWVFIFallbackOnClip: false,
             directionFallbackMetric: '',
             preferActiveLimitRetreat: false
@@ -687,6 +798,26 @@ test('RobotVisualizer prewarms the mj_restore worker when the solver mode switch
     assert.deepEqual(ensuredSpec, { waistChain: [1] });
 });
 
+test('RobotVisualizer prewarms the mj_restore worker when the solver mode switches to mj_restore_tr', async () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.humanoidMJWorkerModelSpec = { waistChain: [1] };
+
+    let ensuredSpec = null;
+    visualizer._canUseHumanoidJogMJRestoreWorker = () => true;
+    visualizer._getHumanoidHierarchicalVfiBlend = () => 1;
+    visualizer._getHumanoidJogMJWorkerClient = () => ({
+        ensureModel: async (modelSpec) => {
+            ensuredSpec = modelSpec;
+            return true;
+        }
+    });
+
+    visualizer.setHumanoidJogSolverMode('mj_restore_tr');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.deepEqual(ensuredSpec, { waistChain: [1] });
+});
+
 test('RobotVisualizer retains mj_restore_pre_w as the humanoid jog solver mode', () => {
     const visualizer = new RobotVisualizer(null);
 
@@ -727,6 +858,86 @@ test('RobotVisualizer absolute jog forwards mj_restore_tr into the MJ restore he
 
     assert.equal(ok, true);
     assert.deepEqual(manifoldOptions, { solverMode: 'mj_restore_tr' });
+});
+
+test('RobotVisualizer unreachable notification does not block through window.alert', () => {
+    const visualizer = new RobotVisualizer(null);
+    const originalWindow = globalThis.window;
+    const originalDocument = globalThis.document;
+    let alertCount = 0;
+
+    globalThis.window = {
+        alert: () => {
+            alertCount += 1;
+        }
+    };
+    globalThis.document = {
+        getElementById: (id) => {
+            if (id === 'humanoid-vfi-diagnostics-text') return { textContent: 'status: running' };
+            return null;
+        }
+    };
+
+    try {
+        visualizer._notifyHumanoidJogUnreachable('无法到达该位置');
+
+        assert.equal(alertCount, 0);
+        assert.equal(visualizer._lastHumanoidJogUnreachableMessage, '无法到达该位置');
+    } finally {
+        globalThis.document = originalDocument;
+        if (originalWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = originalWindow;
+        }
+    }
+});
+
+test('RobotVisualizer absolute mj_restore_tr queues the worker instead of forcing a synchronous local solve', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const currentQ = new Array(18).fill(0);
+    const absCurrent = [1, 0, 0, 0, 0, 0, 0, 0];
+    const absTarget = [1, 0, 0, 0, 0.01, 0, 0, 0];
+    const relCurrent = [1, 0, 0, 0, 0, 0, 0, 0];
+    let enqueuedRequest = null;
+    let localManifoldCalled = false;
+
+    visualizer.humanoidWaistLength = 4;
+    visualizer.humanoidLeftArmLength = 7;
+    visualizer.humanoidRightArmLength = 7;
+    visualizer._canUseHumanoidJogMJRestoreWorker = () => true;
+    visualizer._getHumanoidAbsolutePose = () => absCurrent.slice();
+    visualizer._getHumanoidRelativePose = () => relCurrent.slice();
+    visualizer._signedPoseError = () => [1];
+    visualizer._computePoseErrorNorm = () => 0.1;
+    visualizer._enqueueHumanoidJogMJRestoreWorkerRequest = (request) => {
+        enqueuedRequest = request;
+        return true;
+    };
+    visualizer._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstManifold = () => {
+        localManifoldCalled = true;
+        return false;
+    };
+
+    const result = await visualizer._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstMJRestore(
+        absTarget.slice(),
+        currentQ.slice(),
+        true,
+        true,
+        true,
+        relCurrent.slice(),
+        null,
+        {
+            solverMode: 'mj_restore_tr',
+            jogMetricOverride: 'none'
+        }
+    );
+
+    assert.equal(result, true);
+    assert.equal(localManifoldCalled, false);
+    assert.equal(enqueuedRequest?.solverMode, 'mj_restore_tr');
+    assert.equal(enqueuedRequest?.includeWaist, true);
+    assert.equal(enqueuedRequest?.keepBodyZVertical, true);
 });
 
 test('RobotVisualizer mj_restore_pre_w coalesces overlapping absolute jog requests and keeps only the latest pending request', async () => {
@@ -1774,6 +1985,9 @@ test('RobotVisualizer cooperative ruled-surface polishing can build an analytic 
         assert.equal(state.surface.kind, 'analytic_cylindrical_ruled_surface');
         assert.equal(state.surface.metadata.source, 'cylindrical-patch');
         assert.equal(state.surface.metadata.parameterization, 'analytic-cylinder');
+        assert.ok(Math.abs(state.surface.metadata.centerOffset) < 1e-12);
+        assert.ok(Math.abs(state.surface.metadata.localBBox.x - 0.227757751) < 1e-9);
+        assert.ok(Math.abs(state.surface.metadata.localBBox.z - 0.084800967) < 1e-9);
         const center = state.surface.position(0.5, 0.5);
         const edge = state.surface.position(0, 0.5);
         const relativeEdge = edge.map((value, index) => value - center[index]);
@@ -1794,6 +2008,10 @@ test('RobotVisualizer cooperative ruled-surface polishing can build an analytic 
         assert.ok(spanAlignment > 0.97, `expected cylindrical strip rulings to align strongly with the shared wiping span after the 90-degree rotation, got span=${JSON.stringify(span)}`);
         assert.equal(typeof state.surface.lineAt, 'function');
         assert.equal(typeof state.surface.tubeAt, 'function');
+        assert.ok(
+            Math.abs(state.surface.metadata.spanV - 0.600016592) < 1e-9,
+            `expected cylindrical patch spanV to match the current printable shell width, got ${state.surface.metadata.spanV}`
+        );
     } finally {
         globalThis.window = originalWindow;
     }
@@ -2269,7 +2487,7 @@ test('RobotVisualizer left ruled-surface polishing falls back to the cooperative
         assert.equal(state.surface, planeSurface);
         assert.deepEqual(capturedPose.position.map((value) => Number(value.toFixed(6))), [0.5, 0.5, -0.15]);
         assert.deepEqual(capturedPose.quaternion, [1, 0, 0, 0]);
-        assert.ok(Math.abs(capturedOptions.spanV - 0.572666) < 1e-6);
+        assert.ok(Math.abs(capturedOptions.spanV - 0.600016592) < 1e-9);
     } finally {
         globalThis.window = originalWindow;
     }
@@ -5643,7 +5861,7 @@ test('RobotVisualizer relative-target mj_restore applies task-aware metric refin
     }
 });
 
-test('RobotVisualizer relative-target mj_restore hierarchical VFI refinement uses task-arm primary before task-hier secondary', async () => {
+test('RobotVisualizer relative-target mj_restore hierarchical VFI refinement uses safety-margin primary without secondary', async () => {
     const visualizer = new RobotVisualizer(null);
     visualizer.humanoidModel = {};
     visualizer.humanoidWaistLength = 4;
@@ -5752,7 +5970,7 @@ test('RobotVisualizer relative-target mj_restore hierarchical VFI refinement use
             }
         );
         assert.equal(result, true);
-        assert.deepEqual(metricCalls, ['w_abs_arm_vfi', 'w_abs_hier_vfi']);
+        assert.deepEqual(metricCalls, ['safety_margin']);
     } finally {
         globalThis.document = originalDocument;
         if (originalWindow === undefined) {
@@ -5763,7 +5981,7 @@ test('RobotVisualizer relative-target mj_restore hierarchical VFI refinement use
     }
 });
 
-test('RobotVisualizer relative-target metric-only hierarchical VFI refinement can use the worker-side secondary metric fast path', async () => {
+test('RobotVisualizer relative-target metric-only hierarchical VFI refinement no longer requests the removed worker secondary stage', async () => {
     const visualizer = new RobotVisualizer(null);
     visualizer.humanoidModel = {
         solveAbsoluteTargetMJRestore: () => ({})
@@ -5788,7 +6006,7 @@ test('RobotVisualizer relative-target metric-only hierarchical VFI refinement ca
         return row;
     });
     let observedSecondaryMetricRequest = null;
-    let localMetricRefineCalls = 0;
+    const metricCalls = [];
     globalThis.window = {
         humanoidQ: q0.slice(),
         DQModule: { DQWrapper: {} },
@@ -5838,9 +6056,47 @@ test('RobotVisualizer relative-target metric-only hierarchical VFI refinement ca
             w: 1.9
         };
     };
-    visualizer._attemptHumanoidJogManifoldMetricRefinement = async () => {
-        localMetricRefineCalls += 1;
-        throw new Error('local refine should not run when worker metric attempt is accepted');
+    visualizer._attemptHumanoidJogManifoldMetricRefinement = async (options) => {
+        metricCalls.push(options.metric);
+        const currentProblem = {
+            metadata: {
+                cctsm: {
+                    taskMetricKind: 'relative_pose',
+                    w_task_arm_vfi: 1.8,
+                    w_task_hier_vfi: 1.8,
+                    w_task_arm: 1.75,
+                    w_task_hier: 1.9,
+                    w_vfi: 1.8,
+                    w: 1.9
+                }
+            },
+            equalities: {
+                blocks: {
+                    relative: { residual: [1e-6] },
+                    absolute: { residual: [1e-6] }
+                }
+            },
+            inequalities: {
+                wvfiFloor: { violation: 0 },
+                waistXCorridor: { violation: 0 }
+            }
+        };
+        return {
+            state: 'active',
+            before: 1.7,
+            after: 1.8,
+            applied: true,
+            finalProblem: currentProblem,
+            refineResult: {
+                converged: true,
+                reason: 'projected_candidate',
+                qApplied: q0.slice(4, 18),
+                iterations: 0,
+                acceptedIterations: 1,
+                currentProblem
+            },
+            nullspaceResult: { reason: 'accepted' }
+        };
     };
     visualizer._publishHumanoidJogDiagnostics = () => {};
     visualizer._applyHumanoidJointSolution = () => {};
@@ -5859,15 +6115,8 @@ test('RobotVisualizer relative-target metric-only hierarchical VFI refinement ca
             }
         );
         assert.equal(result, true);
-        assert.deepEqual(observedSecondaryMetricRequest, {
-            metric: 'w_abs_hier_vfi',
-            metricMode: 'relative',
-            stepSize: 0.01,
-            restoreMaxIterations: 24,
-            waistActiveCount: 0,
-            hierarchicalVfiBlend: 1
-        });
-        assert.equal(localMetricRefineCalls, 0);
+        assert.equal(observedSecondaryMetricRequest, null);
+        assert.deepEqual(metricCalls, ['safety_margin']);
     } finally {
         globalThis.document = originalDocument;
         if (originalWindow === undefined) {
@@ -6001,7 +6250,7 @@ test('RobotVisualizer distance-target mj_restore applies task-aware metric refin
         );
         assert.equal(result, true);
         assert.ok(firstMetricAttempt);
-        assert.deepEqual(metricCalls, ['w_abs_arm_vfi', 'w_abs_hier_vfi']);
+        assert.deepEqual(metricCalls, ['safety_margin']);
         assert.equal(firstMetricAttempt.baseProblem?.metadata?.metricMode, 'relative');
         assert.equal(firstMetricAttempt.baseProblem?.metadata?.cctsm?.taskMetricKind, 'relative_pose');
         assert.equal(firstMetricAttempt.baseProblem?.metadata?.Jcmd?.length, 6);
@@ -6016,7 +6265,7 @@ test('RobotVisualizer distance-target mj_restore applies task-aware metric refin
     }
 });
 
-test('RobotVisualizer distance-target mj_restore hierarchical VFI refinement uses task-arm primary before task-hier secondary', async () => {
+test('RobotVisualizer distance-target mj_restore hierarchical VFI refinement uses safety-margin primary without secondary', async () => {
     const visualizer = new RobotVisualizer(null);
     visualizer.humanoidModel = {};
     visualizer.humanoidWaistLength = 4;
@@ -6149,7 +6398,7 @@ test('RobotVisualizer distance-target mj_restore hierarchical VFI refinement use
             }
         );
         assert.equal(result, true);
-        assert.deepEqual(metricCalls, ['w_abs_arm_vfi', 'w_abs_hier_vfi']);
+        assert.deepEqual(metricCalls, ['safety_margin']);
     } finally {
         globalThis.document = originalDocument;
         if (originalWindow === undefined) {
@@ -6160,7 +6409,7 @@ test('RobotVisualizer distance-target mj_restore hierarchical VFI refinement use
     }
 });
 
-test('RobotVisualizer distance-target metric-only hierarchical VFI refinement can use the worker-side secondary metric fast path', async () => {
+test('RobotVisualizer distance-target metric-only hierarchical VFI refinement no longer requests the removed worker secondary stage', async () => {
     const visualizer = new RobotVisualizer(null);
     visualizer.humanoidModel = {
         solveAbsoluteTargetMJRestore: () => ({})
@@ -6187,7 +6436,7 @@ test('RobotVisualizer distance-target metric-only hierarchical VFI refinement ca
         return row;
     });
     let observedSecondaryMetricRequest = null;
-    let localMetricRefineCalls = 0;
+    const metricCalls = [];
     globalThis.window = {
         humanoidQ: q0.slice(),
         DQModule: {
@@ -6247,9 +6496,48 @@ test('RobotVisualizer distance-target metric-only hierarchical VFI refinement ca
             w: 2.0
         };
     };
-    visualizer._attemptHumanoidJogManifoldMetricRefinement = async () => {
-        localMetricRefineCalls += 1;
-        throw new Error('local refine should not run when worker metric attempt is accepted');
+    visualizer._attemptHumanoidJogManifoldMetricRefinement = async (options) => {
+        metricCalls.push(options.metric);
+        const currentProblem = {
+            metadata: {
+                cctsm: {
+                    taskMetricKind: 'relative_pose',
+                    w_task_arm_vfi: 1.9,
+                    w_task_hier_vfi: 1.9,
+                    w_task_arm: 1.85,
+                    w_task_hier: 2.0,
+                    w_vfi: 1.9,
+                    w: 2.0
+                }
+            },
+            equalities: {
+                blocks: {
+                    command: { residual: [1e-6] },
+                    absolute: { residual: [1e-6] },
+                    relative: { residual: [] }
+                }
+            },
+            inequalities: {
+                wvfiFloor: { violation: 0 },
+                waistXCorridor: { violation: 0 }
+            }
+        };
+        return {
+            state: 'active',
+            before: 1.8,
+            after: 1.9,
+            applied: true,
+            finalProblem: currentProblem,
+            refineResult: {
+                converged: true,
+                reason: 'projected_candidate',
+                qApplied: q0.slice(4, 18),
+                iterations: 0,
+                acceptedIterations: 1,
+                currentProblem
+            },
+            nullspaceResult: { reason: 'accepted' }
+        };
     };
     visualizer._publishHumanoidJogDiagnostics = () => {};
     visualizer._applyHumanoidJointSolution = () => {};
@@ -6268,15 +6556,8 @@ test('RobotVisualizer distance-target metric-only hierarchical VFI refinement ca
             }
         );
         assert.equal(result, true);
-        assert.deepEqual(observedSecondaryMetricRequest, {
-            metric: 'w_abs_hier_vfi',
-            metricMode: 'relative',
-            stepSize: 0.01,
-            restoreMaxIterations: 24,
-            waistActiveCount: 0,
-            hierarchicalVfiBlend: 1
-        });
-        assert.equal(localMetricRefineCalls, 0);
+        assert.equal(observedSecondaryMetricRequest, null);
+        assert.deepEqual(metricCalls, ['safety_margin']);
     } finally {
         globalThis.document = originalDocument;
         if (originalWindow === undefined) {
@@ -7647,6 +7928,89 @@ test('RobotVisualizer routes full-body upright mj_restore pose jogs with waist r
     assert.ok(Array.isArray(manifoldArgs));
     assert.equal(manifoldArgs[6]?.solverMode, 'mj_restore');
     assert.equal(manifoldArgs[6]?.preferWorker, false);
+});
+
+test('RobotVisualizer mj_restore_tr does not run hidden arm-only fallback by default', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const originalWindow = globalThis.window;
+    const originalDocument = globalThis.document;
+    const q0 = new Array(18).fill(0);
+    const target = [1, 0, 0, 0, 0.01, 0, 0, 0];
+    const relative = [1, 0, 0, 0, 0, 0, 0, 0];
+    let callCount = 0;
+    let unreachableCount = 0;
+
+    visualizer.humanoidModel = {};
+    visualizer.humanoidWaistLength = 4;
+    visualizer.humanoidLeftArmLength = 7;
+    visualizer.humanoidRightArmLength = 7;
+    visualizer.vfiConfig = {
+        mjRestoreMaxIter: 1,
+        mjRestorePolishActivationResidual: 0,
+        mjRestoreEnableNullspaceRefine: false
+    };
+    visualizer._getHumanoidAbsolutePose = () => [1, 0, 0, 0, 0, 0, 0, 0];
+    visualizer._getHumanoidRelativePose = () => relative.slice();
+    visualizer._getHumanoidAbsolutePoseJacobian = () => Array.from({ length: 8 }, () => new Array(18).fill(0));
+    visualizer._getHumanoidRelativePoseJacobian = () => Array.from({ length: 8 }, () => new Array(18).fill(0));
+    visualizer._getHumanoidBodyVerticalState = (_q, _armStart, activeCount) => ({
+        error: [0],
+        errorNorm: 0,
+        Jrows: [new Array(activeCount).fill(0)]
+    });
+    visualizer._getHumanoidJointLimits = () => new Array(18).fill(null).map(() => ({ lower: -Math.PI, upper: Math.PI }));
+    visualizer._buildManipulabilityVFIConstraints = () => [];
+    visualizer._computeModeCCTSM = () => ({
+        w: 0,
+        w_vfi: 0,
+        w_abs: 0,
+        w_abs_hier: 0,
+        w_abs_hier_vfi: 0,
+        w_abs_arm: 0,
+        w_abs_arm_vfi: 0,
+        w_abs_vfi: 0,
+        w_cmd: 0
+    });
+    visualizer._publishHumanoidJogDiagnostics = () => {};
+    visualizer._applyHumanoidJointSolution = () => {};
+    visualizer._notifyHumanoidJogUnreachable = () => {
+        unreachableCount += 1;
+    };
+
+    const originalMethod = visualizer._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstManifold.bind(visualizer);
+    visualizer._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstManifold = (...args) => {
+        callCount += 1;
+        return originalMethod(...args);
+    };
+
+    globalThis.window = { humanoidQ: q0.slice() };
+    globalThis.document = { getElementById: () => null };
+
+    try {
+        const result = await visualizer._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstManifold(
+            target.slice(),
+            q0.slice(),
+            false,
+            true,
+            true,
+            relative.slice(),
+            {
+                solverMode: 'mj_restore_tr',
+                jogMetricOverride: 'none',
+                preferWorker: false
+            }
+        );
+
+        assert.equal(result, true);
+        assert.equal(callCount, 1);
+        assert.equal(unreachableCount, 1);
+        assert.equal(visualizer.lastIKSolveStatus?.converged, false);
+    } finally {
+        if (originalWindow === undefined) delete globalThis.window;
+        else globalThis.window = originalWindow;
+        if (originalDocument === undefined) delete globalThis.document;
+        else globalThis.document = originalDocument;
+    }
 });
 
 

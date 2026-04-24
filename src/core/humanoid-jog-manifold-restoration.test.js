@@ -190,6 +190,30 @@ test('restoreHumanoidJogManifold respects effective step bounds and can stop at 
     assert.ok(result.acceptedIterations >= 1);
 });
 
+test('restoreHumanoidJogManifold stops instead of overrunning a synchronous solve budget', () => {
+    const result = restoreHumanoidJogManifold({
+        qInitial: [0],
+        evaluateProblem: (q) => buildSimpleProblem(q, {
+            target: [2],
+            jacobian: [[1]],
+            lower: [-10],
+            upper: [10],
+            qCurrent: [0],
+            step: [10]
+        }),
+        maxIterations: 100,
+        maxSolveMs: 0,
+        nowMs: () => 0,
+        equalityTolerance: 1e-12
+    });
+
+    assert.equal(result.converged, false);
+    assert.equal(result.reason, 'time_budget_exceeded');
+    assert.equal(result.timeBudgetExceeded, true);
+    assert.equal(result.iterations, 1);
+    assert.deepEqual(result.qApplied, [0]);
+});
+
 test('restoreHumanoidJogManifold shrinks steps to satisfy waist corridor VFI rows near the boundary', () => {
     const result = restoreHumanoidJogManifold({
         qInitial: [0],

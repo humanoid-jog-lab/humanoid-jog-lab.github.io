@@ -5,6 +5,13 @@ export const DEFAULT_HUMANOID_IGNORED_JOINTS = new Set([
     'right_wheel_joint'
 ]);
 
+function normalizeHumanoidFeedbackJointPosition(jointName, value) {
+    if (jointName === 'hip_yaw_joint') {
+        return -value;
+    }
+    return value;
+}
+
 export function mapHumanoidJointPositions({
     messageNames,
     positions,
@@ -31,7 +38,7 @@ export function mapHumanoidJointPositions({
         if (!jointName || ignored.has(jointName)) continue;
         const value = Number(positions[i]);
         if (!Number.isFinite(value)) continue;
-        nameToPosition.set(jointName, value);
+        nameToPosition.set(jointName, normalizeHumanoidFeedbackJointPosition(jointName, value));
     }
 
     const nextQ = [...currentQ];

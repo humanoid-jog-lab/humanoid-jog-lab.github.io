@@ -191,6 +191,8 @@ export class ROS2Communicator {
                 break;
 
             case 'published':
+                break;
+
             case 'warn':
             case 'info':
                 console.log(msg);

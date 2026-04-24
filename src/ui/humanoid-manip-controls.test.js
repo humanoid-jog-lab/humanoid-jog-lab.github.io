@@ -63,7 +63,7 @@ test('index.html exposes the humanoid dual-arm test lock toggle', () => {
     assert.match(html, /ljoint2∈\[-0\.1,0\.2\], rjoint2∈\[-0\.2,0\.1\]/);
 });
 
-test('index.html exposes the humanoid parameter panel with a joint-limit eta input', () => {
+test('index.html exposes the humanoid parameter panel with joint-limit eta and ROS2 publish default inputs', () => {
     const html = readFileSync(resolve(ROOT, 'index.html'), 'utf8');
 
     assert.match(html, /id="parameter-panel"/);
@@ -72,6 +72,12 @@ test('index.html exposes the humanoid parameter panel with a joint-limit eta inp
     assert.match(html, /id="humanoid-joint-limit-eta-input"/);
     assert.match(html, /id="humanoid-joint-limit-eta-status"/);
     assert.match(html, /关节极限 VFI η_θ/);
+    assert.match(html, /ROS 2 发布默认值/);
+    assert.match(html, /id="humanoid-ros2-arm-vel-input"/);
+    assert.match(html, /id="humanoid-ros2-arm-acc-input"/);
+    assert.match(html, /id="humanoid-ros2-waist-vel-input"/);
+    assert.match(html, /id="humanoid-ros2-waist-acc-input"/);
+    assert.match(html, /id="humanoid-ros2-publish-defaults-status"/);
 });
 
 test('index.html exposes the humanoid single-arm-plus-waist control modes', () => {

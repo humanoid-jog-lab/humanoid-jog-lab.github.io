@@ -128,6 +128,12 @@ export const appState = {
     ros2JointStateButton: null,
     ros2JointStatusElement: null,
     ros2BatteryStateSubscribed: false,
+    humanoidRos2PublishDefaults: {
+        armVel: 0.5,
+        armAcc: 1.0,
+        waistVel: 0.5,
+        waistAcc: 1.0
+    },
 };
 
 /**

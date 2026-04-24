@@ -137,15 +137,32 @@ function buildWaistXCorridorConstraint(waistXCorridor, q) {
             value: Number.NaN,
             violation: 0,
             vfiRows: [],
-            rhs: []
+            rhs: [],
+            vfiConstraints: []
         };
     }
+    const width = Array.isArray(q) ? q.length : 0;
     const value = asFinite(waistXCorridor.evaluateX(q), Number.NaN);
     const min = Number.isFinite(waistXCorridor.min) ? waistXCorridor.min : Number.NEGATIVE_INFINITY;
     const max = Number.isFinite(waistXCorridor.max) ? waistXCorridor.max : Number.POSITIVE_INFINITY;
     const tolerance = Math.max(0, asFinite(waistXCorridor.tolerance, 0));
     const vfiRows = asRows(waistXCorridor.vfiRows);
     const rhs = asVector(waistXCorridor.rhs);
+    const vfiConstraints = (Array.isArray(waistXCorridor.vfiConstraints) ? waistXCorridor.vfiConstraints : [])
+        .map((constraint) => {
+            const row = asRows([constraint?.row], width)[0] ?? [];
+            return {
+                ...constraint,
+                row,
+                distance: asFinite(constraint?.distance, Number.NaN),
+                threshold: asFinite(constraint?.threshold, Number.NaN)
+            };
+        })
+        .filter((constraint) =>
+            Array.isArray(constraint.row) &&
+            constraint.row.length === width &&
+            Number.isFinite(constraint.distance)
+        );
     const violationLow = Number.isFinite(value) ? Math.max(0, (min - tolerance) - value) : Number.POSITIVE_INFINITY;
     const violationHigh = Number.isFinite(value) ? Math.max(0, value - (max + tolerance)) : Number.POSITIVE_INFINITY;
     return {
@@ -158,7 +175,8 @@ function buildWaistXCorridorConstraint(waistXCorridor, q) {
         rhs,
         violationLow,
         violationHigh,
-        violation: Math.max(violationLow, violationHigh)
+        violation: Math.max(violationLow, violationHigh),
+        vfiConstraints
     };
 }
 

@@ -2,6 +2,13 @@ function asFinite(value, fallback = 0) {
     return Number.isFinite(value) ? value : fallback;
 }
 
+function defaultNowMs() {
+    if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
+        return performance.now();
+    }
+    return Date.now();
+}
+
 function dot(a, b) {
     const n = Math.min(Array.isArray(a) ? a.length : 0, Array.isArray(b) ? b.length : 0);
     let sum = 0;
@@ -427,7 +434,9 @@ export function restoreHumanoidJogMJTrustRegion({
     trustRegionExpandFactor = 1.75,
     rhoAcceptanceThreshold = 0.05,
     rhoShrinkThreshold = 0.05,
-    rhoExpandThreshold = 0.75
+    rhoExpandThreshold = 0.75,
+    maxSolveMs = Number.POSITIVE_INFINITY,
+    nowMs = defaultNowMs
 } = {}) {
     const qStart = Array.isArray(qInitial) ? qInitial.slice() : [];
     const normalizedRegularizationWeights = normalizeRegularizationWeights(regularizationWeights, qStart.length);
@@ -453,7 +462,8 @@ export function restoreHumanoidJogMJTrustRegion({
         lastRejectedActualReduction: Number.NaN,
         lastRejectedReason: '',
         bestConstraintViolation: Number.POSITIVE_INFINITY,
-        filterSize: 1
+        filterSize: 1,
+        timeBudgetExceeded: false
     };
     if (typeof evaluateProblem !== 'function') return result;
 
@@ -467,6 +477,17 @@ export function restoreHumanoidJogMJTrustRegion({
     const maxRadiusRetries = Math.max(1, Math.floor(asFinite(maxTrustRegionRetries, 6)));
     const shrinkFactor = Math.min(0.99, Math.max(0.1, asFinite(trustRegionShrinkFactor, 0.5)));
     const expandFactor = Math.max(1.01, asFinite(trustRegionExpandFactor, 1.75));
+    const solveClock = typeof nowMs === 'function' ? nowMs : defaultNowMs;
+    const solveStartMs = solveClock();
+    const rawSolveBudgetMs = Number(maxSolveMs);
+    const solveBudgetMs = Number.isFinite(rawSolveBudgetMs)
+        ? Math.max(0, rawSolveBudgetMs)
+        : Number.POSITIVE_INFINITY;
+    const hasSolveBudget = Number.isFinite(solveBudgetMs);
+    const isSolveBudgetExceeded = () => (
+        hasSolveBudget &&
+        solveClock() - solveStartMs >= solveBudgetMs
+    );
 
     let qCurrent = qStart.slice();
     let currentProblem = evaluateProblem(qCurrent.slice());
@@ -497,9 +518,23 @@ export function restoreHumanoidJogMJTrustRegion({
     let previousAcceptedStep = new Array(qStart.length).fill(0);
     const startPhi = currentPhi;
     const startTheta = currentTheta;
+    const finishTimeBudget = () => {
+        result.reason = hasAccepted ? 'best_effort_time_budget' : 'time_budget_exceeded';
+        result.qApplied = hasAccepted ? qAccepted.slice() : qStart.slice();
+        result.currentProblem = hasAccepted ? acceptedProblem : currentProblem;
+        result.currentResidualNorm = hasAccepted ? acceptedPhi : currentPhi;
+        result.bestConstraintViolation = Math.min(result.bestConstraintViolation, hasAccepted ? acceptedTheta : currentTheta);
+        result.trustRadius = trustRadius;
+        result.filterSize = filter.length;
+        result.timeBudgetExceeded = true;
+        return result;
+    };
 
     for (let iter = 0; iter < maxIters; iter++) {
         result.iterations = iter + 1;
+        if (isSolveBudgetExceeded()) {
+            return finishTimeBudget();
+        }
         let acceptedTrial = null;
         let lastReferenceResidual = [];
         let lastConstraintMotion = [];
@@ -518,6 +553,9 @@ export function restoreHumanoidJogMJTrustRegion({
             if (!Array.isArray(dq) || dq.length !== qCurrent.length || vectorNorm(dq) <= 1e-18) continue;
 
             for (let radiusAttempt = 0; radiusAttempt < maxRadiusRetries; radiusAttempt++) {
+                if (isSolveBudgetExceeded()) {
+                    return finishTimeBudget();
+                }
                 const clippedStep = clipStepToTrustRegion(dq, candidateRadius);
                 if (clippedStep.stepNorm <= 1e-18) break;
                 const qTrial = projectStateToBounds(addScaledStep(qCurrent, clippedStep.dq, 1), currentProblem?.bounds);

@@ -8,6 +8,7 @@ const SUPPORTED_MANIFOLD_JOG_METRICS = new Set([
     'w_abs_vfi',
     'w_abs_hier',
     'w_abs_hier_vfi',
+    'safety_margin',
     'sigma'
 ]);
 

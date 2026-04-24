@@ -38,6 +38,8 @@ test('buildRobotArmServoMessageData uses humanoidQ for humanoid mode arms', () =
     assert.equal(result.source, 'humanoid');
     assert.equal(result.messageData.run_mode, 1);
     assert.equal(result.messageData.robot_power, true);
+    assert.equal(result.messageData.vel, 0.5);
+    assert.equal(result.messageData.acc, 1.0);
     assert.equal(result.messageData.ljoint1_position, -0.36757);
     assert.equal(result.messageData.ljoint7_position, 0.03948);
     assert.equal(result.messageData.rjoint1_position, 0.36758);
@@ -51,20 +53,24 @@ test('buildRobotArmServoMessageData keeps existing dual-arm mapping', () => {
         jointAngles2: [-1, -2, -3, -4, -5, -6, -7],
         runMode: 2,
         robotPower: false,
-        runTime: 3.5
+        runTime: 3.5,
+        vel: 0.8,
+        acc: 1.6
     });
 
     assert.equal(result.source, 'dual-arm');
     assert.equal(result.messageData.run_mode, 2);
     assert.equal(result.messageData.robot_power, false);
     assert.equal(result.messageData.run_time, 3.5);
+    assert.equal(result.messageData.vel, 0.8);
+    assert.equal(result.messageData.acc, 1.6);
     assert.equal(result.messageData.ljoint1_position, -1);
     assert.equal(result.messageData.ljoint7_position, -7);
     assert.equal(result.messageData.rjoint1_position, 1);
     assert.equal(result.messageData.rjoint7_position, 7);
 });
 
-test('buildRobotServoMessageData uses humanoid waist joints and defaults run_mode to 0 and vel to 0.3', () => {
+test('buildRobotServoMessageData uses humanoid waist joints and defaults run_mode to 0 and vel/acc to 0.5/1.0', () => {
     const result = buildRobotServoMessageData({
         humanoidMode: true,
         humanoidQ: [-0.3, 0.9, -0.6, 0.2, 10, 11]
@@ -76,12 +82,13 @@ test('buildRobotServoMessageData uses humanoid waist joints and defaults run_mod
         ankle_position: -0.3,
         knee_position: 0.9,
         hip_pitch_position: -0.6,
-        hip_yaw_position: 0.2,
+        hip_yaw_position: -0.2,
         x: 0,
         y: 0,
         phi: 0,
         mode_leg_select: 0,
-        vel: 0.3
+        vel: 0.5,
+        acc: 1.0
     });
 });
 
@@ -93,5 +100,5 @@ test('buildRobotServoMessageData marks non-humanoid state invalid', () => {
 
     assert.equal(result.valid, false);
     assert.equal(result.messageData.ankle_position, 1);
-    assert.equal(result.messageData.hip_yaw_position, 4);
+    assert.equal(result.messageData.hip_yaw_position, -4);
 });

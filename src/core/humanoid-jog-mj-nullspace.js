@@ -15,7 +15,7 @@ export function shouldUseHumanoidJogMJProjectionOnlyMetricStep({
     const requested = typeof requestedMetric === 'string' ? requestedMetric.trim() : '';
     const stage = typeof stageMetric === 'string' ? stageMetric.trim() : '';
     if (requested !== 'w_abs_hier_vfi') return false;
-    return stage === 'w_abs_arm_vfi' || stage === 'w_abs_hier_vfi';
+    return stage === 'safety_margin' || stage === 'w_abs_arm_vfi' || stage === 'w_abs_hier_vfi';
 }
 
 export function resolveHumanoidJogMJProjectionPasses({
@@ -41,7 +41,7 @@ export function resolveHumanoidJogMJProjectionRetreatRestoreConfig({
         ? Math.max(1, Math.floor(configuredMaxIterations))
         : 8;
     const metric = typeof projectionMetric === 'string' ? projectionMetric.trim() : '';
-    if (metric === 'w_abs_arm_vfi' || metric === 'w_abs_hier_vfi') {
+    if (metric === 'safety_margin' || metric === 'w_abs_arm_vfi' || metric === 'w_abs_hier_vfi') {
         return {
             useManifoldRestore: true,
             maxIterations: Math.min(normalizedIterations, 2)
@@ -137,8 +137,7 @@ export function buildHumanoidJogMJWorkerSecondaryMetricRequest({
     const normalizedMetric = typeof metric === 'string' ? metric.trim() : '';
     if (normalizedMetric !== 'w_abs_arm' &&
         normalizedMetric !== 'w_abs_arm_vfi' &&
-        normalizedMetric !== 'w_abs_hier' &&
-        normalizedMetric !== 'w_abs_hier_vfi') {
+        normalizedMetric !== 'w_abs_hier') {
         return null;
     }
     const normalizedMetricMode = typeof metricMode === 'string' && metricMode.trim().length > 0

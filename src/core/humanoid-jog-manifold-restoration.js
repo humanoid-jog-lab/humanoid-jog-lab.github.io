@@ -2,6 +2,13 @@ function asFinite(value, fallback = 0) {
     return Number.isFinite(value) ? value : fallback;
 }
 
+function defaultNowMs() {
+    if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
+        return performance.now();
+    }
+    return Date.now();
+}
+
 function dot(a, b) {
     const n = Math.min(Array.isArray(a) ? a.length : 0, Array.isArray(b) ? b.length : 0);
     let sum = 0;
@@ -165,7 +172,9 @@ export function restoreHumanoidJogManifold({
     minScale = 1e-6,
     reductionFactor = 0.5,
     equalityTolerance = 1e-12,
-    inequalityTolerance = 1e-12
+    inequalityTolerance = 1e-12,
+    maxSolveMs = Number.POSITIVE_INFINITY,
+    nowMs = defaultNowMs
 } = {}) {
     const qStart = Array.isArray(qInitial) ? qInitial.slice() : [];
     const result = {
@@ -177,7 +186,8 @@ export function restoreHumanoidJogManifold({
         lastAcceptedScale: 0,
         lastStep: null,
         currentProblem: null,
-        currentResidualNorm: Number.NaN
+        currentResidualNorm: Number.NaN,
+        timeBudgetExceeded: false
     };
     if (typeof evaluateProblem !== 'function') return result;
 
@@ -207,9 +217,31 @@ export function restoreHumanoidJogManifold({
     const minStepScale = Math.max(1e-8, asFinite(minScale, 1e-6));
     const shrink = Math.min(0.99, Math.max(0.01, asFinite(reductionFactor, 0.5)));
     const improvementTolerance = Math.max(1e-15, Math.min(1e-12, Math.max(0, equalityTolerance) * 1e-3));
+    const solveClock = typeof nowMs === 'function' ? nowMs : defaultNowMs;
+    const solveStartMs = solveClock();
+    const rawSolveBudgetMs = Number(maxSolveMs);
+    const solveBudgetMs = Number.isFinite(rawSolveBudgetMs)
+        ? Math.max(0, rawSolveBudgetMs)
+        : Number.POSITIVE_INFINITY;
+    const hasSolveBudget = Number.isFinite(solveBudgetMs);
+    const isSolveBudgetExceeded = () => (
+        hasSolveBudget &&
+        solveClock() - solveStartMs >= solveBudgetMs
+    );
+    const finishTimeBudget = () => {
+        result.reason = hasAccepted ? 'best_effort_time_budget' : 'time_budget_exceeded';
+        result.qApplied = hasAccepted ? qAccepted.slice() : qStart.slice();
+        result.currentProblem = hasAccepted ? acceptedProblem : currentProblem;
+        result.currentResidualNorm = hasAccepted ? acceptedResidualNorm : currentResidualNorm;
+        result.timeBudgetExceeded = true;
+        return result;
+    };
 
     for (let iter = 0; iter < maxIters; iter++) {
         result.iterations = iter + 1;
+        if (isSolveBudgetExceeded()) {
+            return finishTimeBudget();
+        }
         const dq = buildHumanoidJogManifoldRestorationStep(currentProblem, {
             damping,
             referenceStiffness,
@@ -227,6 +259,9 @@ export function restoreHumanoidJogManifold({
 
         let acceptedTrial = null;
         for (let scale = scale0; scale >= minStepScale; scale *= shrink) {
+            if (isSolveBudgetExceeded()) {
+                return finishTimeBudget();
+            }
             const dqTrial = dq.map((value) => scale * asFinite(value));
             if (stepInequalityViolation(currentProblem, dqTrial) > inequalityTolerance) {
                 if (scale <= minStepScale) break;

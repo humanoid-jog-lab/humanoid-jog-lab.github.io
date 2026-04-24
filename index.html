@@ -509,6 +509,58 @@
                     </div>
                 </div>
             </div>
+            <div class="panel-section">
+                <h2>ROS 2 发布默认值</h2>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
+                    <div style="display: flex; flex-direction: column; gap: 0.35rem;">
+                        <label for="humanoid-ros2-arm-vel-input" style="font-size: 0.85rem; color: #e2e8f0;">双臂 vel</label>
+                        <input
+                            id="humanoid-ros2-arm-vel-input"
+                            type="number"
+                            step="0.1"
+                            min="0"
+                            placeholder="0.5"
+                            style="width: 100%; padding: 0.5rem 0.6rem; font-size: 0.9rem; background: #1e293b; color: #e2e8f0; border: 1px solid #334155; border-radius: 6px;"
+                        >
+                    </div>
+                    <div style="display: flex; flex-direction: column; gap: 0.35rem;">
+                        <label for="humanoid-ros2-arm-acc-input" style="font-size: 0.85rem; color: #e2e8f0;">双臂 acc</label>
+                        <input
+                            id="humanoid-ros2-arm-acc-input"
+                            type="number"
+                            step="0.1"
+                            min="0"
+                            placeholder="1.0"
+                            style="width: 100%; padding: 0.5rem 0.6rem; font-size: 0.9rem; background: #1e293b; color: #e2e8f0; border: 1px solid #334155; border-radius: 6px;"
+                        >
+                    </div>
+                    <div style="display: flex; flex-direction: column; gap: 0.35rem;">
+                        <label for="humanoid-ros2-waist-vel-input" style="font-size: 0.85rem; color: #e2e8f0;">腰部 vel</label>
+                        <input
+                            id="humanoid-ros2-waist-vel-input"
+                            type="number"
+                            step="0.1"
+                            min="0"
+                            placeholder="0.5"
+                            style="width: 100%; padding: 0.5rem 0.6rem; font-size: 0.9rem; background: #1e293b; color: #e2e8f0; border: 1px solid #334155; border-radius: 6px;"
+                        >
+                    </div>
+                    <div style="display: flex; flex-direction: column; gap: 0.35rem;">
+                        <label for="humanoid-ros2-waist-acc-input" style="font-size: 0.85rem; color: #e2e8f0;">腰部 acc</label>
+                        <input
+                            id="humanoid-ros2-waist-acc-input"
+                            type="number"
+                            step="0.1"
+                            min="0"
+                            placeholder="1.0"
+                            style="width: 100%; padding: 0.5rem 0.6rem; font-size: 0.9rem; background: #1e293b; color: #e2e8f0; border: 1px solid #334155; border-radius: 6px;"
+                        >
+                    </div>
+                </div>
+                <div id="humanoid-ros2-publish-defaults-status" style="font-size: 0.78rem; color: #94a3b8; margin-top: 0.6rem;">
+                    当前值已应用
+                </div>
+            </div>
         </div>
     </div>
 
@@ -762,7 +814,7 @@
             </div>
 
             <div class="panel-section">
-                <h3>关节位置发布 (RobotArmServoMsg)</h3>
+                <h3>关节位置发布 (Robotarmjoint)</h3>
                 <div style="margin-bottom: 0.75rem;">
                     <label style="font-size: 0.85rem; color: #cbd5e1; display: block; margin-bottom: 0.25rem;">
                         话题名称：
@@ -770,8 +822,8 @@
                     <input 
                         type="text" 
                         id="ros2-joint-position-topic" 
-                        placeholder="/arm_axis_position_cmd" 
-                        value="/arm_axis_position_cmd"
+                        placeholder="/arm_joint_absolute_cmd" 
+                        value="/arm_joint_absolute_cmd"
                         style="width: 100%; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;"
                     >
                 </div>
@@ -790,7 +842,7 @@
             </div>
 
             <div class="panel-section">
-                <h3>腰部位置发布 (RobotServoMsg)</h3>
+                <h3>腰部位置发布 (Robotlegjoint)</h3>
                 <div style="margin-bottom: 0.75rem;">
                     <label style="font-size: 0.85rem; color: #cbd5e1; display: block; margin-bottom: 0.25rem;">
                         话题名称：
@@ -798,8 +850,8 @@
                     <input
                         type="text"
                         id="ros2-waist-position-topic"
-                        placeholder="/axis_position_cmd"
-                        value="/axis_position_cmd"
+                        placeholder="/leg_joint_position_cmd"
+                        value="/leg_joint_position_cmd"
                         style="width: 100%; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;"
                     >
                 </div>

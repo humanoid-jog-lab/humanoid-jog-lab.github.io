@@ -48,6 +48,14 @@ function readHumanoidSlice(humanoidQ, start, count) {
     return out;
 }
 
+function normalizeHumanoidPublishJointPosition(jointName, value) {
+    const numeric = toFiniteNumber(value, 0);
+    if (jointName === 'hip_yaw_joint') {
+        return -numeric;
+    }
+    return numeric;
+}
+
 export function buildRobotArmServoMessageData({
     humanoidMode = false,
     humanoidQ = [],
@@ -57,12 +65,16 @@ export function buildRobotArmServoMessageData({
     jointAngles2 = [],
     runMode = 1,
     robotPower = true,
-    runTime = 0
+    runTime = 0,
+    vel = 0.5,
+    acc = 1.0
 } = {}) {
     const messageData = {
         run_mode: toFiniteNumber(runMode, 1),
         robot_power: Boolean(robotPower),
-        run_time: toFiniteNumber(runTime, 0)
+        run_time: toFiniteNumber(runTime, 0),
+        vel: toFiniteNumber(vel, 0.5),
+        acc: toFiniteNumber(acc, 1.0)
     };
 
     let source = 'single-arm';
@@ -102,7 +114,8 @@ export function buildRobotServoMessageData({
     y = 0,
     phi = 0,
     modeLegSelect = 0,
-    vel = 0.3
+    vel = 0.5,
+    acc = 1.0
 } = {}) {
     const waistValues = readHumanoidSlice(humanoidQ, 0, HUMANOID_WAIST_JOINT_NAMES.length);
 
@@ -113,12 +126,13 @@ export function buildRobotServoMessageData({
             ankle_position: waistValues[0],
             knee_position: waistValues[1],
             hip_pitch_position: waistValues[2],
-            hip_yaw_position: waistValues[3],
+            hip_yaw_position: normalizeHumanoidPublishJointPosition('hip_yaw_joint', waistValues[3]),
             x: toFiniteNumber(x, 0),
             y: toFiniteNumber(y, 0),
             phi: toFiniteNumber(phi, 0),
             mode_leg_select: toFiniteNumber(modeLegSelect, 0),
-            vel: toFiniteNumber(vel, 0.3)
+            vel: toFiniteNumber(vel, 0.5),
+            acc: toFiniteNumber(acc, 1.0)
         }
     };
 }

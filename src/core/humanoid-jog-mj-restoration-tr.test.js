@@ -175,3 +175,20 @@ test('restoreHumanoidJogMJTrustRegion respects joint-limit VFI step rows during 
     assert.ok(result.qApplied[0] <= 0.1 + 1e-9);
     assert.ok(result.qApplied[0] > 0);
 });
+
+test('restoreHumanoidJogMJTrustRegion stops instead of overrunning a synchronous solve budget', () => {
+    const result = restoreHumanoidJogMJTrustRegion({
+        qInitial: [0],
+        evaluateProblem: (q) => buildTrustRegionSimpleProblem(q),
+        maxIterations: 100,
+        maxSolveMs: 0,
+        nowMs: () => 0,
+        equalityTolerance: 1e-12
+    });
+
+    assert.equal(result.converged, false);
+    assert.equal(result.reason, 'time_budget_exceeded');
+    assert.equal(result.timeBudgetExceeded, true);
+    assert.equal(result.iterations, 1);
+    assert.deepEqual(result.qApplied, [0]);
+});

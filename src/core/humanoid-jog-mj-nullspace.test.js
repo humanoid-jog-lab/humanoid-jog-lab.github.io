@@ -132,8 +132,8 @@ test('shouldComputeHumanoidJogMJInitialManipData skips initial manipulability pr
     }), true);
 });
 
-test('buildHumanoidJogMJWorkerSecondaryMetricRequest includes hierarchical absolute metrics that already have worker-side parity', () => {
-    const request = buildHumanoidJogMJWorkerSecondaryMetricRequest({
+test('buildHumanoidJogMJWorkerSecondaryMetricRequest skips the removed w_abs_hier_vfi secondary stage', () => {
+    assert.equal(buildHumanoidJogMJWorkerSecondaryMetricRequest({
         metric: 'w_abs_hier_vfi',
         metricMode: 'relative',
         preferWorker: true,
@@ -143,16 +143,7 @@ test('buildHumanoidJogMJWorkerSecondaryMetricRequest includes hierarchical absol
         restoreMaxIterations: 24,
         waistActiveCount: 0,
         hierarchicalVfiBlend: 0.35
-    });
-
-    assert.deepEqual(request, {
-        metric: 'w_abs_hier_vfi',
-        metricMode: 'relative',
-        stepSize: 0.01,
-        restoreMaxIterations: 24,
-        waistActiveCount: 0,
-        hierarchicalVfiBlend: 0.35
-    });
+    }), null);
 });
 
 test('buildHumanoidJogMJWorkerSecondaryMetricRequest returns null when the worker should not own the secondary step', () => {
@@ -165,6 +156,12 @@ test('buildHumanoidJogMJWorkerSecondaryMetricRequest returns null when the worke
 });
 
 test('shouldUseHumanoidJogMJProjectionOnlyMetricStep enables projection-only microsteps for metric-only hierarchical VFI stages', () => {
+    assert.equal(shouldUseHumanoidJogMJProjectionOnlyMetricStep({
+        isMetricOnlyJogRequest: true,
+        requestedMetric: 'w_abs_hier_vfi',
+        stageMetric: 'safety_margin'
+    }), true);
+
     assert.equal(shouldUseHumanoidJogMJProjectionOnlyMetricStep({
         isMetricOnlyJogRequest: true,
         requestedMetric: 'w_abs_hier_vfi',
@@ -219,6 +216,14 @@ test('resolveHumanoidJogMJProjectionPasses collapses metric-only hierarchical VF
 });
 
 test('resolveHumanoidJogMJProjectionRetreatRestoreConfig uses a lightweight manifold micro-restore for hierarchical VFI projection fallback', () => {
+    assert.deepEqual(resolveHumanoidJogMJProjectionRetreatRestoreConfig({
+        projectionMetric: 'safety_margin',
+        configuredMaxIterations: 8
+    }), {
+        useManifoldRestore: true,
+        maxIterations: 2
+    });
+
     assert.deepEqual(resolveHumanoidJogMJProjectionRetreatRestoreConfig({
         projectionMetric: 'w_abs_hier_vfi',
         configuredMaxIterations: 8
