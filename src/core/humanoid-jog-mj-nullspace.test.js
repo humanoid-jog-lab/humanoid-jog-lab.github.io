@@ -55,7 +55,12 @@ test('computeHumanoidJogMJNullspaceRefine passes through accepted metric attempt
     assert.equal(result.axisLabel, 'x');
 });
 
-test('shouldEnableHumanoidJogMJNullspaceRefine allows hierarchical metrics even when mj_restore nullspace refine is globally disabled', () => {
+test('shouldEnableHumanoidJogMJNullspaceRefine allows w_vfi refine even when mj_restore nullspace refine is globally disabled', () => {
+    assert.equal(shouldEnableHumanoidJogMJNullspaceRefine({
+        enabled: false,
+        metric: 'w_vfi'
+    }), true);
+
     assert.equal(shouldEnableHumanoidJogMJNullspaceRefine({
         enabled: false,
         metric: 'w_abs_arm'

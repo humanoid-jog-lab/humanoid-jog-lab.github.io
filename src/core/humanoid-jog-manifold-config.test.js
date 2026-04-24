@@ -196,6 +196,72 @@ test('RobotVisualizer safety-margin refinement moves away from a tight joint lim
     assert.ok(result.refineResult.qApplied[0] < 0.99);
 });
 
+test('RobotVisualizer safety-margin refinement moves both joint2 limits inward when tied at zero margin', async () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer._isHumanoidMetricRestoreUsable = (restoreResult) => restoreResult?.converged === true && Array.isArray(restoreResult?.qApplied);
+
+    const activeLimits = [
+        { lower: 0, upper: 3.14 },
+        { lower: -3.14, upper: 0 }
+    ];
+    const makeProblem = (qActive) => ({
+        q: qActive.slice(),
+        equalities: {
+            activeResidualNorm: 0,
+            weightedResidual: [],
+            weightedJacobian: [],
+            residual: [],
+            jacobian: [],
+            blocks: {}
+        },
+        inequalities: {
+            wvfiFloor: {
+                value: 1,
+                violation: 0,
+                gradient: [0, 0]
+            },
+            waistXCorridor: {
+                enabled: false,
+                violation: 0
+            }
+        },
+        bounds: {
+            effectiveLower: activeLimits.map((limit) => limit.lower),
+            effectiveUpper: activeLimits.map((limit) => limit.upper)
+        },
+        metadata: {
+            qFull: qActive.slice(),
+            cctsm: {}
+        }
+    });
+
+    const result = await visualizer._attemptHumanoidJogManifoldMetricRefinement({
+        baseProblem: makeProblem([0, 0]),
+        baseQActive: [0, 0],
+        metric: 'safety_margin',
+        direction: 'increase',
+        evaluateProblem: makeProblem,
+        activeCount: 2,
+        activeLimits,
+        lowerBounds: activeLimits.map((limit) => limit.lower),
+        upperBounds: activeLimits.map((limit) => limit.upper),
+        stepBounds: [1, 1],
+        equalityTolerance: 1e-12,
+        inequalityTolerance: 1e-12,
+        stepSize: 0.02,
+        restoreFn: ({ qInitial }) => ({
+            converged: true,
+            acceptedIterations: 1,
+            qApplied: qInitial.slice(),
+            currentProblem: makeProblem(qInitial)
+        })
+    });
+
+    assert.equal(result.applied, true);
+    assert.ok((result.refineResult?.qApplied?.[0] ?? 0) > 0);
+    assert.ok((result.refineResult?.qApplied?.[1] ?? 0) < 0);
+});
+
 test('RobotVisualizer priority absolute full-body jog respects the waist x corridor when waist motion is active', () => {
     const visualizer = new RobotVisualizer(null);
     visualizer.humanoidMode = true;
@@ -271,6 +337,7 @@ test('RobotVisualizer sets manifoldJogSecondaryMetric default to none', () => {
 test('RobotVisualizer sets mj_restore body-z defaults for upright absolute control', () => {
     const visualizer = new RobotVisualizer(null);
     assert.equal(visualizer.vfiConfig.mjRestoreBodyTolerance, 5e-5);
+    assert.equal(visualizer.vfiConfig.mjRestoreBodyActivationTolerance, 1e-6);
     assert.equal(visualizer.vfiConfig.mjRestoreHardTolerance, 1e-8);
     assert.equal(visualizer.vfiConfig.mjRestorePracticalCommandTolPose, 1e-6);
     assert.equal(visualizer.vfiConfig.mjRestorePracticalInvariantTol, 1e-6);
@@ -496,11 +563,192 @@ test('RobotVisualizer local metric-only absolute w_abs_hier_vfi request skips th
         assert.equal(result, true);
         assert.equal(solveAbsoluteTargetMJRestoreCalled, false);
         assert.deepEqual(firstMetricAttempt, {
-            metric: 'safety_margin',
+            metric: 'w_vfi',
             preferWVFIFallbackOnClip: false,
             directionFallbackMetric: '',
             preferActiveLimitRetreat: false
         });
+    } finally {
+        globalThis.document = originalDocument;
+        if (originalWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = originalWindow;
+        }
+    }
+});
+
+test('RobotVisualizer decoupled-upright mj_restore_tr auto-promotes default refine to w_vfi only', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const q0 = new Array(20).fill(0);
+    const absCurrent = [1, 0, 0, 0, 0, 0, 0, 0];
+    const relCurrent = [1, 0, 0, 0, 0, 0, 0, 0];
+    const Jabs = Array.from({ length: 8 }, () => new Array(q0.length).fill(0));
+    const Jrel = Array.from({ length: 8 }, () => new Array(q0.length).fill(0));
+    const metricCalls = [];
+
+    visualizer.humanoidModel = {};
+    visualizer.humanoidWaistLength = 4;
+    visualizer.humanoidLeftArmLength = 7;
+    visualizer.humanoidRightArmLength = 7;
+    visualizer.vfiConfig.mjRestoreAbsoluteDQSetpointError = false;
+    visualizer._canUseHumanoidJogMJRestoreWorker = () => false;
+    visualizer._getHumanoidManifoldJogSecondaryMetric = () => 'w_abs_hier';
+    visualizer._getHumanoidAbsolutePose = () => absCurrent.slice();
+    visualizer._getHumanoidRelativePose = () => relCurrent.slice();
+    visualizer._getHumanoidAbsolutePoseJacobian = () => Jabs.map((row) => row.slice());
+    visualizer._getHumanoidRelativePoseJacobian = () => Jrel.map((row) => row.slice());
+    visualizer._getHumanoidBodyVerticalState = () => ({
+        error: [0],
+        Jrows: [new Array(18).fill(0)]
+    });
+    visualizer._buildManipulabilityVFIConstraints = () => [];
+    visualizer._computeModeCCTSM = () => ({
+        w_abs_hier_vfi: 0.009,
+        w_abs_arm_vfi: 0.009,
+        w_abs_vfi: 0.009,
+        w_abs_hier: 0.011,
+        w_abs_arm: 0.011,
+        w_abs: 0.011,
+        w_cmd: 0.003,
+        w: 0.007,
+        w_vfi: 0.005
+    });
+    visualizer._attemptHumanoidJogManifoldMetricRefinement = async (options) => {
+        metricCalls.push(options.metric);
+        return {
+            state: 'skipped(projection_only_no_progress)',
+            before: 0.009,
+            after: 0.009,
+            applied: false,
+            nullspaceResult: null,
+            refineResult: null,
+            finalProblem: null
+        };
+    };
+    visualizer._publishHumanoidJogDiagnostics = () => {};
+    visualizer._applyHumanoidJointSolution = () => {};
+
+    const originalWindow = globalThis.window;
+    const originalDocument = globalThis.document;
+    globalThis.window = {
+        humanoidQ: q0.slice(),
+        DQModule: { DQWrapper: {} },
+        updateGlobalVariables: () => {},
+        updateRobotPose: () => {}
+    };
+    globalThis.document = {
+        getElementById: () => null
+    };
+
+    try {
+        const result = await visualizer._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstManifold(
+            absCurrent.slice(),
+            q0.slice(),
+            true,
+            true,
+            true,
+            relCurrent.slice(),
+            {
+                solverMode: 'mj_restore_tr',
+                preferWorker: false,
+                metricDirection: 'increase'
+            }
+        );
+        assert.equal(result, true);
+        assert.deepEqual(metricCalls, ['w_vfi']);
+    } finally {
+        globalThis.document = originalDocument;
+        if (originalWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = originalWindow;
+        }
+    }
+});
+
+test('RobotVisualizer decoupled-upright mj_restore_tr auto-promotes w_vfi refine even when joint-limit flag is off', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const q0 = new Array(20).fill(0);
+    const absCurrent = [1, 0, 0, 0, 0, 0, 0, 0];
+    const relCurrent = [1, 0, 0, 0, 0, 0, 0, 0];
+    const Jabs = Array.from({ length: 8 }, () => new Array(q0.length).fill(0));
+    const Jrel = Array.from({ length: 8 }, () => new Array(q0.length).fill(0));
+    const metricCalls = [];
+
+    visualizer.humanoidModel = {};
+    visualizer.humanoidWaistLength = 4;
+    visualizer.humanoidLeftArmLength = 7;
+    visualizer.humanoidRightArmLength = 7;
+    visualizer.vfiConfig.mjRestoreAbsoluteDQSetpointError = false;
+    visualizer._canUseHumanoidJogMJRestoreWorker = () => false;
+    visualizer._getHumanoidManifoldJogSecondaryMetric = () => 'none';
+    visualizer._getHumanoidAbsolutePose = () => absCurrent.slice();
+    visualizer._getHumanoidRelativePose = () => relCurrent.slice();
+    visualizer._getHumanoidAbsolutePoseJacobian = () => Jabs.map((row) => row.slice());
+    visualizer._getHumanoidRelativePoseJacobian = () => Jrel.map((row) => row.slice());
+    visualizer._getHumanoidBodyVerticalState = () => ({
+        error: [0],
+        Jrows: [new Array(18).fill(0)]
+    });
+    visualizer._buildManipulabilityVFIConstraints = () => [];
+    visualizer._computeModeCCTSM = () => ({
+        w_abs_hier_vfi: 0.009,
+        w_abs_vfi: 0.009,
+        w_abs_hier: 0.011,
+        w_abs: 0.011,
+        w_vfi: 0.005,
+        w: 0.007
+    });
+    visualizer._attemptHumanoidJogManifoldMetricRefinement = async (options) => {
+        metricCalls.push(options.metric);
+        return {
+            state: 'active',
+            before: 0.005,
+            after: 0.006,
+            applied: true,
+            finalProblem: null,
+            refineResult: {
+                converged: true,
+                reason: 'projected_candidate',
+                qApplied: q0.slice(0, 18),
+                iterations: 0,
+                acceptedIterations: 1
+            },
+            nullspaceResult: { reason: 'accepted' }
+        };
+    };
+    visualizer._publishHumanoidJogDiagnostics = () => {};
+    visualizer._applyHumanoidJointSolution = () => {};
+
+    const originalWindow = globalThis.window;
+    const originalDocument = globalThis.document;
+    globalThis.window = {
+        humanoidQ: q0.slice(),
+        DQModule: { DQWrapper: {} },
+        updateGlobalVariables: () => {},
+        updateRobotPose: () => {}
+    };
+    globalThis.document = {
+        getElementById: () => null
+    };
+
+    try {
+        const result = await visualizer._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstManifold(
+            absCurrent.slice(),
+            q0.slice(),
+            false,
+            true,
+            true,
+            relCurrent.slice(),
+            {
+                solverMode: 'mj_restore_tr',
+                preferWorker: false,
+                metricDirection: 'increase'
+            }
+        );
+        assert.equal(result, true);
+        assert.deepEqual(metricCalls, ['w_vfi']);
     } finally {
         globalThis.document = originalDocument;
         if (originalWindow === undefined) {
@@ -905,6 +1153,7 @@ test('RobotVisualizer absolute mj_restore_tr queues the worker instead of forcin
     visualizer.humanoidWaistLength = 4;
     visualizer.humanoidLeftArmLength = 7;
     visualizer.humanoidRightArmLength = 7;
+    visualizer.vfiConfig.mjRestoreAbsoluteDQSetpointError = false;
     visualizer._canUseHumanoidJogMJRestoreWorker = () => true;
     visualizer._getHumanoidAbsolutePose = () => absCurrent.slice();
     visualizer._getHumanoidRelativePose = () => relCurrent.slice();
@@ -938,6 +1187,83 @@ test('RobotVisualizer absolute mj_restore_tr queues the worker instead of forcin
     assert.equal(enqueuedRequest?.solverMode, 'mj_restore_tr');
     assert.equal(enqueuedRequest?.includeWaist, true);
     assert.equal(enqueuedRequest?.keepBodyZVertical, true);
+});
+
+test('RobotVisualizer absolute DQ set-point mj_restore_tr queues the absolute_dq_setpoint WASM variant', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const currentQ = new Array(18).fill(0);
+    const absCurrent = [1, 0, 0, 0, 0, 0, 0, 0];
+    const absTarget = [1, 0, 0, 0, 0.01, 0, 0, 0];
+    const relCurrent = [1, 0, 0, 0, 0, 0, 0, 0];
+    let enqueuedRequest = null;
+    let localManifoldCalled = false;
+
+    visualizer.humanoidWaistLength = 4;
+    visualizer.humanoidLeftArmLength = 7;
+    visualizer.humanoidRightArmLength = 7;
+    visualizer.vfiConfig.mjRestoreAbsoluteDQSetpointError = true;
+    visualizer._canUseHumanoidJogMJRestoreWorker = () => true;
+    visualizer._getHumanoidAbsolutePose = () => absCurrent.slice();
+    visualizer._getHumanoidRelativePose = () => relCurrent.slice();
+    visualizer._signedPoseError = () => [1];
+    visualizer._computePoseErrorNorm = () => 0.1;
+    visualizer._enqueueHumanoidJogMJRestoreWorkerRequest = (request) => {
+        enqueuedRequest = request;
+        return true;
+    };
+    visualizer._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstManifold = () => {
+        localManifoldCalled = true;
+        return false;
+    };
+
+    const result = await visualizer._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstMJRestore(
+        absTarget.slice(),
+        currentQ.slice(),
+        true,
+        true,
+        true,
+        relCurrent.slice(),
+        null,
+        {
+            solverMode: 'mj_restore_tr',
+            jogMetricOverride: 'none'
+        }
+    );
+
+    assert.equal(result, true);
+    assert.equal(localManifoldCalled, false);
+    assert.equal(enqueuedRequest?.solverMode, 'mj_restore_tr');
+    assert.equal(enqueuedRequest?.wasmSolveVariant, 'absolute_dq_setpoint');
+    assert.equal(enqueuedRequest?.includeWaist, true);
+    assert.equal(enqueuedRequest?.keepBodyZVertical, true);
+});
+
+test('RobotVisualizer MJ worker queue forwards the requested WASM solve variant into the manifold solve', async () => {
+    const visualizer = new RobotVisualizer(null);
+    let observedInternalOptions = null;
+
+    visualizer._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstManifold = async (...args) => {
+        observedInternalOptions = args[6];
+        return true;
+    };
+
+    visualizer._enqueueHumanoidJogMJRestoreWorkerRequest({
+        dqAbsoluteTargetArray: [1, 0, 0, 0, 0, 0, 0, 0],
+        currentQ: new Array(18).fill(0),
+        enableJointLimitAvoidance: true,
+        includeWaist: true,
+        keepBodyZVertical: true,
+        fixedRelativeTargetArray: [1, 0, 0, 0, 0, 0, 0, 0],
+        translationAxisGuard: null,
+        solverMode: 'mj_restore_tr',
+        jogMetricOverride: 'none',
+        wasmSolveVariant: 'absolute_dq_setpoint'
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.equal(observedInternalOptions?.preferWorker, true);
+    assert.equal(observedInternalOptions?.wasmSolveVariant, 'absolute_dq_setpoint');
 });
 
 test('RobotVisualizer mj_restore_pre_w coalesces overlapping absolute jog requests and keeps only the latest pending request', async () => {
@@ -3074,6 +3400,157 @@ test('RobotVisualizer DQ set-point error model Jacobian matches finite differenc
         for (let index = 0; index < fd.length; index += 1) {
             assert.ok(Math.abs(fd[index] - jacColumn[index]) < 1e-6, `row ${index}: expected ${fd[index]}, got ${jacColumn[index]}`);
         }
+    } finally {
+        if (originalWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = originalWindow;
+        }
+    }
+});
+
+test('RobotVisualizer absolute mj_restore_tr builds absolute and relative blocks with DQ set-point error coordinates', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const originalWindow = globalThis.window;
+    const q0 = [0.2];
+    const absTarget = [
+        Math.cos(Math.PI / 8), 0, 0, Math.sin(Math.PI / 8),
+        0, 0, 0, 0
+    ];
+    const relTarget = [
+        Math.cos(-Math.PI / 10), 0, 0, Math.sin(-Math.PI / 10),
+        0, 0, 0, 0
+    ];
+    const buildPose = (q) => [
+        Math.cos(q / 2), 0, 0, Math.sin(q / 2),
+        0, 0, 0, 0
+    ];
+    const buildPoseNeg = (q) => [
+        Math.cos(-q / 2), 0, 0, Math.sin(-q / 2),
+        0, 0, 0, 0
+    ];
+    const buildJacobian = (q) => [
+        [-0.5 * Math.sin(q / 2)],
+        [0],
+        [0],
+        [0.5 * Math.cos(q / 2)],
+        [0],
+        [0],
+        [0],
+        [0]
+    ];
+    const buildJacobianNeg = (q) => [
+        [0.5 * Math.sin(-q / 2)],
+        [0],
+        [0],
+        [-0.5 * Math.cos(-q / 2)],
+        [0],
+        [0],
+        [0],
+        [0]
+    ];
+    const multiplyQuaternion = (left, right) => {
+        const [lw, lx, ly, lz] = left;
+        const [rw, rx, ry, rz] = right;
+        return [
+            lw * rw - lx * rx - ly * ry - lz * rz,
+            lw * rx + lx * rw + ly * rz - lz * ry,
+            lw * ry - lx * rz + ly * rw + lz * rx,
+            lw * rz + lx * ry - ly * rx + lz * rw
+        ];
+    };
+    const addQuaternion = (left, right) => left.map((value, index) => value + right[index]);
+    const conjugateDQ = (dq) => [
+        dq[0], -dq[1], -dq[2], -dq[3],
+        dq[4], -dq[5], -dq[6], -dq[7]
+    ];
+    const multiplyDQ = (left, right) => {
+        const leftPrimal = left.slice(0, 4);
+        const leftDual = left.slice(4, 8);
+        const rightPrimal = right.slice(0, 4);
+        const rightDual = right.slice(4, 8);
+        const primal = multiplyQuaternion(leftPrimal, rightPrimal);
+        const dual = addQuaternion(
+            multiplyQuaternion(leftPrimal, rightDual),
+            multiplyQuaternion(leftDual, rightPrimal)
+        );
+        return primal.concat(dual);
+    };
+    const assertCloseArray = (actual, expected, label) => {
+        assert.equal(actual.length, expected.length, `${label} length`);
+        for (let index = 0; index < expected.length; index += 1) {
+            assert.ok(
+                Math.abs(actual[index] - expected[index]) < 1e-12,
+                `${label}[${index}]: expected ${expected[index]}, got ${actual[index]}`
+            );
+        }
+    };
+    const assertCloseRows = (actual, expected, label) => {
+        assert.equal(actual.length, expected.length, `${label} row count`);
+        for (let row = 0; row < expected.length; row += 1) {
+            assertCloseArray(actual[row], expected[row], `${label}[${row}]`);
+        }
+    };
+
+    globalThis.window = {
+        humanoidQ: q0.slice(),
+        DQModule: {
+            DQWrapper: {
+                createFromArray: (value) => value,
+                conjugate: conjugateDQ,
+                multiply: multiplyDQ,
+                toArray: (value) => value
+            }
+        }
+    };
+
+    visualizer.humanoidModel = {};
+    visualizer.humanoidWaistLength = 0;
+    visualizer.humanoidLeftArmLength = 1;
+    visualizer.humanoidRightArmLength = 0;
+    visualizer.vfiConfig.mjRestoreMaxStep = 0;
+    visualizer.vfiConfig.mjRestoreMaxIter = 1;
+    visualizer.vfiConfig.mjRestorePolishActivationResidual = 0;
+    visualizer.vfiConfig.mjRestoreUseWorker = false;
+    visualizer._getHumanoidAbsolutePose = (q) => buildPose(q[0] || 0);
+    visualizer._getHumanoidRelativePose = (q) => buildPoseNeg(q[0] || 0);
+    visualizer._getHumanoidAbsolutePoseJacobian = (q) => buildJacobian(q[0] || 0);
+    visualizer._getHumanoidRelativePoseJacobian = (q) => buildJacobianNeg(q[0] || 0);
+    visualizer._getHumanoidJointLimits = () => null;
+    visualizer._buildHumanoidManifoldWaistXCorridor = () => ({ enabled: false, violation: 0 });
+    visualizer._buildManipulabilityVFIConstraints = () => [];
+    visualizer._computeModeCCTSM = () => ({ w: 1, w_vfi: 1 });
+    visualizer._computeProtectedManipulabilityGradient = () => [0];
+    visualizer._publishHumanoidJogDiagnostics = () => {};
+    visualizer._notifyHumanoidJogUnreachable = () => {};
+
+    try {
+        const result = await visualizer._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstManifold(
+            absTarget.slice(),
+            q0.slice(),
+            false,
+            false,
+            false,
+            relTarget.slice(),
+            {
+                solverMode: 'mj_restore_tr',
+                candidateOnly: true,
+                preferWorker: false,
+                allowArmOnlyFallback: false,
+                suppressFailureNotification: true,
+                jogMetricOverride: 'none'
+            }
+        );
+        const problem = result.currentProblem;
+        const expectedAbs = visualizer._buildHumanoidDQSetpointErrorModel(buildPose(q0[0]), absTarget, buildJacobian(q0[0]));
+        const expectedRel = visualizer._buildHumanoidDQSetpointErrorModel(buildPoseNeg(q0[0]), relTarget, buildJacobianNeg(q0[0]));
+
+        assert.deepEqual(problem.equalities.blocks.absolute.target, new Array(8).fill(0));
+        assert.deepEqual(problem.equalities.blocks.relative.target, new Array(8).fill(0));
+        assertCloseArray(problem.equalities.blocks.absolute.current, expectedAbs.error, 'absolute current');
+        assertCloseRows(problem.equalities.blocks.absolute.jacobian, expectedAbs.jacobian, 'absolute jacobian');
+        assertCloseArray(problem.equalities.blocks.relative.current, expectedRel.error, 'relative current');
+        assertCloseRows(problem.equalities.blocks.relative.jacobian, expectedRel.jacobian, 'relative jacobian');
     } finally {
         if (originalWindow === undefined) {
             delete globalThis.window;
@@ -5861,7 +6338,7 @@ test('RobotVisualizer relative-target mj_restore applies task-aware metric refin
     }
 });
 
-test('RobotVisualizer relative-target mj_restore hierarchical VFI refinement uses safety-margin primary without secondary', async () => {
+test('RobotVisualizer relative-target mj_restore hierarchical VFI refinement uses w_vfi primary without secondary', async () => {
     const visualizer = new RobotVisualizer(null);
     visualizer.humanoidModel = {};
     visualizer.humanoidWaistLength = 4;
@@ -5970,7 +6447,7 @@ test('RobotVisualizer relative-target mj_restore hierarchical VFI refinement use
             }
         );
         assert.equal(result, true);
-        assert.deepEqual(metricCalls, ['safety_margin']);
+        assert.deepEqual(metricCalls, ['w_vfi']);
     } finally {
         globalThis.document = originalDocument;
         if (originalWindow === undefined) {
@@ -6116,7 +6593,7 @@ test('RobotVisualizer relative-target metric-only hierarchical VFI refinement no
         );
         assert.equal(result, true);
         assert.equal(observedSecondaryMetricRequest, null);
-        assert.deepEqual(metricCalls, ['safety_margin']);
+        assert.deepEqual(metricCalls, ['w_vfi']);
     } finally {
         globalThis.document = originalDocument;
         if (originalWindow === undefined) {
@@ -6250,7 +6727,7 @@ test('RobotVisualizer distance-target mj_restore applies task-aware metric refin
         );
         assert.equal(result, true);
         assert.ok(firstMetricAttempt);
-        assert.deepEqual(metricCalls, ['safety_margin']);
+        assert.deepEqual(metricCalls, ['w_vfi']);
         assert.equal(firstMetricAttempt.baseProblem?.metadata?.metricMode, 'relative');
         assert.equal(firstMetricAttempt.baseProblem?.metadata?.cctsm?.taskMetricKind, 'relative_pose');
         assert.equal(firstMetricAttempt.baseProblem?.metadata?.Jcmd?.length, 6);
@@ -6265,7 +6742,7 @@ test('RobotVisualizer distance-target mj_restore applies task-aware metric refin
     }
 });
 
-test('RobotVisualizer distance-target mj_restore hierarchical VFI refinement uses safety-margin primary without secondary', async () => {
+test('RobotVisualizer distance-target mj_restore hierarchical VFI refinement uses w_vfi primary without secondary', async () => {
     const visualizer = new RobotVisualizer(null);
     visualizer.humanoidModel = {};
     visualizer.humanoidWaistLength = 4;
@@ -6398,7 +6875,7 @@ test('RobotVisualizer distance-target mj_restore hierarchical VFI refinement use
             }
         );
         assert.equal(result, true);
-        assert.deepEqual(metricCalls, ['safety_margin']);
+        assert.deepEqual(metricCalls, ['w_vfi']);
     } finally {
         globalThis.document = originalDocument;
         if (originalWindow === undefined) {
@@ -6557,7 +7034,7 @@ test('RobotVisualizer distance-target metric-only hierarchical VFI refinement no
         );
         assert.equal(result, true);
         assert.equal(observedSecondaryMetricRequest, null);
-        assert.deepEqual(metricCalls, ['safety_margin']);
+        assert.deepEqual(metricCalls, ['w_vfi']);
     } finally {
         globalThis.document = originalDocument;
         if (originalWindow === undefined) {
@@ -7983,7 +8460,39 @@ test('RobotVisualizer mj_restore_tr does not run hidden arm-only fallback by def
         return originalMethod(...args);
     };
 
-    globalThis.window = { humanoidQ: q0.slice() };
+    const multiplyQuaternion = (left, right) => {
+        const [lw, lx, ly, lz] = left;
+        const [rw, rx, ry, rz] = right;
+        return [
+            lw * rw - lx * rx - ly * ry - lz * rz,
+            lw * rx + lx * rw + ly * rz - lz * ry,
+            lw * ry - lx * rz + ly * rw + lz * rx,
+            lw * rz + lx * ry - ly * rx + lz * rw
+        ];
+    };
+    const addQuaternion = (left, right) => left.map((value, index) => value + right[index]);
+    const multiplyDQ = (left, right) => {
+        const primal = multiplyQuaternion(left.slice(0, 4), right.slice(0, 4));
+        const dual = addQuaternion(
+            multiplyQuaternion(left.slice(0, 4), right.slice(4, 8)),
+            multiplyQuaternion(left.slice(4, 8), right.slice(0, 4))
+        );
+        return primal.concat(dual);
+    };
+    globalThis.window = {
+        humanoidQ: q0.slice(),
+        DQModule: {
+            DQWrapper: {
+                createFromArray: (value) => value,
+                conjugate: (dq) => [
+                    dq[0], -dq[1], -dq[2], -dq[3],
+                    dq[4], -dq[5], -dq[6], -dq[7]
+                ],
+                multiply: multiplyDQ,
+                toArray: (value) => value
+            }
+        }
+    };
     globalThis.document = { getElementById: () => null };
 
     try {

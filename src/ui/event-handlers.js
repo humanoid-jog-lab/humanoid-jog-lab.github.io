@@ -394,12 +394,15 @@ export function setupHumanoidCooperativePolishingObjectPoseControls() {
 export function setupHumanoidParameterControls() {
     const humanoidJointLimitEtaInput = document.getElementById('humanoid-joint-limit-eta-input');
     const humanoidJointLimitEtaStatus = document.getElementById('humanoid-joint-limit-eta-status');
+    const humanoidWaistXEtaInput = document.getElementById('humanoid-waist-x-eta-input');
+    const humanoidWaistXVFIStatus = document.getElementById('humanoid-waist-x-vfi-status');
     const humanoidRos2ArmVelInput = document.getElementById('humanoid-ros2-arm-vel-input');
     const humanoidRos2ArmAccInput = document.getElementById('humanoid-ros2-arm-acc-input');
     const humanoidRos2WaistVelInput = document.getElementById('humanoid-ros2-waist-vel-input');
     const humanoidRos2WaistAccInput = document.getElementById('humanoid-ros2-waist-acc-input');
     const humanoidRos2PublishDefaultsStatus = document.getElementById('humanoid-ros2-publish-defaults-status');
     const HUMANOID_JOINT_LIMIT_ETA_STORAGE_KEY = 'humanoid-joint-limit-eta';
+    const HUMANOID_WAIST_X_ETA_STORAGE_KEY = 'humanoid-waist-x-eta';
     const HUMANOID_ROS2_ARM_VEL_STORAGE_KEY = 'humanoid-ros2-arm-vel';
     const HUMANOID_ROS2_ARM_ACC_STORAGE_KEY = 'humanoid-ros2-arm-acc';
     const HUMANOID_ROS2_WAIST_VEL_STORAGE_KEY = 'humanoid-ros2-waist-vel';
@@ -420,6 +423,10 @@ export function setupHumanoidParameterControls() {
         if (!humanoidJointLimitEtaStatus) return;
         humanoidJointLimitEtaStatus.textContent = message;
     };
+    const updateHumanoidWaistXVFIStatus = (message) => {
+        if (!humanoidWaistXVFIStatus) return;
+        humanoidWaistXVFIStatus.textContent = message;
+    };
     const updateHumanoidRos2PublishDefaultsStatus = (message) => {
         if (!humanoidRos2PublishDefaultsStatus) return;
         humanoidRos2PublishDefaultsStatus.textContent = message;
@@ -432,8 +439,16 @@ export function setupHumanoidParameterControls() {
         if (Number.isFinite(windowEta) && windowEta > 0) return windowEta;
         return 5;
     };
+    const readCurrentHumanoidWaistXEta = () => {
+        const visualizerEta = appState.visualizer?.vfiConfig?.waistXEta;
+        const windowEta = typeof window !== 'undefined' ? window.humanoidWaistXEta : null;
+        if (Number.isFinite(visualizerEta) && visualizerEta > 0) return visualizerEta;
+        if (Number.isFinite(windowEta) && windowEta > 0) return windowEta;
+        return 1.0;
+    };
 
     let appliedHumanoidJointLimitEta = readCurrentHumanoidJointLimitEta();
+    let appliedHumanoidWaistXEta = readCurrentHumanoidWaistXEta();
     let appliedHumanoidRos2PublishDefaults = {
         armVel: Number.isFinite(appState.humanoidRos2PublishDefaults?.armVel) ? appState.humanoidRos2PublishDefaults.armVel : 0.5,
         armAcc: Number.isFinite(appState.humanoidRos2PublishDefaults?.armAcc) ? appState.humanoidRos2PublishDefaults.armAcc : 1.0,
@@ -463,6 +478,41 @@ export function setupHumanoidParameterControls() {
             localStorage.setItem(HUMANOID_JOINT_LIMIT_ETA_STORAGE_KEY, String(value));
         } catch (_) {}
         updateHumanoidJointLimitEtaStatus(`当前值已应用：η_θ=${value}`);
+        return true;
+    };
+    const normalizePositiveParameterNumber = (valueRaw) => {
+        const parsed = Number(valueRaw);
+        return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+    };
+    const applyHumanoidWaistXVFIParams = (paramsRaw = {}) => {
+        const rawEta = paramsRaw && typeof paramsRaw === 'object'
+            ? (paramsRaw.eta ?? appliedHumanoidWaistXEta)
+            : (paramsRaw ?? appliedHumanoidWaistXEta);
+        const nextEta = normalizePositiveParameterNumber(rawEta);
+        if (nextEta == null) {
+            if (humanoidWaistXEtaInput) humanoidWaistXEtaInput.value = String(appliedHumanoidWaistXEta);
+            updateHumanoidWaistXVFIStatus(
+                `输入无效，已恢复为 η_x=${appliedHumanoidWaistXEta}`
+            );
+            return false;
+        }
+
+        appliedHumanoidWaistXEta = nextEta;
+        if (humanoidWaistXEtaInput) humanoidWaistXEtaInput.value = String(nextEta);
+        if (typeof window !== 'undefined') {
+            window.humanoidWaistXEta = nextEta;
+        }
+        if (appState.visualizer?.setHumanoidWaistXVFIParams) {
+            appState.visualizer.setHumanoidWaistXVFIParams({ eta: nextEta });
+        } else if (appState.visualizer?.vfiConfig) {
+            appState.visualizer.vfiConfig.waistXEta = nextEta;
+        }
+        try {
+            localStorage.setItem(HUMANOID_WAIST_X_ETA_STORAGE_KEY, String(nextEta));
+        } catch (_) {}
+        updateHumanoidWaistXVFIStatus(
+            `当前值已应用：η_x=${nextEta}`
+        );
         return true;
     };
     const normalizeRos2DefaultNumber = (valueRaw) => {
@@ -516,7 +566,13 @@ export function setupHumanoidParameterControls() {
     const savedHumanoidJointLimitEta = (() => {
         try { return localStorage.getItem(HUMANOID_JOINT_LIMIT_ETA_STORAGE_KEY); } catch (_) { return null; }
     })();
+    const savedHumanoidWaistXEta = (() => {
+        try { return localStorage.getItem(HUMANOID_WAIST_X_ETA_STORAGE_KEY); } catch (_) { return null; }
+    })();
     applyHumanoidJointLimitEta(savedHumanoidJointLimitEta ?? appliedHumanoidJointLimitEta);
+    applyHumanoidWaistXVFIParams({
+        eta: savedHumanoidWaistXEta ?? appliedHumanoidWaistXEta
+    });
     applyHumanoidRos2PublishDefaults({
         armVel: (() => { try { return localStorage.getItem(HUMANOID_ROS2_ARM_VEL_STORAGE_KEY); } catch (_) { return null; } })() ?? appliedHumanoidRos2PublishDefaults.armVel,
         armAcc: (() => { try { return localStorage.getItem(HUMANOID_ROS2_ARM_ACC_STORAGE_KEY); } catch (_) { return null; } })() ?? appliedHumanoidRos2PublishDefaults.armAcc,
@@ -535,6 +591,20 @@ export function setupHumanoidParameterControls() {
         e.preventDefault?.();
         applyHumanoidJointLimitEta(e.target?.value);
     });
+    const bindHumanoidWaistXVFIInput = (input) => {
+        if (!input) return;
+        const applyFromInputs = () => applyHumanoidWaistXVFIParams({
+            eta: input.value
+        });
+        input.addEventListener('change', applyFromInputs);
+        input.addEventListener('blur', applyFromInputs);
+        input.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter') return;
+            e.preventDefault?.();
+            applyFromInputs();
+        });
+    };
+    bindHumanoidWaistXVFIInput(humanoidWaistXEtaInput);
     const bindRos2DefaultInput = (input, key) => {
         if (!input) return;
         const applyFromInputs = () => applyHumanoidRos2PublishDefaults({
@@ -558,11 +628,13 @@ export function setupHumanoidParameterControls() {
 
     if (typeof window !== 'undefined') {
         window.setHumanoidJointLimitEta = applyHumanoidJointLimitEta;
+        window.setHumanoidWaistXVFIParams = applyHumanoidWaistXVFIParams;
         window.setHumanoidRos2PublishDefaults = applyHumanoidRos2PublishDefaults;
     }
 
     return {
         applyHumanoidJointLimitEta,
+        applyHumanoidWaistXVFIParams,
         applyHumanoidRos2PublishDefaults
     };
 }

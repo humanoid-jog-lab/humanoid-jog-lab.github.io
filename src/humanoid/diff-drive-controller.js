@@ -5,8 +5,9 @@
 import { DEG_TO_RAD } from '../core/constants.js';
 import { appState, callbacks } from '../core/state.js';
 import { wrapAngle, clampValue, quaternionToYaw } from '../utils/math.js';
-import { DQ, getDQModule } from '../dqrobotics.js';
+import { getDQModule } from '../dqrobotics.js';
 import { computeRegulatedPurePursuitControl } from './pure-pursuit.js';
+import { buildHumanoidBasePoseDQArray } from './base-pose-dq.js';
 
 // ──────────────────────────────────────────────────────────────
 // 配置读取
@@ -296,8 +297,12 @@ export function applyHumanoidBasePose() {
     const yaw = Number(appState.humanoidBasePose.yaw) || 0;
 
     if (appState.humanoidModel && typeof appState.humanoidModel.setReferenceFrame === 'function') {
-        const dqBase = DQ.pose(0, 0, 1, yaw, x, y, 0).toArray();
-        appState.humanoidModel.setReferenceFrame(dqBase);
+        const dqBase = buildHumanoidBasePoseDQArray({ x, y, yaw });
+        try {
+            appState.humanoidModel.setReferenceFrame(dqBase);
+        } catch (error) {
+            console.warn('设置 humanoid base reference frame 失败:', error);
+        }
     }
 
     if (appState.visualizer && typeof appState.visualizer.setHumanoidBasePose === 'function') {

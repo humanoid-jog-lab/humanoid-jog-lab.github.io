@@ -238,18 +238,23 @@ test('setupHumanoidParameterControls restores, applies, and validates humanoid j
 
     const humanoidJointLimitEtaInput = createMockElement('');
     const humanoidJointLimitEtaStatus = createMockElement('');
+    const humanoidWaistXEtaInput = createMockElement('');
+    const humanoidWaistXVFIStatus = createMockElement('');
     const humanoidRos2ArmVelInput = createMockElement('');
     const humanoidRos2ArmAccInput = createMockElement('');
     const humanoidRos2WaistVelInput = createMockElement('');
     const humanoidRos2WaistAccInput = createMockElement('');
     const humanoidRos2PublishDefaultsStatus = createMockElement('');
     const etaCalls = [];
+    const waistXVFICalls = [];
 
     globalThis.window = {};
     globalThis.document = {
         getElementById(id) {
             if (id === 'humanoid-joint-limit-eta-input') return humanoidJointLimitEtaInput;
             if (id === 'humanoid-joint-limit-eta-status') return humanoidJointLimitEtaStatus;
+            if (id === 'humanoid-waist-x-eta-input') return humanoidWaistXEtaInput;
+            if (id === 'humanoid-waist-x-vfi-status') return humanoidWaistXVFIStatus;
             if (id === 'humanoid-ros2-arm-vel-input') return humanoidRos2ArmVelInput;
             if (id === 'humanoid-ros2-arm-acc-input') return humanoidRos2ArmAccInput;
             if (id === 'humanoid-ros2-waist-vel-input') return humanoidRos2WaistVelInput;
@@ -260,6 +265,7 @@ test('setupHumanoidParameterControls restores, applies, and validates humanoid j
     };
     globalThis.localStorage = createMockLocalStorage([
         ['humanoid-joint-limit-eta', '4.5'],
+        ['humanoid-waist-x-eta', '2.5'],
         ['humanoid-ros2-arm-vel', '0.6'],
         ['humanoid-ros2-arm-acc', '1.1'],
         ['humanoid-ros2-waist-vel', '0.7'],
@@ -267,11 +273,17 @@ test('setupHumanoidParameterControls restores, applies, and validates humanoid j
     ]);
     appState.visualizer = {
         vfiConfig: {
-            jointLimitEta: 5
+            jointLimitEta: 5,
+            waistXEta: 1,
+            waistXActivationThreshold: 0.12
         },
         setHumanoidJointLimitEta(value) {
             etaCalls.push(value);
             this.vfiConfig.jointLimitEta = value;
+        },
+        setHumanoidWaistXVFIParams(value) {
+            waistXVFICalls.push(value);
+            this.vfiConfig.waistXEta = value.eta;
         }
     };
 
@@ -282,6 +294,11 @@ test('setupHumanoidParameterControls restores, applies, and validates humanoid j
         assert.equal(humanoidJointLimitEtaStatus.textContent, '当前值已应用：η_θ=4.5');
         assert.equal(globalThis.window.humanoidJointLimitEta, 4.5);
         assert.deepEqual(etaCalls, [4.5]);
+        assert.equal(humanoidWaistXEtaInput.value, '2.5');
+        assert.equal(humanoidWaistXVFIStatus.textContent, '当前值已应用：η_x=2.5');
+        assert.equal(globalThis.window.humanoidWaistXEta, 2.5);
+        assert.equal(globalThis.window.humanoidWaistXActivationThreshold, undefined);
+        assert.deepEqual(waistXVFICalls, [{ eta: 2.5 }]);
         assert.equal(humanoidRos2ArmVelInput.value, '0.6');
         assert.equal(humanoidRos2ArmAccInput.value, '1.1');
         assert.equal(humanoidRos2WaistVelInput.value, '0.7');
@@ -302,6 +319,18 @@ test('setupHumanoidParameterControls restores, applies, and validates humanoid j
         assert.equal(globalThis.localStorage.getItem('humanoid-joint-limit-eta'), '6.2');
         assert.deepEqual(etaCalls, [4.5, 6.2]);
 
+        humanoidWaistXEtaInput.value = '3.5';
+        humanoidWaistXEtaInput.trigger('change', '3.5');
+
+        assert.equal(humanoidWaistXEtaInput.value, '3.5');
+        assert.equal(humanoidWaistXVFIStatus.textContent, '当前值已应用：η_x=3.5');
+        assert.equal(globalThis.localStorage.getItem('humanoid-waist-x-eta'), '3.5');
+        assert.equal(globalThis.localStorage.getItem('humanoid-waist-x-activation-threshold'), null);
+        assert.deepEqual(waistXVFICalls, [
+            { eta: 2.5 },
+            { eta: 3.5 }
+        ]);
+
         humanoidRos2ArmVelInput.value = '0.9';
         humanoidRos2ArmVelInput.trigger('change', '0.9');
 
@@ -321,6 +350,14 @@ test('setupHumanoidParameterControls restores, applies, and validates humanoid j
         assert.equal(globalThis.window.humanoidJointLimitEta, 6.2);
         assert.equal(globalThis.localStorage.getItem('humanoid-joint-limit-eta'), '6.2');
         assert.deepEqual(etaCalls, [4.5, 6.2]);
+
+        humanoidWaistXEtaInput.value = 'bad';
+        humanoidWaistXEtaInput.trigger('change', 'bad');
+
+        assert.equal(humanoidWaistXEtaInput.value, '3.5');
+        assert.equal(humanoidWaistXVFIStatus.textContent, '输入无效，已恢复为 η_x=3.5');
+        assert.equal(globalThis.window.humanoidWaistXEta, 3.5);
+        assert.equal(globalThis.window.humanoidWaistXActivationThreshold, undefined);
 
         humanoidRos2WaistAccInput.value = 'bad';
         humanoidRos2WaistAccInput.trigger('change', 'bad');

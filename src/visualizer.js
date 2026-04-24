@@ -149,6 +149,10 @@ import {
     directionalCCTSM,
     minEigenvalueCCTSM
 } from './core/cctsm.js';
+import {
+    buildHumanoidBasePoseDQArray,
+    composeHumanoidWorldPoseDQArray
+} from './humanoid/base-pose-dq.js';
 
 const DEFAULT_HUMANOID_COOPERATIVE_RULED_SURFACE_POLISHING_CYLINDRICAL_Q = Object.freeze([
     -0.23762, 0.79408, -0.56331, 0.00002,
@@ -416,6 +420,7 @@ export class RobotVisualizer {
             mjRestoreRelativeWeight: 1.0,
             mjRestoreBodyVerticalWeight: 4.0,
             mjRestoreBodyTolerance: 5e-5,
+            mjRestoreBodyActivationTolerance: 1e-6,
             mjRestoreHardTolerance: 1e-8,
             mjRestorePracticalCommandTolPose: 1e-6,
             mjRestorePracticalInvariantTol: 1e-6,
@@ -441,6 +446,7 @@ export class RobotVisualizer {
             mjRestoreArmOnlyFallbackReferenceDamping: 0.2,
             mjRestoreArmOnlyFallbackPolishActivationResidual: 5e-4,
             mjRestoreArmOnlyFallbackPolishDamping: 1e-7,
+            mjRestoreAbsoluteDQSetpointError: true,
             mjRestoreEnableNullspaceRefine: false,
             mjRestoreUseWorker: true,
             manifoldJogSecondaryMetric: 'none',
@@ -804,6 +810,39 @@ export class RobotVisualizer {
             message: this.vfiConfig.waistXCorridorEnabled
                 ? `腰部 X 走廊上界已更新（x_max=${this.vfiConfig.waistXMax.toFixed(3)}m）`
                 : `腰部 X 走廊上界已设置为 x_max=${this.vfiConfig.waistXMax.toFixed(3)}m。`
+        });
+    }
+
+    setHumanoidWaistXVFIParams({ eta, activationThreshold } = {}) {
+        if (!this.vfiConfig) this.vfiConfig = {};
+        const parsedEta = Number(eta);
+        const parsedActivationThreshold = Number(activationThreshold);
+        const hasActivationThreshold = Number.isFinite(parsedActivationThreshold) && parsedActivationThreshold > 0;
+        const nextEta = Number.isFinite(parsedEta) && parsedEta > 0
+            ? parsedEta
+            : this.vfiConfig.waistXEta;
+        const nextActivationThreshold = hasActivationThreshold
+            ? parsedActivationThreshold
+            : this.vfiConfig.waistXActivationThreshold;
+        if (!Number.isFinite(nextEta) || nextEta <= 0 || !Number.isFinite(nextActivationThreshold) || nextActivationThreshold <= 0) {
+            return;
+        }
+        this.vfiConfig.waistXEta = nextEta;
+        this.vfiConfig.waistXActivationThreshold = nextActivationThreshold;
+        if (typeof window !== 'undefined') {
+            window.humanoidWaistXEta = nextEta;
+            if (hasActivationThreshold) {
+                window.humanoidWaistXActivationThreshold = nextActivationThreshold;
+            }
+        }
+        const detail = hasActivationThreshold
+            ? `η_x=${nextEta.toFixed(2)}, d_scale=${nextActivationThreshold.toFixed(3)}m`
+            : `η_x=${nextEta.toFixed(2)}`;
+        this._publishHumanoidJogDiagnostics({
+            solverMode: this._getHumanoidJogSolverMode(),
+            modeTag: 'idle',
+            active: this._getHumanoidJogSolverMode() !== 'priority',
+            message: `腰部 X 走廊 VFI 已更新（${detail}）。`
         });
     }
 
@@ -4076,7 +4115,10 @@ export class RobotVisualizer {
                             metricDirection: nextRequest.metricDirection,
                             preWState: nextRequest.preWState,
                             preWMetric: nextRequest.preWMetric,
-                            preWStart: nextRequest.preWStart
+                            preWStart: nextRequest.preWStart,
+                            wasmSolveVariant: nextRequest.wasmSolveVariant,
+                            wasmLeftTarget: nextRequest.wasmLeftTarget,
+                            wasmRightTarget: nextRequest.wasmRightTarget
                         }
                     );
                 }
@@ -6730,7 +6772,7 @@ export class RobotVisualizer {
             stepSize,
             preferWVFIFallbackOnClip: jogMetric === 'w_abs_hier_vfi',
             directionFallbackMetric: jogMetric === 'w_abs_hier_vfi' ? 'w_abs_hier_vfi' : '',
-            preferActiveLimitRetreat: jogMetric === 'w_abs_hier_vfi',
+            preferActiveLimitRetreat: false,
             projectionOnly: true,
             projectionPasses,
             restoreFn: restoreHumanoidJogMJ,
@@ -7388,7 +7430,19 @@ export class RobotVisualizer {
                 return Number.isFinite(candidate?.margin) && normSq > 1e-20;
             })
             .sort((a, b) => a.margin - b.margin);
-        return candidates.length > 0 ? candidates[0].gradient.slice() : null;
+        if (candidates.length === 0) return null;
+        const minMargin = candidates[0].margin;
+        const tieTolerance = Math.max(1e-9, Math.abs(minMargin) * 1e-6);
+        const activeCandidates = candidates.filter((candidate) => candidate.margin <= minMargin + tieTolerance);
+        const width = candidates[0].gradient.length;
+        const combined = new Array(width).fill(0);
+        for (const candidate of activeCandidates) {
+            for (let i = 0; i < width; i++) {
+                combined[i] += Number(candidate.gradient[i]) || 0;
+            }
+        }
+        const combinedNormSq = combined.reduce((sum, value) => sum + value * value, 0);
+        return combinedNormSq > 1e-20 ? combined : candidates[0].gradient.slice();
     }
 
     _computeHumanoidJogManifoldMetricGradient({
@@ -7535,7 +7589,7 @@ export class RobotVisualizer {
                 inequalityTolerance,
                 stepSize,
                 preferWVFIFallbackOnClip: resolved.metric === 'w_abs_hier_vfi',
-                preferActiveLimitRetreat: resolved.metric === 'w_abs_hier_vfi',
+                preferActiveLimitRetreat: false,
                 projectionOnly: true,
                 projectionPasses: 1,
                 restoreFn,
@@ -9212,7 +9266,7 @@ export class RobotVisualizer {
         return this.humanoidModel.fkmEffector(q, 2);
     }
     _extractPoseTranslationAndRotation(dqPoseArray) {
-        const DQ = window.DQModule?.DQWrapper;
+        const DQ = typeof window !== 'undefined' ? window.DQModule?.DQWrapper : null;
         if (!Array.isArray(dqPoseArray) || dqPoseArray.length !== 8) return null;
         if (!DQ) {
             return {
@@ -11628,25 +11682,10 @@ export class RobotVisualizer {
         }
     }
     _makeHumanoidBaseDQ(basePose = {}) {
-        const DQ = window.DQModule?.DQWrapper;
-        if (!DQ) return null;
-        const x = Number(basePose.x) || 0;
-        const y = Number(basePose.y) || 0;
-        const yaw = Number(basePose.yaw) || 0;
-        const h = 0.5 * yaw;
-        const c = Math.cos(h);
-        const s = Math.sin(h);
-        const rot = DQ.createFromArray([c, 0, 0, s, 0, 0, 0, 0]);
-        const trans = DQ.translation(x, y, 0);
-        return DQ.multiply(trans, rot);
+        return buildHumanoidBasePoseDQArray(basePose);
     }
     _composeHumanoidWorldPose(basePose, localPoseArray) {
-        const DQ = window.DQModule?.DQWrapper;
-        if (!DQ || !Array.isArray(localPoseArray) || localPoseArray.length !== 8) return null;
-        const baseDQ = this._makeHumanoidBaseDQ(basePose);
-        if (!baseDQ) return null;
-        const localDQ = DQ.createFromArray(localPoseArray);
-        return DQ.toArray(DQ.multiply(baseDQ, localDQ));
+        return composeHumanoidWorldPoseDQArray(basePose, localPoseArray);
     }
     _dqLeftMultiplicationMatrix(leftDQArray) {
         const DQ = window.DQModule?.DQWrapper;
@@ -12351,6 +12390,16 @@ export class RobotVisualizer {
                 ? (Number.isFinite(cfg.mjRestoreBodyTolerance) ? cfg.mjRestoreBodyTolerance : 5e-5)
                 : (Number.isFinite(cfg.manifoldBodyTolerance) ? cfg.manifoldBodyTolerance : 5e-5))
             : hardTol;
+        const bodySolveTol = keepBodyZVertical
+            ? (isMJRestore
+                ? Math.min(
+                    Math.max(0, bodyTol),
+                    Number.isFinite(cfg.mjRestoreBodyActivationTolerance)
+                        ? Math.max(0, cfg.mjRestoreBodyActivationTolerance)
+                        : 1e-6
+                )
+                : bodyTol)
+            : bodyTol;
         const restorationMaxIterations = isMJRestore
             ? mjRestoreProfile.maxIterations
             : (Number.isFinite(cfg.manifoldMaxIter) ? Math.max(1, Math.floor(cfg.manifoldMaxIter)) : 120);
@@ -12406,9 +12455,20 @@ export class RobotVisualizer {
             : Date.now();
         const mjTimingStartMs = isMJRestore ? nowMs() : Number.NaN;
 
-        const selectedJogMetric = requestedJogMetric.trim().length > 0
+        const hasExplicitJogMetric = requestedJogMetric.trim().length > 0;
+        const configuredJogMetric = hasExplicitJogMetric
             ? normalizeHumanoidJogManifoldJogMetric(requestedJogMetric)
             : this._getHumanoidManifoldJogSecondaryMetric();
+        const shouldAutoPromoteUprightRefineMetric = (
+            !hasExplicitJogMetric &&
+            isMJRestore &&
+            includeWaist === true &&
+            keepBodyZVertical === true &&
+            (configuredJogMetric === 'none' || configuredJogMetric === 'w_abs_hier')
+        );
+        const selectedJogMetric = shouldAutoPromoteUprightRefineMetric
+            ? 'w_vfi'
+            : configuredJogMetric;
         const resolvedJogMetric = resolveHumanoidJogManifoldJogMetric(selectedJogMetric, {
             hierarchicalVfiBlend: this._getHumanoidHierarchicalVfiBlend()
         });
@@ -12434,6 +12494,9 @@ export class RobotVisualizer {
             absoluteTargetError <= 1e-12 &&
             relativeTargetError <= 1e-12
         );
+        const useDQSetpointAbsoluteError = isMJRestore &&
+            !isMetricOnlyJogRequest &&
+            cfg.mjRestoreAbsoluteDQSetpointError !== false;
         const useProjectionOnlyMetricJog = shouldUseHumanoidJogMJProjectionOnlyMetricStep({
             isMetricOnlyJogRequest,
             requestedMetric: jogMetricDiagnostic,
@@ -12516,11 +12579,22 @@ export class RobotVisualizer {
                     : 16
             })
             : 1;
+        const requestedWasmSolveVariant = typeof internalOptions?.wasmSolveVariant === 'string'
+            ? internalOptions.wasmSolveVariant
+            : '';
+        const effectiveWasmSolveVariant = requestedWasmSolveVariant ||
+            (useDQSetpointAbsoluteError ? 'absolute_dq_setpoint' : 'absolute_target');
+        const wasmHandlesDQSetpointAbsoluteError =
+            !useDQSetpointAbsoluteError ||
+            effectiveWasmSolveVariant === 'absolute_dq_setpoint' ||
+            effectiveWasmSolveVariant === 'cooperative_dq_setpoint';
         const allowWorkerForRegularizedMJRestore = solverMode === 'mj_restore_tr';
-        const canUseWorkerMJRestore = surfaceTubeInvariant === null &&
+        const canUseWorkerMJRestore = wasmHandlesDQSetpointAbsoluteError &&
+            surfaceTubeInvariant === null &&
             (useLocalRegularizedMJRestore !== true || allowWorkerForRegularizedMJRestore);
         const allowLocalTrustRegionWasm = cfg.mjRestoreTrustRegionUseLocalWasm === true;
-        const canUseLocalWasmMJRestore = surfaceTubeInvariant === null &&
+        const canUseLocalWasmMJRestore = wasmHandlesDQSetpointAbsoluteError &&
+            surfaceTubeInvariant === null &&
             useLocalRegularizedMJRestore !== true &&
             (solverMode !== 'mj_restore_tr' || allowLocalTrustRegionWasm);
         const trustRegionSyncBudgetMs = solverMode === 'mj_restore_tr'
@@ -12614,9 +12688,33 @@ export class RobotVisualizer {
             const Jabs = sliceRows(JabsFull, 8);
             const Jrel = sliceRows(JrelFull, 8);
             if (!Jabs || !Jrel) return null;
-            const relativeTargetArray = Array.isArray(relConstraintArray) ? relConstraintArray.slice() : [];
-            const relativePoseArray = relPose.slice(0, relativeTargetArray.length);
-            const relativeJacobianArray = Jrel.slice(0, relativeTargetArray.length).map((row) => row.slice());
+            let absoluteTargetArray = Array.isArray(dqAbsoluteTargetArray) ? dqAbsoluteTargetArray.slice() : [];
+            let absolutePoseArray = absPose.slice(0, absoluteTargetArray.length);
+            let absoluteJacobianArray = Jabs.slice(0, absoluteTargetArray.length).map((row) => row.slice());
+            let relativeTargetArray = Array.isArray(relConstraintArray) ? relConstraintArray.slice() : [];
+            let relativePoseArray = relPose.slice(0, relativeTargetArray.length);
+            let relativeJacobianArray = Jrel.slice(0, relativeTargetArray.length).map((row) => row.slice());
+
+            if (useDQSetpointAbsoluteError) {
+                const absoluteModel = this._buildHumanoidDQSetpointErrorModel(
+                    absPose.slice(0, 8),
+                    absoluteTargetArray.slice(0, 8),
+                    Jabs
+                );
+                const relativeModel = this._buildHumanoidDQSetpointErrorModel(
+                    relPose.slice(0, 8),
+                    relativeTargetArray.slice(0, 8),
+                    Jrel
+                );
+                if (!absoluteModel || !relativeModel) return null;
+                const zeroDQErrorTarget = new Array(8).fill(0);
+                absoluteTargetArray = zeroDQErrorTarget.slice();
+                absolutePoseArray = absoluteModel.error.slice();
+                absoluteJacobianArray = absoluteModel.jacobian.map((row) => row.slice());
+                relativeTargetArray = zeroDQErrorTarget.slice();
+                relativePoseArray = relativeModel.error.slice();
+                relativeJacobianArray = relativeModel.jacobian.map((row) => row.slice());
+            }
 
             let bodyConstraint = null;
             const protectedRows = relativeJacobianArray.map((row) => row.slice());
@@ -12656,7 +12754,7 @@ export class RobotVisualizer {
                     armStart,
                     activeCount,
                     mode: 'absolute',
-                    Jcmd: Jabs,
+                    Jcmd: absoluteJacobianArray,
                     Jinvariant: protectedRows,
                     activeLimits: manipActiveLimits,
                     forceInvariantEquality: true
@@ -12668,12 +12766,12 @@ export class RobotVisualizer {
                 solverMode,
                 q: qActiveEval,
                 qCurrent: qInitialActive,
-                absoluteTarget: dqAbsoluteTargetArray,
+                absoluteTarget: absoluteTargetArray,
                 relativeTarget: relativeTargetArray,
-                absolutePose: () => absPose.slice(0, dqAbsoluteTargetArray.length),
-                relativePose: () => relativePoseArray,
-                absoluteJacobian: () => Jabs.slice(0, dqAbsoluteTargetArray.length).map((row) => row.slice()),
-                relativeJacobian: () => relativeJacobianArray,
+                absolutePose: () => absolutePoseArray.slice(),
+                relativePose: () => relativePoseArray.slice(),
+                absoluteJacobian: () => absoluteJacobianArray.map((row) => row.slice()),
+                relativeJacobian: () => relativeJacobianArray.map((row) => row.slice()),
                 includeBodyZ: keepBodyZVertical,
                 bodyZConstraint: keepBodyZVertical
                     ? () => ({
@@ -12681,9 +12779,7 @@ export class RobotVisualizer {
                         jacobian: bodyConstraint?.jacobian ?? []
                     })
                     : null,
-                bodyEqualityTolerance: keepBodyZVertical
-                    ? (Number.isFinite(cfg.manifoldBodyTolerance) ? cfg.manifoldBodyTolerance : 5e-5)
-                    : 0,
+                bodyEqualityTolerance: keepBodyZVertical ? bodySolveTol : 0,
                 absoluteWeight: 1.0,
                 relativeWeight: relativeEqualityWeight,
                 bodyWeight: bodyEqualityWeight,
@@ -12726,8 +12822,9 @@ export class RobotVisualizer {
             problem.metadata = {
                 qFull,
                 cctsm,
-                Jcmd: Jabs,
+                Jcmd: absoluteJacobianArray,
                 Jabs,
+                dqSetpointError: useDQSetpointAbsoluteError,
                 protectedRows
             };
             return problem;
@@ -12781,9 +12878,7 @@ export class RobotVisualizer {
                     }
                 };
                 const commonWasmRequest = {
-                    solveVariant: typeof internalOptions?.wasmSolveVariant === 'string'
-                        ? internalOptions.wasmSolveVariant
-                        : 'absolute_target',
+                    solveVariant: effectiveWasmSolveVariant,
                     solverMode,
                     qInitial,
                     evaluateProblem: restoreEvaluateProblem,
@@ -12798,7 +12893,7 @@ export class RobotVisualizer {
                         ? internalOptions.wasmRightTarget
                         : null,
                     keepBodyZVertical,
-                    bodyEqualityTolerance: bodyTol,
+                    bodyEqualityTolerance: bodySolveTol,
                     absoluteWeight: 1.0,
                     relativeWeight: relativeEqualityWeight,
                     bodyWeight: bodyEqualityWeight,
@@ -13035,7 +13130,7 @@ export class RobotVisualizer {
                 }
             } else if (resolvedJogMetric.family === 'hierarchical') {
                 const primaryMetric = resolvedJogMetric.metric === 'w_abs_hier_vfi'
-                    ? 'safety_margin'
+                    ? 'w_vfi'
                     : 'w_abs_arm';
                 const enableMetricOnlyVfiFallbackHeuristics = shouldUseHumanoidJogMJMetricOnlyVfiFallbackHeuristics({
                     isMetricOnlyJogRequest,
@@ -13071,7 +13166,7 @@ export class RobotVisualizer {
                         && enableMetricOnlyVfiFallbackHeuristics
                         ? 'w_abs_hier_vfi'
                         : '',
-                    preferActiveLimitRetreat: isPosePreservingVFIMetric && enableMetricOnlyVfiFallbackHeuristics,
+                    preferActiveLimitRetreat: false,
                     projectionOnly: shouldUseHumanoidJogMJProjectionOnlyMetricStep({
                         isMetricOnlyJogRequest,
                         requestedMetric: jogMetricDiagnostic,
@@ -13135,7 +13230,7 @@ export class RobotVisualizer {
                                 stageMetric: resolvedJogMetric.metric
                             }) ? mjProjectionOnlyStepSize : nullspaceStepSize,
                             preferWVFIFallbackOnClip: isHierarchicalVFIJogMetric && enableMetricOnlyVfiFallbackHeuristics,
-                            preferActiveLimitRetreat: isHierarchicalVFIJogMetric && enableMetricOnlyVfiFallbackHeuristics,
+                            preferActiveLimitRetreat: false,
                             projectionOnly: shouldUseHumanoidJogMJProjectionOnlyMetricStep({
                                 isMetricOnlyJogRequest,
                                 requestedMetric: jogMetricDiagnostic,
@@ -13207,7 +13302,7 @@ export class RobotVisualizer {
                     inequalityTolerance: metricRefinementTolerance,
                     stepSize: useProjectionOnlyMetricJog ? mjProjectionOnlyStepSize : nullspaceStepSize,
                     preferWVFIFallbackOnClip: resolvedJogMetric.metric === 'w_abs_vfi' && enableMetricOnlyVfiFallbackHeuristics,
-                    preferActiveLimitRetreat: isPosePreservingVFIMetric && enableMetricOnlyVfiFallbackHeuristics,
+                    preferActiveLimitRetreat: false,
                     projectionOnly: useProjectionOnlyMetricJog,
                     projectionPasses: mjProjectionOnlyPasses,
                     restoreFn,
@@ -13636,6 +13731,7 @@ export class RobotVisualizer {
             ? normalizeHumanoidJogSolverMode(internalOptions.solverMode)
             : 'mj_restore';
         const isTrustRegionRestore = forwardedSolverMode === 'mj_restore_tr';
+        const useDQSetpointAbsoluteError = this.vfiConfig?.mjRestoreAbsoluteDQSetpointError !== false;
         const forwardedPreWState = typeof internalOptions?.preWState === 'string' ? internalOptions.preWState : '';
         const forwardedPreWMetric = typeof internalOptions?.preWMetric === 'string' ? internalOptions.preWMetric : '';
         const forwardedPreWStart = typeof internalOptions?.preWStart === 'string' ? internalOptions.preWStart : '';
@@ -13690,7 +13786,20 @@ export class RobotVisualizer {
         }));
         const shouldBypassWorkerForCurrentSolver = shouldBypassWorkerForRegularizedRestore &&
             forwardedSolverMode !== 'mj_restore_tr';
-        const shouldBypassWorkerQueue = surfaceTubeInvariant !== null || (this._canUseHumanoidJogMJRestoreWorker() &&
+        const forwardedWasmSolveVariant = typeof internalOptions?.wasmSolveVariant === 'string'
+            ? internalOptions.wasmSolveVariant
+            : (
+                useDQSetpointAbsoluteError && !isMetricOnlyJogRequest && surfaceTubeInvariant === null
+                    ? 'absolute_dq_setpoint'
+                    : undefined
+            );
+        const shouldBypassWorkerForDQSetpointError =
+            useDQSetpointAbsoluteError &&
+            !isMetricOnlyJogRequest &&
+            typeof forwardedWasmSolveVariant !== 'string';
+        const shouldBypassWorkerQueue = shouldBypassWorkerForDQSetpointError ||
+            surfaceTubeInvariant !== null ||
+            (this._canUseHumanoidJogMJRestoreWorker() &&
             (
                 (isLocalMetricOnlyRequest &&
                     translationAxisGuard === null &&
@@ -13699,7 +13808,9 @@ export class RobotVisualizer {
                 shouldBypassWorkerForCurrentSolver
             ));
         if (isTrustRegionRestore) {
-            if (surfaceTubeInvariant === null && this._canUseHumanoidJogMJRestoreWorker()) {
+            if (!shouldBypassWorkerForDQSetpointError &&
+                surfaceTubeInvariant === null &&
+                this._canUseHumanoidJogMJRestoreWorker()) {
                 return this._enqueueHumanoidJogMJRestoreWorkerRequest({
                     dqAbsoluteTargetArray: Array.isArray(dqAbsoluteTargetArray) ? dqAbsoluteTargetArray.slice() : [],
                     currentQ: Array.isArray(currentQ) ? currentQ.slice() : [],
@@ -13713,7 +13824,10 @@ export class RobotVisualizer {
                     metricDirection: internalOptions?.metricDirection,
                     preWState: forwardedPreWState,
                     preWMetric: forwardedPreWMetric,
-                    preWStart: forwardedPreWStart
+                    preWStart: forwardedPreWStart,
+                    wasmSolveVariant: forwardedWasmSolveVariant,
+                    wasmLeftTarget: internalOptions?.wasmLeftTarget,
+                    wasmRightTarget: internalOptions?.wasmRightTarget
                 });
             }
             return this._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstManifold(
@@ -13732,6 +13846,9 @@ export class RobotVisualizer {
                     preWState: forwardedPreWState,
                     preWMetric: forwardedPreWMetric,
                     preWStart: forwardedPreWStart,
+                    wasmSolveVariant: forwardedWasmSolveVariant,
+                    wasmLeftTarget: internalOptions?.wasmLeftTarget,
+                    wasmRightTarget: internalOptions?.wasmRightTarget,
                     surfaceTubeInvariant
                 }
             );
@@ -13753,6 +13870,9 @@ export class RobotVisualizer {
                     preWState: forwardedPreWState,
                     preWMetric: forwardedPreWMetric,
                     preWStart: forwardedPreWStart,
+                    wasmSolveVariant: forwardedWasmSolveVariant,
+                    wasmLeftTarget: internalOptions?.wasmLeftTarget,
+                    wasmRightTarget: internalOptions?.wasmRightTarget,
                     surfaceTubeInvariant
                 }
             );
@@ -13771,7 +13891,10 @@ export class RobotVisualizer {
                 metricDirection: internalOptions?.metricDirection,
                 preWState: forwardedPreWState,
                 preWMetric: forwardedPreWMetric,
-                preWStart: forwardedPreWStart
+                preWStart: forwardedPreWStart,
+                wasmSolveVariant: forwardedWasmSolveVariant,
+                wasmLeftTarget: internalOptions?.wasmLeftTarget,
+                wasmRightTarget: internalOptions?.wasmRightTarget
             });
         }
         return this._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstManifold(
@@ -13789,6 +13912,9 @@ export class RobotVisualizer {
                 preWState: forwardedPreWState,
                 preWMetric: forwardedPreWMetric,
                 preWStart: forwardedPreWStart,
+                wasmSolveVariant: forwardedWasmSolveVariant,
+                wasmLeftTarget: internalOptions?.wasmLeftTarget,
+                wasmRightTarget: internalOptions?.wasmRightTarget,
                 surfaceTubeInvariant
             }
         );
@@ -13921,6 +14047,11 @@ export class RobotVisualizer {
         const mjTimingStartMs = nowMs();
         const isPreWSolver = failureSolverMode === 'mj_restore_pre_w';
         const preferWorker = internalOptions?.preferWorker === true;
+        const trustRegionSyncBudgetMs = failureSolverMode === 'mj_restore_tr'
+            ? (Number.isFinite(cfg.mjRestoreTrustRegionSyncBudgetMs)
+                ? Math.max(0, cfg.mjRestoreTrustRegionSyncBudgetMs)
+                : 120)
+            : Number.POSITIVE_INFINITY;
 
         const requestedJogMetric = typeof internalOptions?.jogMetricOverride === 'string'
             ? normalizeHumanoidJogManifoldJogMetric(internalOptions.jogMetricOverride)
@@ -14333,7 +14464,7 @@ export class RobotVisualizer {
                 reductionFactor,
                 equalityTolerance: equalityTol,
                 inequalityTolerance: inequalityTol,
-                maxSolveMs: solverMode === 'mj_restore_tr' ? Math.min(trustRegionSyncBudgetMs, 40) : Number.POSITIVE_INFINITY,
+                maxSolveMs: failureSolverMode === 'mj_restore_tr' ? Math.min(trustRegionSyncBudgetMs, 40) : Number.POSITIVE_INFINITY,
                 nowMs
             });
             mjPolishMs = nowMs() - polishStartMs;
@@ -14382,7 +14513,7 @@ export class RobotVisualizer {
             if (!resolvedJogMetric.shouldSkip) {
                 if (resolvedJogMetric.family === 'hierarchical') {
                     const primaryMetric = resolvedJogMetric.metric === 'w_abs_hier_vfi'
-                        ? 'safety_margin'
+                        ? 'w_vfi'
                         : 'w_abs_arm';
                     const enableMetricOnlyVfiFallbackHeuristics = shouldUseHumanoidJogMJMetricOnlyVfiFallbackHeuristics({
                         isMetricOnlyJogRequest,
@@ -14415,7 +14546,7 @@ export class RobotVisualizer {
                         }) ? mjProjectionOnlyStepSize : mjNullspaceStepSize,
                         preferWVFIFallbackOnClip: (resolvedJogMetric.metric === 'w_abs_hier_vfi' || resolvedJogMetric.metric === 'w_abs_vfi') && enableMetricOnlyVfiFallbackHeuristics,
                         directionFallbackMetric: resolvedJogMetric.metric === 'w_abs_hier_vfi' && enableMetricOnlyVfiFallbackHeuristics ? 'w_abs_hier_vfi' : '',
-                        preferActiveLimitRetreat: (resolvedJogMetric.metric === 'w_abs_hier_vfi' || resolvedJogMetric.metric === 'w_abs_vfi') && enableMetricOnlyVfiFallbackHeuristics,
+                        preferActiveLimitRetreat: false,
                         projectionOnly: shouldUseHumanoidJogMJProjectionOnlyMetricStep({
                             isMetricOnlyJogRequest,
                             requestedMetric: jogMetricDiagnostic,
@@ -14479,7 +14610,7 @@ export class RobotVisualizer {
                                     stageMetric: resolvedJogMetric.metric
                                 }) ? mjProjectionOnlyStepSize : mjNullspaceStepSize,
                                 preferWVFIFallbackOnClip: resolvedJogMetric.metric === 'w_abs_vfi' && enableMetricOnlyVfiFallbackHeuristics,
-                                preferActiveLimitRetreat: resolvedJogMetric.metric === 'w_abs_vfi' && enableMetricOnlyVfiFallbackHeuristics,
+                                preferActiveLimitRetreat: false,
                                 projectionOnly: shouldUseHumanoidJogMJProjectionOnlyMetricStep({
                                     isMetricOnlyJogRequest,
                                     requestedMetric: jogMetricDiagnostic,
@@ -14551,7 +14682,7 @@ export class RobotVisualizer {
                         inequalityTolerance: metricRefinementTolerance,
                         stepSize: useProjectionOnlyMetricJog ? mjProjectionOnlyStepSize : mjNullspaceStepSize,
                         preferWVFIFallbackOnClip: (resolvedJogMetric.metric === 'w_abs_hier_vfi' || resolvedJogMetric.metric === 'w_abs_vfi') && enableMetricOnlyVfiFallbackHeuristics,
-                        preferActiveLimitRetreat: (resolvedJogMetric.metric === 'w_abs_hier_vfi' || resolvedJogMetric.metric === 'w_abs_vfi') && enableMetricOnlyVfiFallbackHeuristics,
+                        preferActiveLimitRetreat: false,
                         projectionOnly: useProjectionOnlyMetricJog,
                         projectionPasses: mjProjectionOnlyPasses,
                         restoreFn: restoreHumanoidJogMJ,
@@ -17205,7 +17336,8 @@ export class RobotVisualizer {
         includeWaist = false,
         keepBodyZVertical = false,
         fixedRelativeTargetArray = null,
-        translationAxisGuard = null
+        translationAxisGuard = null,
+        internalOptions = null
     ) {
         if (!this.humanoidModel || !window.humanoidQ || !currentQ || currentQ.length === 0) {
             return this._setIKFailureStatus({ solver: 'vfi', mode: 'humanoid_absolute', reason: 'invalid_state', message: '人形状态未初始化。' });
@@ -17732,7 +17864,8 @@ export class RobotVisualizer {
                 includeWaist,
                 keepBodyZVertical,
                 fixedRelativeTargetArray,
-                translationAxisGuard
+                translationAxisGuard,
+                internalOptions
             );
         }
         this._publishHumanoidJogDiagnostics({
@@ -18933,7 +19066,7 @@ export class RobotVisualizer {
             if (!resolvedJogMetric.shouldSkip) {
                 if (resolvedJogMetric.family === 'hierarchical') {
                     const primaryMetric = resolvedJogMetric.metric === 'w_abs_hier_vfi'
-                        ? 'safety_margin'
+                        ? 'w_vfi'
                         : 'w_abs_arm';
                     const enableMetricOnlyVfiFallbackHeuristics = shouldUseHumanoidJogMJMetricOnlyVfiFallbackHeuristics({
                         isMetricOnlyJogRequest,
@@ -18966,7 +19099,7 @@ export class RobotVisualizer {
                         }) ? mjProjectionOnlyStepSize : mjNullspaceStepSize,
                         preferWVFIFallbackOnClip: (resolvedJogMetric.metric === 'w_abs_hier_vfi' || resolvedJogMetric.metric === 'w_abs_vfi') && enableMetricOnlyVfiFallbackHeuristics,
                         directionFallbackMetric: resolvedJogMetric.metric === 'w_abs_hier_vfi' && enableMetricOnlyVfiFallbackHeuristics ? 'w_abs_hier_vfi' : '',
-                        preferActiveLimitRetreat: (resolvedJogMetric.metric === 'w_abs_hier_vfi' || resolvedJogMetric.metric === 'w_abs_vfi') && enableMetricOnlyVfiFallbackHeuristics,
+                        preferActiveLimitRetreat: false,
                         projectionOnly: shouldUseHumanoidJogMJProjectionOnlyMetricStep({
                             isMetricOnlyJogRequest,
                             requestedMetric: jogMetricDiagnostic,
@@ -19030,7 +19163,7 @@ export class RobotVisualizer {
                                     stageMetric: resolvedJogMetric.metric
                                 }) ? mjProjectionOnlyStepSize : mjNullspaceStepSize,
                                 preferWVFIFallbackOnClip: resolvedJogMetric.metric === 'w_abs_vfi' && enableMetricOnlyVfiFallbackHeuristics,
-                                preferActiveLimitRetreat: resolvedJogMetric.metric === 'w_abs_vfi' && enableMetricOnlyVfiFallbackHeuristics,
+                                preferActiveLimitRetreat: false,
                                 projectionOnly: shouldUseHumanoidJogMJProjectionOnlyMetricStep({
                                     isMetricOnlyJogRequest,
                                     requestedMetric: jogMetricDiagnostic,
@@ -19102,7 +19235,7 @@ export class RobotVisualizer {
                         inequalityTolerance: metricRefinementTolerance,
                         stepSize: useProjectionOnlyMetricJog ? mjProjectionOnlyStepSize : mjNullspaceStepSize,
                         preferWVFIFallbackOnClip: (resolvedJogMetric.metric === 'w_abs_hier_vfi' || resolvedJogMetric.metric === 'w_abs_vfi') && enableMetricOnlyVfiFallbackHeuristics,
-                        preferActiveLimitRetreat: (resolvedJogMetric.metric === 'w_abs_hier_vfi' || resolvedJogMetric.metric === 'w_abs_vfi') && enableMetricOnlyVfiFallbackHeuristics,
+                        preferActiveLimitRetreat: false,
                         projectionOnly: useProjectionOnlyMetricJog,
                         projectionPasses: mjProjectionOnlyPasses,
                         restoreFn: restoreHumanoidJogMJ,
@@ -22047,7 +22180,7 @@ export class RobotVisualizer {
         const DQ = window.DQModule?.DQWrapper;
         if (!DQ) return false;
 
-        const activeIndices = this._humanoidCoordinatedDualArmIndices(includeWaist);
+        const activeIndices = this._humanoidCoordinatedDualArmIndices(true);
         if (activeIndices.length <= 0) return false;
 
         const commandPoseGetter = armIndex === 1

@@ -770,17 +770,21 @@ Evaluation evaluateConfiguration(
             absolute_pose_jacobian_active,
             context.absolute_target
         );
-        const VectorXd relative_error = signedPoseError(context.relative_target, relative_pose.q);
+        const DQSetpointErrorModel relative_model = buildDQSetpointErrorModel(
+            relative_pose,
+            relative_pose_jacobian_active,
+            context.relative_target
+        );
 
         evaluation.absolute_residual_norm = absolute_model.error.norm();
-        evaluation.relative_residual_norm = relative_error.norm();
+        evaluation.relative_residual_norm = relative_model.error.norm();
 
         task_weighted_residual_blocks.push_back((-absolute_model.error) * context.request.absolute_weight);
         task_weighted_jacobian_blocks.push_back(absolute_model.jacobian * context.request.absolute_weight);
         evaluation.absolute_row_count = task_weighted_residual_blocks.back().size();
 
-        task_weighted_residual_blocks.push_back(relative_error * context.request.relative_weight);
-        task_weighted_jacobian_blocks.push_back(relative_pose_jacobian_active * context.request.relative_weight);
+        task_weighted_residual_blocks.push_back((-relative_model.error) * context.request.relative_weight);
+        task_weighted_jacobian_blocks.push_back(relative_model.jacobian * context.request.relative_weight);
         evaluation.relative_row_count = task_weighted_residual_blocks.back().size();
     } else {
         const DQ absolute_pose = context.robot.absolutePoseDualArm(evaluation.q_full);

@@ -72,6 +72,11 @@ test('index.html exposes the humanoid parameter panel with joint-limit eta and R
     assert.match(html, /id="humanoid-joint-limit-eta-input"/);
     assert.match(html, /id="humanoid-joint-limit-eta-status"/);
     assert.match(html, /关节极限 VFI η_θ/);
+    assert.match(html, /id="humanoid-waist-x-eta-input"/);
+    assert.match(html, /id="humanoid-waist-x-vfi-status"/);
+    assert.match(html, /走廊 VFI η_x/);
+    assert.doesNotMatch(html, /id="humanoid-waist-x-activation-threshold-input"/);
+    assert.doesNotMatch(html, /走廊距离尺度 \(m\)/);
     assert.match(html, /ROS 2 发布默认值/);
     assert.match(html, /id="humanoid-ros2-arm-vel-input"/);
     assert.match(html, /id="humanoid-ros2-arm-acc-input"/);
