@@ -83,6 +83,14 @@ export function buildHumanoidJogMJDiagnostics({
         restoreRejectedReason: typeof restorationResult?.lastRejectedReason === 'string'
             ? restorationResult.lastRejectedReason
             : '',
+        trSafetyStatus: typeof restorationResult?.safetyStatus === 'string'
+            ? restorationResult.safetyStatus
+            : 'skipped',
+        safetyResidualBefore: asFinite(restorationResult?.safetyResidualBefore),
+        safetyResidualAfter: asFinite(restorationResult?.safetyResidualAfter),
+        safetyAcceptedIterations: Number.isFinite(restorationResult?.safetyAcceptedIterations)
+            ? restorationResult.safetyAcceptedIterations
+            : 0,
         polishIterations: asFinite(polishIterations),
         nullspaceAccepted: nullspaceResult?.accepted === true,
         nullspaceReason: typeof nullspaceResult?.reason === 'string' ? nullspaceResult.reason : null,

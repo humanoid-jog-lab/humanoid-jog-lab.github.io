@@ -835,8 +835,46 @@ private:
             "tolerance",
             request.waist_x_corridor.tolerance
         );
+        request.waist_x_corridor.activation_threshold = getOptionalNumberField(
+            waist_corridor_js,
+            "activationThreshold",
+            request.waist_x_corridor.activation_threshold
+        );
         request.waist_x_corridor.rows = jsArrayToNestedStdVectorDouble(waist_corridor_js["rows"]);
         request.waist_x_corridor.rhs = jsArrayToStdVectorDouble(waist_corridor_js["rhs"]);
+
+        const val safety_push_js = request_js["safetyPush"];
+        if (!safety_push_js.isUndefined()) {
+            request.safety_push.enabled =
+                safety_push_js["enabled"].isUndefined()
+                    ? request.safety_push.enabled
+                    : safety_push_js["enabled"].as<bool>();
+            request.safety_push.weight = getOptionalNumberField(
+                safety_push_js,
+                "weight",
+                request.safety_push.weight
+            );
+            request.safety_push.activation_residual = getOptionalNumberField(
+                safety_push_js,
+                "activationResidual",
+                request.safety_push.activation_residual
+            );
+            request.safety_push.pose_hold_tolerance = getOptionalNumberField(
+                safety_push_js,
+                "poseHoldTolerance",
+                request.safety_push.pose_hold_tolerance
+            );
+            request.safety_push.target_fraction = getOptionalNumberField(
+                safety_push_js,
+                "targetFraction",
+                request.safety_push.target_fraction
+            );
+            request.safety_push.max_distance_step = getOptionalNumberField(
+                safety_push_js,
+                "maxDistanceStep",
+                request.safety_push.max_distance_step
+            );
+        }
 
         const val reference_model_js = request_js["referenceModel"];
         const val absolute_reference_js = reference_model_js["absolute"];
@@ -985,6 +1023,10 @@ private:
         out.set("lastRejectedReason", result.last_rejected_reason);
         out.set("bestConstraintViolation", result.best_constraint_violation);
         out.set("filterSize", result.filter_size);
+        out.set("safetyStatus", result.safety_status);
+        out.set("safetyResidualBefore", result.safety_residual_before);
+        out.set("safetyResidualAfter", result.safety_residual_after);
+        out.set("safetyAcceptedIterations", result.safety_accepted_iterations);
         out.set("referenceResidual", stdVectorToJsArray(result.reference_residual));
         out.set("constraintMotion", stdVectorToJsArray(result.constraint_motion));
         out.set("qApplied", stdVectorToJsArray(result.q_applied));

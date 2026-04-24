@@ -30,7 +30,15 @@ export const HUMANOID_MJ_RESTORE_WASM_DEFAULTS = Object.freeze({
     rhoShrinkThreshold: 0.05,
     rhoExpandThreshold: 0.75,
     equalityTolerance: 1e-12,
-    inequalityTolerance: 1e-12
+    inequalityTolerance: 1e-12,
+    safetyPush: {
+        enabled: true,
+        weight: 0.05,
+        activationResidual: 1e-5,
+        poseHoldTolerance: 2e-6,
+        targetFraction: 0.25,
+        maxDistanceStep: 0.01
+    }
 });
 
 function nowMs() {
@@ -146,7 +154,13 @@ export function buildHumanoidJogMJRestoreWasmRequest({
     rhoExpandThreshold,
     regularizationWeights,
     equalityTolerance,
-    inequalityTolerance
+    inequalityTolerance,
+    safetyPushEnabled,
+    safetyPushWeight,
+    safetyPushActivationResidual,
+    safetyPushPoseHoldTolerance,
+    safetyPushTargetFraction,
+    safetyPushMaxDistanceStep
 } = {}) {
     const fallback = HUMANOID_MJ_RESTORE_WASM_DEFAULTS;
     return {
@@ -192,6 +206,13 @@ export function buildHumanoidJogMJRestoreWasmRequest({
             min: finiteOr(waistXCorridor?.min, Number.NEGATIVE_INFINITY),
             max: finiteOr(waistXCorridor?.max, Number.POSITIVE_INFINITY),
             tolerance: Math.max(0, finiteOr(waistXCorridor?.tolerance, 0)),
+            activationThreshold: Math.max(
+                0,
+                finiteOr(
+                    waistXCorridor?.activationThreshold,
+                    finiteOr(waistXCorridor?.vfiConstraints?.[0]?.threshold, 0.12)
+                )
+            ),
             rows: cloneCorridorRows(waistXCorridor),
             rhs: cloneArray(waistXCorridor?.rhs)
         },
@@ -229,7 +250,23 @@ export function buildHumanoidJogMJRestoreWasmRequest({
         rhoShrinkThreshold: finiteOr(rhoShrinkThreshold, fallback.rhoShrinkThreshold),
         rhoExpandThreshold: finiteOr(rhoExpandThreshold, fallback.rhoExpandThreshold),
         equalityTolerance: Math.max(0, finiteOr(equalityTolerance, fallback.equalityTolerance)),
-        inequalityTolerance: Math.max(0, finiteOr(inequalityTolerance, fallback.inequalityTolerance))
+        inequalityTolerance: Math.max(0, finiteOr(inequalityTolerance, fallback.inequalityTolerance)),
+        safetyPush: {
+            enabled: safetyPushEnabled == null
+                ? fallback.safetyPush.enabled
+                : safetyPushEnabled === true,
+            weight: Math.max(0, finiteOr(safetyPushWeight, fallback.safetyPush.weight)),
+            activationResidual: Math.max(
+                0,
+                finiteOr(safetyPushActivationResidual, fallback.safetyPush.activationResidual)
+            ),
+            poseHoldTolerance: Math.max(
+                0,
+                finiteOr(safetyPushPoseHoldTolerance, fallback.safetyPush.poseHoldTolerance)
+            ),
+            targetFraction: Math.max(0, finiteOr(safetyPushTargetFraction, fallback.safetyPush.targetFraction)),
+            maxDistanceStep: Math.max(0, finiteOr(safetyPushMaxDistanceStep, fallback.safetyPush.maxDistanceStep))
+        }
     };
 }
 
@@ -316,6 +353,18 @@ export function normalizeHumanoidJogMJRestoreWasmResult(resultRaw, fallbackQAppl
             ? resultRaw.secondaryAfter
             : Number.NaN,
         secondaryApplied: resultRaw?.secondaryApplied === true,
+        safetyStatus: typeof resultRaw?.safetyStatus === 'string' && resultRaw.safetyStatus.trim()
+            ? resultRaw.safetyStatus.trim()
+            : 'skipped',
+        safetyResidualBefore: Number.isFinite(resultRaw?.safetyResidualBefore)
+            ? resultRaw.safetyResidualBefore
+            : Number.NaN,
+        safetyResidualAfter: Number.isFinite(resultRaw?.safetyResidualAfter)
+            ? resultRaw.safetyResidualAfter
+            : Number.NaN,
+        safetyAcceptedIterations: Number.isFinite(resultRaw?.safetyAcceptedIterations)
+            ? resultRaw.safetyAcceptedIterations
+            : 0,
         referenceResidual: cloneArray(resultRaw?.referenceResidual),
         constraintMotion: cloneArray(resultRaw?.constraintMotion),
         qApplied: Array.isArray(resultRaw?.qApplied)
@@ -366,7 +415,13 @@ export function attemptHumanoidJogMJRestoreWasm({
     dampingGrowthFactor,
     regularizationWeights,
     equalityTolerance,
-    inequalityTolerance
+    inequalityTolerance,
+    safetyPushEnabled,
+    safetyPushWeight,
+    safetyPushActivationResidual,
+    safetyPushPoseHoldTolerance,
+    safetyPushTargetFraction,
+    safetyPushMaxDistanceStep
 } = {}) {
     const normalizedSolverMode = normalizeSolverMode(solverMode);
     const normalizedSolveVariant = normalizeSolveVariant(solveVariant);
@@ -426,7 +481,13 @@ export function attemptHumanoidJogMJRestoreWasm({
         rhoExpandThreshold,
         regularizationWeights,
         equalityTolerance,
-        inequalityTolerance
+        inequalityTolerance,
+        safetyPushEnabled,
+        safetyPushWeight,
+        safetyPushActivationResidual,
+        safetyPushPoseHoldTolerance,
+        safetyPushTargetFraction,
+        safetyPushMaxDistanceStep
     });
     const preMs = nowMs() - preStartMs;
 
@@ -511,6 +572,18 @@ export function buildHumanoidJogMJRestoreWasmEnvelope({
             ? attempt.bestConstraintViolation
             : Number.POSITIVE_INFINITY,
         filterSize: Number.isFinite(attempt.filterSize) ? attempt.filterSize : 0,
+        safetyStatus: typeof attempt.safetyStatus === 'string' && attempt.safetyStatus.trim()
+            ? attempt.safetyStatus.trim()
+            : 'skipped',
+        safetyResidualBefore: Number.isFinite(attempt.safetyResidualBefore)
+            ? attempt.safetyResidualBefore
+            : Number.NaN,
+        safetyResidualAfter: Number.isFinite(attempt.safetyResidualAfter)
+            ? attempt.safetyResidualAfter
+            : Number.NaN,
+        safetyAcceptedIterations: Number.isFinite(attempt.safetyAcceptedIterations)
+            ? attempt.safetyAcceptedIterations
+            : 0,
         lastReferenceResidual: Array.isArray(attempt.lastReferenceResidual)
             ? attempt.lastReferenceResidual.slice()
             : [],
@@ -570,6 +643,12 @@ export async function attemptHumanoidJogMJRestoreWasmWorker({
     regularizationWeights,
     equalityTolerance,
     inequalityTolerance,
+    safetyPushEnabled,
+    safetyPushWeight,
+    safetyPushActivationResidual,
+    safetyPushPoseHoldTolerance,
+    safetyPushTargetFraction,
+    safetyPushMaxDistanceStep,
     secondaryMetricRequest = null
 } = {}) {
     if (!workerClient || !modelSpec || typeof workerClient.solve !== 'function' || typeof evaluateProblem !== 'function') {
@@ -626,7 +705,13 @@ export async function attemptHumanoidJogMJRestoreWasmWorker({
         rhoExpandThreshold,
         regularizationWeights,
         equalityTolerance,
-        inequalityTolerance
+        inequalityTolerance,
+        safetyPushEnabled,
+        safetyPushWeight,
+        safetyPushActivationResidual,
+        safetyPushPoseHoldTolerance,
+        safetyPushTargetFraction,
+        safetyPushMaxDistanceStep
     });
     const preMs = nowMs() - preStartMs;
 

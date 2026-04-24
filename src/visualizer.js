@@ -448,6 +448,12 @@ export class RobotVisualizer {
             mjRestoreArmOnlyFallbackPolishDamping: 1e-7,
             mjRestoreAbsoluteDQSetpointError: true,
             mjRestoreEnableNullspaceRefine: false,
+            mjRestoreSafetyPushEnabled: true,
+            mjRestoreSafetyPushWeight: 0.05,
+            mjRestoreSafetyPushActivationResidual: 1e-5,
+            mjRestoreSafetyPushPoseHoldTolerance: 2e-6,
+            mjRestoreSafetyPushTargetFraction: 0.25,
+            mjRestoreSafetyPushMaxDistanceStep: 0.01,
             mjRestoreUseWorker: true,
             manifoldJogSecondaryMetric: 'none',
             manifoldNullspaceStepSize: 0.1,
@@ -763,6 +769,24 @@ export class RobotVisualizer {
             modeTag: 'idle',
             active: this._getHumanoidJogSolverMode() !== 'priority',
             message: `关节极限 VFI η_θ 已更新为 ${parsed.toFixed(2)}。`
+        });
+    }
+
+    setHumanoidTRSafetyPushWeight(value) {
+        if (!this.vfiConfig) this.vfiConfig = {};
+        const parsed = Number(value);
+        if (!Number.isFinite(parsed) || parsed < 0) {
+            return;
+        }
+        this.vfiConfig.mjRestoreSafetyPushWeight = parsed;
+        if (typeof window !== 'undefined') {
+            window.humanoidTRSafetyPushWeight = parsed;
+        }
+        this._publishHumanoidJogDiagnostics({
+            solverMode: this._getHumanoidJogSolverMode(),
+            modeTag: 'idle',
+            active: this._getHumanoidJogSolverMode() !== 'priority',
+            message: `TR 安全推离权重 β 已更新为 ${parsed.toFixed(3)}。`
         });
     }
 
@@ -2645,6 +2669,15 @@ export class RobotVisualizer {
         ) {
             lines.push(
                 `restore(acc/res/scale): ${Number.isFinite(payload.restoreAcceptedIterations) ? payload.restoreAcceptedIterations : 'n/a'} / ${this._formatDiagNumber(payload.restoreResidualNorm)} / ${this._formatDiagNumber(payload.restoreScale)}`
+            );
+        }
+        if (
+            (typeof payload.trSafetyStatus === 'string' && payload.trSafetyStatus.trim().length > 0) ||
+            Number.isFinite(payload.safetyResidualBefore) ||
+            Number.isFinite(payload.safetyResidualAfter)
+        ) {
+            lines.push(
+                `tr_safety: ${payload.trSafetyStatus || 'skipped'}  safety(before/after): ${this._formatDiagNumber(payload.safetyResidualBefore)} / ${this._formatDiagNumber(payload.safetyResidualAfter)}`
             );
         }
         if (
@@ -12455,20 +12488,14 @@ export class RobotVisualizer {
             : Date.now();
         const mjTimingStartMs = isMJRestore ? nowMs() : Number.NaN;
 
-        const hasExplicitJogMetric = requestedJogMetric.trim().length > 0;
+        const normalizedRequestedJogMetric = normalizeHumanoidJogManifoldJogMetric(requestedJogMetric);
+        const hasExplicitJogMetric = requestedJogMetric.trim().length > 0 &&
+            normalizedRequestedJogMetric !== 'none';
+        const suppressAutomaticMJRestoreRefine = isMJRestore && !hasExplicitJogMetric;
         const configuredJogMetric = hasExplicitJogMetric
-            ? normalizeHumanoidJogManifoldJogMetric(requestedJogMetric)
-            : this._getHumanoidManifoldJogSecondaryMetric();
-        const shouldAutoPromoteUprightRefineMetric = (
-            !hasExplicitJogMetric &&
-            isMJRestore &&
-            includeWaist === true &&
-            keepBodyZVertical === true &&
-            (configuredJogMetric === 'none' || configuredJogMetric === 'w_abs_hier')
-        );
-        const selectedJogMetric = shouldAutoPromoteUprightRefineMetric
-            ? 'w_vfi'
-            : configuredJogMetric;
+            ? normalizedRequestedJogMetric
+            : (suppressAutomaticMJRestoreRefine ? 'none' : this._getHumanoidManifoldJogSecondaryMetric());
+        const selectedJogMetric = configuredJogMetric;
         const resolvedJogMetric = resolveHumanoidJogManifoldJogMetric(selectedJogMetric, {
             hierarchicalVfiBlend: this._getHumanoidHierarchicalVfiBlend()
         });
@@ -12666,6 +12693,22 @@ export class RobotVisualizer {
         const jointLimitActivationThreshold = Number.isFinite(cfg?.jointLimitManipulabilityActivationThreshold)
             ? Math.max(0, cfg.jointLimitManipulabilityActivationThreshold)
             : 0.05;
+        const mjRestoreSafetyPushEnabled = cfg.mjRestoreSafetyPushEnabled !== false;
+        const mjRestoreSafetyPushWeight = Number.isFinite(cfg.mjRestoreSafetyPushWeight)
+            ? Math.max(0, cfg.mjRestoreSafetyPushWeight)
+            : 0.05;
+        const mjRestoreSafetyPushActivationResidual = Number.isFinite(cfg.mjRestoreSafetyPushActivationResidual)
+            ? Math.max(0, cfg.mjRestoreSafetyPushActivationResidual)
+            : 1e-5;
+        const mjRestoreSafetyPushPoseHoldTolerance = Number.isFinite(cfg.mjRestoreSafetyPushPoseHoldTolerance)
+            ? Math.max(0, cfg.mjRestoreSafetyPushPoseHoldTolerance)
+            : 2e-6;
+        const mjRestoreSafetyPushTargetFraction = Number.isFinite(cfg.mjRestoreSafetyPushTargetFraction)
+            ? Math.max(0, cfg.mjRestoreSafetyPushTargetFraction)
+            : 0.25;
+        const mjRestoreSafetyPushMaxDistanceStep = Number.isFinite(cfg.mjRestoreSafetyPushMaxDistanceStep)
+            ? Math.max(0, cfg.mjRestoreSafetyPushMaxDistanceStep)
+            : 0.01;
 
         const evaluateProblem = (qActiveEval, options = {}) => {
             const qFull = this._writeHumanoidActiveJoints(qInitialFull, qActiveEval, armStart, activeCount);
@@ -12762,7 +12805,7 @@ export class RobotVisualizer {
                 : null;
 
             const problemBuilder = isMJRestore ? buildHumanoidJogMJProblem : buildHumanoidJogManifoldProblem;
-                const problem = problemBuilder({
+            const problem = problemBuilder({
                 solverMode,
                 q: qActiveEval,
                 qCurrent: qInitialActive,
@@ -12790,11 +12833,14 @@ export class RobotVisualizer {
                     })
                     : null,
                 wvfiLowerBound: restorationWVFILowerBound,
-                    lowerBounds,
-                    upperBounds,
-                    stepBounds: jointMaxSteps,
-                    enableJointLimitVFI: enableJointLimitAvoidance,
-                    jointLimitActivationThreshold,
+                lowerBounds,
+                upperBounds,
+                stepBounds: jointMaxSteps,
+                enableJointLimitVFI: enableJointLimitAvoidance,
+                jointLimitActivationThreshold,
+                mjRestoreSafetyPushEnabled,
+                safetyPushTargetFraction: mjRestoreSafetyPushTargetFraction,
+                safetyPushMaxDistanceStep: mjRestoreSafetyPushMaxDistanceStep,
                 waistXCorridor: this._buildHumanoidManifoldWaistXCorridor({
                     qFull,
                     qInitialFull,
@@ -12910,6 +12956,12 @@ export class RobotVisualizer {
                     maxTrustRegionRetries: mjRestoreProfile.maxTrustRegionRetries,
                     rhoAcceptanceThreshold: mjRestoreProfile.rhoAcceptanceThreshold,
                     rhoShrinkThreshold: mjRestoreProfile.rhoShrinkThreshold,
+                    safetyPushEnabled: mjRestoreSafetyPushEnabled,
+                    safetyPushWeight: mjRestoreSafetyPushWeight,
+                    safetyPushActivationResidual: mjRestoreSafetyPushActivationResidual,
+                    safetyPushPoseHoldTolerance: mjRestoreSafetyPushPoseHoldTolerance,
+                    safetyPushTargetFraction: mjRestoreSafetyPushTargetFraction,
+                    safetyPushMaxDistanceStep: mjRestoreSafetyPushMaxDistanceStep,
                     regularizationWeights: mjRestoreRegularizationWeights,
                     initialScale,
                     minScale,
@@ -12959,6 +13011,10 @@ export class RobotVisualizer {
                     maxTrustRegionRetries: mjRestoreProfile.maxTrustRegionRetries,
                     rhoAcceptanceThreshold: mjRestoreProfile.rhoAcceptanceThreshold,
                     rhoShrinkThreshold: mjRestoreProfile.rhoShrinkThreshold,
+                    safetyPushEnabled: mjRestoreSafetyPushEnabled,
+                    safetyPushWeight: mjRestoreSafetyPushWeight,
+                    safetyPushActivationResidual: mjRestoreSafetyPushActivationResidual,
+                    safetyPushPoseHoldTolerance: mjRestoreSafetyPushPoseHoldTolerance,
                     equalityTolerance,
                     inequalityTolerance,
                     maxSolveMs: trustRegionSyncBudgetMs,
@@ -13057,6 +13113,7 @@ export class RobotVisualizer {
         let effectiveResult = effectiveRestorationResult;
         let nullspaceResult = null;
         let nullspaceRefineResult = null;
+        let nullspaceRefineMs = Number.NaN;
         let fallbackReason = inheritedFallbackReason;
         let fallbackMs = Number.NaN;
         const restoredProblem = effectiveRestorationResult.currentProblem || evaluateProblem(effectiveRestorationResult.qApplied);
@@ -13083,7 +13140,11 @@ export class RobotVisualizer {
             jogMetricBefore = workerMetricAttempt.before;
             jogMetricAfter = workerMetricAttempt.after;
             jogMetricApplied = workerMetricAttempt.applied === true;
-        } else if (effectiveRestorationResult.converged && restoredProblem && mjEnableNullspaceRefine) {
+        } else if (effectiveRestorationResult.converged &&
+            restoredProblem &&
+            mjEnableNullspaceRefine &&
+            resolvedJogMetric.shouldSkip !== true) {
+            const nullspaceRefineStartMs = isMJRestore ? nowMs() : Number.NaN;
             const nullspaceStepSize = mjNullspaceStepSize;
             if (
                 iterativeMetricProjectionPlan &&
@@ -13329,6 +13390,7 @@ export class RobotVisualizer {
                 jogMetricAfter = jogMetricBefore;
                 jogMetricState = 'skipped(none)';
             }
+            nullspaceRefineMs = isMJRestore ? (nowMs() - nullspaceRefineStartMs) : Number.NaN;
         } else if (effectiveRestorationResult.converged && restoredProblem && !mjEnableNullspaceRefine) {
             jogMetricBefore = this._evaluateHumanoidJogManifoldMetricValue(
                 resolvedJogMetric.metric,
@@ -13577,8 +13639,10 @@ export class RobotVisualizer {
             `restore=${restorationResult.reason}`,
             isMJRestore ? `polish=${mjPolishState}${mjPolishResult?.reason ? `(${mjPolishResult.reason})` : ''}` : null,
             Number.isFinite(mjPolishMs) ? `polish_ms=${this._formatDiagNumber(mjPolishMs)}` : null,
+            Number.isFinite(nullspaceRefineMs) ? `refine_ms=${this._formatDiagNumber(nullspaceRefineMs)}` : null,
             `nullspace=${nullspaceResult?.reason ?? 'skipped'}`,
             nullspaceRefineResult ? `nullspace_restore=${nullspaceRefineResult.reason}` : null,
+            isMJRestore && diagnosticsPayload.trSafetyStatus ? `tr_safety=${diagnosticsPayload.trSafetyStatus}` : null,
             `jog_metric=${jogMetricDiagnostic}`,
             `jog_metric_opt=${jogMetricState}`,
             diagnosticsPayload.fallbackReason ? `fallback=${diagnosticsPayload.fallbackReason}` : null,
@@ -13611,6 +13675,7 @@ export class RobotVisualizer {
                 timingSolveMs,
                 timingPostMs,
                 Number.isFinite(mjPolishMs) ? mjPolishMs : 0,
+                Number.isFinite(nullspaceRefineMs) ? nullspaceRefineMs : 0,
                 Number.isFinite(fallbackMs) ? fallbackMs : 0,
                 cctsmMs,
                 diagnosticMs

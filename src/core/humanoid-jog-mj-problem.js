@@ -50,6 +50,85 @@ function buildJointLimitVFIRows({ q = [], lowerBounds = [], upperBounds = [], st
     };
 }
 
+function buildHumanoidJogMJSafetyObjective({
+    problem,
+    lowerBounds = [],
+    upperBounds = [],
+    jointLimitActivationThreshold = 0.15,
+    safetyPushTargetFraction = 0.25,
+    safetyPushMaxDistanceStep = 0.01
+} = {}) {
+    const qEval = Array.isArray(problem?.q) ? problem.q : [];
+    const width = qEval.length;
+    const rows = [];
+    const targets = [];
+    const maxDistanceStep = Math.max(0, asFinite(safetyPushMaxDistanceStep, 0.01));
+    const targetFraction = Math.max(0, asFinite(safetyPushTargetFraction, 0.25));
+    const jointTargetMargin = Math.max(0, asFinite(jointLimitActivationThreshold, 0.15)) * targetFraction;
+
+    const addDistanceTarget = (row, distance, targetMargin) => {
+        if (!Array.isArray(row) || row.length !== width || !Number.isFinite(distance)) return;
+        const margin = Math.max(0, asFinite(targetMargin, 0));
+        const residual = margin - Math.max(0, distance);
+        if (residual <= 1e-12) return;
+        rows.push(row.map((value) => asFinite(value, 0)));
+        targets.push(Math.min(maxDistanceStep, residual));
+    };
+
+    if (jointTargetMargin > 0 && maxDistanceStep > 0) {
+        for (let index = 0; index < width; index++) {
+            const qi = asFinite(qEval[index], 0);
+            const lower = Number.isFinite(lowerBounds?.[index]) ? lowerBounds[index] : Number.NEGATIVE_INFINITY;
+            const upper = Number.isFinite(upperBounds?.[index]) ? upperBounds[index] : Number.POSITIVE_INFINITY;
+            if (Number.isFinite(upper)) {
+                const row = new Array(width).fill(0);
+                row[index] = -1;
+                addDistanceTarget(row, upper - qi, jointTargetMargin);
+            }
+            if (Number.isFinite(lower)) {
+                const row = new Array(width).fill(0);
+                row[index] = 1;
+                addDistanceTarget(row, qi - lower, jointTargetMargin);
+            }
+        }
+    }
+
+    const corridor = problem?.inequalities?.waistXCorridor;
+    if (corridor?.enabled === true && width > 0 && maxDistanceStep > 0) {
+        const value = Number.isFinite(corridor.value) ? corridor.value : Number.NaN;
+        const constraints = Array.isArray(corridor.vfiConstraints) ? corridor.vfiConstraints : [];
+        if (constraints.length > 0) {
+            for (const constraint of constraints) {
+                const targetMargin = Math.max(0, asFinite(constraint?.threshold, 0)) * targetFraction;
+                addDistanceTarget(constraint?.row, constraint?.distance, targetMargin);
+            }
+        } else if (Number.isFinite(value)) {
+            const vfiRows = Array.isArray(corridor.vfiRows) ? corridor.vfiRows : [];
+            let rowIndex = 0;
+            if (Number.isFinite(corridor.max) && Array.isArray(vfiRows[rowIndex])) {
+                const row = vfiRows[rowIndex].map((entry) => -asFinite(entry, 0));
+                const targetMargin = Math.max(0, asFinite(corridor.threshold, asFinite(corridor.activationThreshold, 0))) * targetFraction;
+                addDistanceTarget(row, corridor.max - value, targetMargin);
+                rowIndex += 1;
+            }
+            if (Number.isFinite(corridor.min) && Array.isArray(vfiRows[rowIndex])) {
+                const row = vfiRows[rowIndex].map((entry) => -asFinite(entry, 0));
+                const targetMargin = Math.max(0, asFinite(corridor.threshold, asFinite(corridor.activationThreshold, 0))) * targetFraction;
+                addDistanceTarget(row, value - corridor.min, targetMargin);
+            }
+        }
+    }
+
+    return {
+        enabled: rows.length > 0,
+        rows,
+        targets,
+        residual: targets.slice(),
+        residualNorm: Math.sqrt(targets.reduce((sum, value) => sum + value * value, 0)),
+        count: rows.length
+    };
+}
+
 export function buildHumanoidJogMJProblem(options = {}) {
     const problem = buildHumanoidJogManifoldProblem(options);
     const absoluteRows = problem?.equalities?.blocks?.absolute?.length ?? 0;
@@ -104,6 +183,23 @@ export function buildHumanoidJogMJProblem(options = {}) {
             upperBounds: options?.upperBounds,
             stepBounds: options?.stepBounds,
             eta: options?.jointLimitEta
+        });
+    problem.safetyObjective = options?.mjRestoreSafetyPushEnabled === false
+        ? {
+            enabled: false,
+            rows: [],
+            targets: [],
+            residual: [],
+            residualNorm: 0,
+            count: 0
+        }
+        : buildHumanoidJogMJSafetyObjective({
+            problem,
+            lowerBounds: options?.lowerBounds,
+            upperBounds: options?.upperBounds,
+            jointLimitActivationThreshold: options?.jointLimitActivationThreshold,
+            safetyPushTargetFraction: options?.safetyPushTargetFraction,
+            safetyPushMaxDistanceStep: options?.safetyPushMaxDistanceStep
         });
 
     return problem;

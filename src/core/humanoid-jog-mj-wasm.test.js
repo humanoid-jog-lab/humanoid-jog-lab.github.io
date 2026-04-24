@@ -66,9 +66,16 @@ test('buildHumanoidJogMJRestoreWasmRequest clones arrays and fills defaults', ()
             min: -0.01,
             max: 0.05,
             tolerance: 5e-4,
+            activationThreshold: 0.12,
             rows: [[1, 0], [0, 1]],
             rhs: [0.01, 0.02]
         },
+        safetyPushEnabled: false,
+        safetyPushWeight: 0.12,
+        safetyPushActivationResidual: 2e-5,
+        safetyPushPoseHoldTolerance: 3e-6,
+        safetyPushTargetFraction: 0.4,
+        safetyPushMaxDistanceStep: 0.03,
         referenceModel: {
             absolute: { stiffness: 1.2 },
             bodyZ: { damping: 0.8 }
@@ -90,6 +97,14 @@ test('buildHumanoidJogMJRestoreWasmRequest clones arrays and fills defaults', ()
     assert.equal(request.bodyWeight, 1);
     assert.equal(request.wvfiLowerBound, 0);
     assert.equal(request.jointLimitActivationThreshold, HUMANOID_MJ_RESTORE_WASM_DEFAULTS.jointLimitActivationThreshold);
+    assert.deepEqual(request.safetyPush, {
+        enabled: false,
+        weight: 0.12,
+        activationResidual: 2e-5,
+        poseHoldTolerance: 3e-6,
+        targetFraction: 0.4,
+        maxDistanceStep: 0.03
+    });
     assert.deepEqual(request.jointLimitVFI, {
         enabled: true,
         rows: [[1, 0], [-1, 0]],
@@ -106,6 +121,7 @@ test('buildHumanoidJogMJRestoreWasmRequest clones arrays and fills defaults', ()
         min: -0.01,
         max: 0.05,
         tolerance: 5e-4,
+        activationThreshold: 0.12,
         rows: [[1, 0], [0, 1]],
         rhs: [0.01, 0.02]
     });
@@ -154,7 +170,11 @@ test('normalizeHumanoidJogMJRestoreWasmResult safely fills restoration defaults'
         secondaryState: 'active',
         secondaryBefore: 0.1,
         secondaryAfter: 0.2,
-        secondaryApplied: true
+        secondaryApplied: true,
+        safetyStatus: 'active',
+        safetyResidualBefore: 0.01,
+        safetyResidualAfter: 0.004,
+        safetyAcceptedIterations: 2
     }, [9, 9]);
 
     assert.deepEqual(normalized, {
@@ -189,7 +209,11 @@ test('normalizeHumanoidJogMJRestoreWasmResult safely fills restoration defaults'
         secondaryState: 'active',
         secondaryBefore: 0.1,
         secondaryAfter: 0.2,
-        secondaryApplied: true
+        secondaryApplied: true,
+        safetyStatus: 'active',
+        safetyResidualBefore: 0.01,
+        safetyResidualAfter: 0.004,
+        safetyAcceptedIterations: 2
     });
 });
 
@@ -226,6 +250,10 @@ test('normalizeHumanoidJogMJRestoreWasmResult falls back to the provided active 
         secondaryBefore: Number.NaN,
         secondaryAfter: Number.NaN,
         secondaryApplied: false,
+        safetyStatus: 'skipped',
+        safetyResidualBefore: Number.NaN,
+        safetyResidualAfter: Number.NaN,
+        safetyAcceptedIterations: 0,
         referenceResidual: [],
         constraintMotion: [],
         qApplied: [0.5, -0.5]

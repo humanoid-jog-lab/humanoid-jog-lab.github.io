@@ -18,8 +18,18 @@ struct HumanoidMJRestoreWaistXCorridorRequest {
     double min = -std::numeric_limits<double>::infinity();
     double max = std::numeric_limits<double>::infinity();
     double tolerance = 0.0;
+    double activation_threshold = 0.12;
     std::vector<std::vector<double>> rows;
     std::vector<double> rhs;
+};
+
+struct HumanoidMJRestoreSafetyPushRequest {
+    bool enabled = true;
+    double weight = 0.05;
+    double activation_residual = 1e-5;
+    double pose_hold_tolerance = 2e-6;
+    double target_fraction = 0.25;
+    double max_distance_step = 0.01;
 };
 
 struct HumanoidMJRestoreJointLimitVFIRequest {
@@ -50,6 +60,7 @@ struct HumanoidAbsoluteMJRestoreRequest {
     double joint_limit_activation_threshold = 0.05;
     HumanoidMJRestoreJointLimitVFIRequest joint_limit_vfi;
     HumanoidMJRestoreWaistXCorridorRequest waist_x_corridor;
+    HumanoidMJRestoreSafetyPushRequest safety_push;
     HumanoidMJRestoreReferenceAxis absolute_reference;
     HumanoidMJRestoreReferenceAxis relative_reference;
     HumanoidMJRestoreReferenceAxis body_reference;
@@ -95,6 +106,10 @@ struct HumanoidAbsoluteMJRestoreResult {
     std::string last_rejected_reason;
     double best_constraint_violation = std::numeric_limits<double>::infinity();
     int filter_size = 0;
+    std::string safety_status = "skipped";
+    double safety_residual_before = std::numeric_limits<double>::quiet_NaN();
+    double safety_residual_after = std::numeric_limits<double>::quiet_NaN();
+    int safety_accepted_iterations = 0;
     std::vector<double> reference_residual;
     std::vector<double> constraint_motion;
     std::vector<double> q_applied;

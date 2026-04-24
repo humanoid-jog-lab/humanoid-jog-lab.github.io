@@ -115,3 +115,62 @@ test('buildHumanoidJogMJProblem can disable joint-limit VFI rows while preservin
     assert.equal(problem.bounds.effectiveUpper[0], 1);
     assert.equal(problem.bounds.effectiveLower[1], -1);
 });
+
+test('buildHumanoidJogMJProblem builds safety push rows away from tight joint limits', () => {
+    const problem = buildHumanoidJogMJProblem({
+        q: [0.96, -0.97, 0],
+        qCurrent: [0, 0, 0],
+        absoluteTarget: [1],
+        relativeTarget: [2],
+        absolutePose: () => [1],
+        relativePose: () => [2],
+        absoluteJacobian: () => [[1, 0, 0]],
+        relativeJacobian: () => [[0, 1, 0]],
+        lowerBounds: [-1, -1, -1],
+        upperBounds: [1, 1, 1],
+        stepBounds: [1, 1, 1],
+        jointLimitActivationThreshold: 0.2,
+        safetyPushTargetFraction: 0.25,
+        safetyPushMaxDistanceStep: 0.01
+    });
+
+    assert.equal(problem.safetyObjective.enabled, true);
+    assert.deepEqual(problem.safetyObjective.rows, [
+        [-1, 0, 0],
+        [0, 1, 0]
+    ]);
+    assertCloseArray(problem.safetyObjective.targets, [0.01, 0.01]);
+    assert.equal(problem.safetyObjective.count, 2);
+});
+
+test('buildHumanoidJogMJProblem builds safety push rows away from waist x corridor bounds', () => {
+    const problem = buildHumanoidJogMJProblem({
+        q: [0.46, 0],
+        qCurrent: [0, 0],
+        absoluteTarget: [1],
+        relativeTarget: [2],
+        absolutePose: () => [1],
+        relativePose: () => [2],
+        absoluteJacobian: () => [[1, 0]],
+        relativeJacobian: () => [[0, 1]],
+        waistXCorridor: {
+            enabled: true,
+            evaluateX: (q) => q[0],
+            min: -0.5,
+            max: 0.5,
+            vfiRows: [[1, 0], [-1, 0]],
+            rhs: [0.04, 0.96],
+            vfiConstraints: [
+                { row: [-1, 0], distance: 0.04, threshold: 0.2 },
+                { row: [1, 0], distance: 0.96, threshold: 0.2 }
+            ]
+        },
+        safetyPushTargetFraction: 0.25,
+        safetyPushMaxDistanceStep: 0.01
+    });
+
+    assert.equal(problem.safetyObjective.enabled, true);
+    assert.deepEqual(problem.safetyObjective.rows, [[-1, 0]]);
+    assertCloseArray(problem.safetyObjective.targets, [0.01]);
+    assert.equal(problem.safetyObjective.count, 1);
+});

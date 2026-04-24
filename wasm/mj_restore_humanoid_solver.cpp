@@ -560,6 +560,12 @@ bool validateRequest(
         !isFiniteValue(request.rho_expand_threshold) ||
         !isFiniteValue(request.equality_tolerance) ||
         !isFiniteValue(request.inequality_tolerance) ||
+        !isFiniteValue(request.safety_push.weight) ||
+        !isFiniteValue(request.safety_push.activation_residual) ||
+        !isFiniteValue(request.safety_push.pose_hold_tolerance) ||
+        !isFiniteValue(request.safety_push.target_fraction) ||
+        !isFiniteValue(request.safety_push.max_distance_step) ||
+        !isFiniteValue(request.waist_x_corridor.activation_threshold) ||
         !isFiniteValue(request.waist_x_corridor.tolerance)) {
         reason = "request scalar fields must be finite";
         return false;
@@ -574,6 +580,15 @@ bool validateRequest(
     }
     if (request.joint_limit_activation_threshold < 0.0) {
         reason = "jointLimitActivationThreshold must be non-negative";
+        return false;
+    }
+    if (request.safety_push.weight < 0.0 ||
+        request.safety_push.activation_residual < 0.0 ||
+        request.safety_push.pose_hold_tolerance < 0.0 ||
+        request.safety_push.target_fraction < 0.0 ||
+        request.safety_push.max_distance_step < 0.0 ||
+        request.waist_x_corridor.activation_threshold < 0.0) {
+        reason = "safety push parameters must be non-negative";
         return false;
     }
     if (request.max_iterations <= 0) {
@@ -676,18 +691,94 @@ struct Evaluation {
     double inequality_violation = std::numeric_limits<double>::infinity();
 };
 
-double computeModelObjective(
-    const Evaluation& evaluation,
+struct SafetyObjective {
+    MatrixXd rows;
+    VectorXd targets;
+    double residual_norm = 0.0;
+};
+
+SafetyObjective buildSafetyObjective(
+    const HumanoidAbsoluteMJRestoreRequest& request,
+    const Evaluation& evaluation
+) {
+    std::vector<std::vector<double>> rows;
+    std::vector<double> targets;
+    const int width = request.active_count;
+    const double target_fraction = std::max(0.0, request.safety_push.target_fraction);
+    const double max_distance_step = std::max(0.0, request.safety_push.max_distance_step);
+
+    const auto add_distance_target = [&](const std::vector<double>& row, double distance, double target_margin) {
+        if (static_cast<int>(row.size()) != width || !std::isfinite(distance)) return;
+        const double residual = std::max(0.0, target_margin) - std::max(0.0, distance);
+        if (!(residual > 1e-12)) return;
+        rows.push_back(row);
+        targets.push_back(std::min(max_distance_step, residual));
+    };
+
+    const double joint_target_margin =
+        std::max(0.0, request.joint_limit_activation_threshold) * target_fraction;
+    if (joint_target_margin > 0.0 && max_distance_step > 0.0) {
+        for (int i = 0; i < width; ++i) {
+            const double qi = evaluation.q_active[static_cast<std::size_t>(i)];
+            const double lower = request.lower_bounds[static_cast<std::size_t>(i)];
+            const double upper = request.upper_bounds[static_cast<std::size_t>(i)];
+            if (std::isfinite(upper)) {
+                std::vector<double> row(static_cast<std::size_t>(width), 0.0);
+                row[static_cast<std::size_t>(i)] = -1.0;
+                add_distance_target(row, upper - qi, joint_target_margin);
+            }
+            if (std::isfinite(lower)) {
+                std::vector<double> row(static_cast<std::size_t>(width), 0.0);
+                row[static_cast<std::size_t>(i)] = 1.0;
+                add_distance_target(row, qi - lower, joint_target_margin);
+            }
+        }
+    }
+
+    if (request.waist_x_corridor.enabled && max_distance_step > 0.0) {
+        const double corridor_target_margin =
+            std::max(0.0, request.waist_x_corridor.activation_threshold) * target_fraction;
+        std::size_t row_index = 0;
+        if (std::isfinite(request.waist_x_corridor.max) &&
+            row_index < request.waist_x_corridor.rows.size()) {
+            std::vector<double> row = request.waist_x_corridor.rows[row_index];
+            for (double& value : row) value = -value;
+            add_distance_target(row, request.waist_x_corridor.max - evaluation.waist_x_position, corridor_target_margin);
+            row_index += 1;
+        }
+        if (std::isfinite(request.waist_x_corridor.min) &&
+            row_index < request.waist_x_corridor.rows.size()) {
+            std::vector<double> row = request.waist_x_corridor.rows[row_index];
+            for (double& value : row) value = -value;
+            add_distance_target(row, evaluation.waist_x_position - request.waist_x_corridor.min, corridor_target_margin);
+        }
+    }
+
+    SafetyObjective objective;
+    objective.rows = MatrixXd(static_cast<Eigen::Index>(rows.size()), width);
+    objective.targets = VectorXd(static_cast<Eigen::Index>(targets.size()));
+    for (std::size_t i = 0; i < rows.size(); ++i) {
+        for (int j = 0; j < width; ++j) {
+            objective.rows(static_cast<Eigen::Index>(i), j) = rows[i][static_cast<std::size_t>(j)];
+        }
+        objective.targets(static_cast<Eigen::Index>(i)) = targets[i];
+    }
+    objective.residual_norm = objective.targets.norm();
+    return objective;
+}
+
+double computeModelObjectiveForRows(
+    const MatrixXd& model_jacobian,
     const std::vector<double>& dq_step,
     double damping,
     const std::vector<double>& regularization_weights,
     const std::vector<double>& reference_residual
 ) {
     double residual_cost = 0.0;
-    for (Eigen::Index row_index = 0; row_index < evaluation.weighted_jacobian.rows(); ++row_index) {
+    for (Eigen::Index row_index = 0; row_index < model_jacobian.rows(); ++row_index) {
         double predicted = 0.0;
-        for (Eigen::Index col_index = 0; col_index < evaluation.weighted_jacobian.cols(); ++col_index) {
-            predicted += evaluation.weighted_jacobian(row_index, col_index) *
+        for (Eigen::Index col_index = 0; col_index < model_jacobian.cols(); ++col_index) {
+            predicted += model_jacobian(row_index, col_index) *
                 dq_step[static_cast<std::size_t>(col_index)];
         }
         const double target = row_index < static_cast<Eigen::Index>(reference_residual.size())
@@ -705,6 +796,22 @@ double computeModelObjective(
         regularization_cost += weight * dq_step[i] * dq_step[i];
     }
     return 0.5 * residual_cost + 0.5 * std::max(1e-12, damping) * regularization_cost;
+}
+
+double computeModelObjective(
+    const Evaluation& evaluation,
+    const std::vector<double>& dq_step,
+    double damping,
+    const std::vector<double>& regularization_weights,
+    const std::vector<double>& reference_residual
+) {
+    return computeModelObjectiveForRows(
+        evaluation.weighted_jacobian,
+        dq_step,
+        damping,
+        regularization_weights,
+        reference_residual
+    );
 }
 
 Evaluation evaluateConfiguration(
@@ -994,14 +1101,19 @@ bool solveRestorationStep(
     const std::vector<double>& previous_step,
     double damping,
     const std::vector<double>& regularization_weights,
+    bool safety_active,
     std::vector<double>& dq_out,
     std::vector<double>& reference_residual_out,
-    std::vector<double>& constraint_motion_out
+    std::vector<double>& constraint_motion_out,
+    std::vector<double>& model_reference_residual_out,
+    MatrixXd& model_jacobian_out
 ) {
     if (evaluation.weighted_jacobian.rows() == 0 || evaluation.weighted_jacobian.cols() == 0) {
         dq_out.assign(static_cast<std::size_t>(request.active_count), 0.0);
         reference_residual_out.clear();
         constraint_motion_out.clear();
+        model_reference_residual_out.clear();
+        model_jacobian_out = MatrixXd(0, request.active_count);
         return true;
     }
 
@@ -1012,8 +1124,26 @@ bool solveRestorationStep(
         previous_step,
         constraint_motion
     );
-    MatrixXd H =
-        evaluation.weighted_jacobian.transpose() * evaluation.weighted_jacobian;
+    MatrixXd model_jacobian = evaluation.weighted_jacobian;
+    VectorXd model_reference_residual = reference_residual;
+    if (safety_active && request.safety_push.weight > 0.0) {
+        const SafetyObjective safety = buildSafetyObjective(request, evaluation);
+        if (safety.rows.rows() > 0 && safety.targets.size() == safety.rows.rows()) {
+            const double safety_scale = std::sqrt(std::max(0.0, request.safety_push.weight));
+            MatrixXd augmented_jacobian(
+                model_jacobian.rows() + safety.rows.rows(),
+                model_jacobian.cols()
+            );
+            augmented_jacobian.topRows(model_jacobian.rows()) = model_jacobian;
+            augmented_jacobian.bottomRows(safety.rows.rows()) = safety_scale * safety.rows;
+            VectorXd augmented_reference(model_reference_residual.size() + safety.targets.size());
+            augmented_reference.head(model_reference_residual.size()) = model_reference_residual;
+            augmented_reference.tail(safety.targets.size()) = safety_scale * safety.targets;
+            model_jacobian = augmented_jacobian;
+            model_reference_residual = augmented_reference;
+        }
+    }
+    MatrixXd H = model_jacobian.transpose() * model_jacobian;
     const double damping_floor = std::max(1e-12, damping);
     for (Eigen::Index i = 0; i < H.rows(); ++i) {
         const double weight = i < static_cast<Eigen::Index>(regularization_weights.size())
@@ -1021,7 +1151,7 @@ bool solveRestorationStep(
             : 1.0;
         H(i, i) += damping_floor * weight;
     }
-    const VectorXd g = evaluation.weighted_jacobian.transpose() * reference_residual;
+    const VectorXd g = model_jacobian.transpose() * model_reference_residual;
     const Eigen::LDLT<MatrixXd> factorization(H);
     if (factorization.info() != Eigen::Success) {
         return false;
@@ -1058,6 +1188,8 @@ bool solveRestorationStep(
     dq_out = toStdVector(dq);
     reference_residual_out = toStdVector(reference_residual);
     constraint_motion_out = toStdVector(constraint_motion);
+    model_reference_residual_out = toStdVector(model_reference_residual);
+    model_jacobian_out = model_jacobian;
     return true;
 }
 
@@ -1165,6 +1297,8 @@ HumanoidAbsoluteMJRestoreResult solveHumanoidAbsoluteTargetMJRestore(
         std::vector<double> dq;
         std::vector<double> reference_residual;
         std::vector<double> constraint_motion;
+        std::vector<double> model_reference_residual;
+        MatrixXd model_jacobian;
         std::vector<double> last_reference_residual;
         std::vector<double> last_constraint_motion;
         std::vector<double> accepted_reference_residual;
@@ -1185,9 +1319,12 @@ HumanoidAbsoluteMJRestoreResult solveHumanoidAbsoluteTargetMJRestore(
                     previous_accepted_step,
                     attempt_damping,
                     normalized_regularization_weights,
+                    false,
                     dq,
                     reference_residual,
-                    constraint_motion
+                    constraint_motion,
+                    model_reference_residual,
+                    model_jacobian
                 )) {
                 continue;
             }
@@ -1325,6 +1462,7 @@ HumanoidAbsoluteMJRestoreResult solveHumanoidAbsoluteTargetMJRestoreTrustRegion(
     Evaluation current = evaluateConfiguration(context, context.q_initial_active);
     double current_phi = current.active_residual_norm;
     double current_theta = current.inequality_violation;
+    double current_safety = buildSafetyObjective(request, current).residual_norm;
     double current_penalty = std::max(1.0, current_phi + 1.0);
     double current_merit = computeRestorationMerit(current_phi, current_theta, current_penalty);
     result.command_residual_norm = current.absolute_residual_norm;
@@ -1332,9 +1470,34 @@ HumanoidAbsoluteMJRestoreResult solveHumanoidAbsoluteTargetMJRestoreTrustRegion(
     result.body_residual_norm = current.body_residual_norm;
     result.inequality_violation = current.inequality_violation;
     result.best_constraint_violation = current_theta;
+    result.safety_residual_before = current_safety;
+    result.safety_residual_after = current_safety;
+
+    const double phi_tolerance = std::max(1e-12, std::max(0.0, request.equality_tolerance) * 1e-3);
+    const double theta_tolerance = std::max(1e-12, std::max(0.0, request.inequality_tolerance) * 1e-3);
+    const double safety_hold_tolerance = std::max(
+        std::max(0.0, request.equality_tolerance),
+        std::max(0.0, request.safety_push.pose_hold_tolerance)
+    );
+    const double safety_residual_tolerance = 1e-12;
+    const auto is_primary_held_for_safety = [&](double phi, double theta) {
+        return phi <= safety_hold_tolerance &&
+            theta <= std::max(0.0, request.inequality_tolerance) + theta_tolerance;
+    };
+    const auto is_safety_active = [&](const Evaluation& evaluation, double phi, double theta) {
+        return request.safety_push.enabled &&
+            request.safety_push.weight > 0.0 &&
+            phi <= std::max(0.0, request.safety_push.activation_residual) &&
+            theta <= std::max(0.0, request.inequality_tolerance) + theta_tolerance &&
+            buildSafetyObjective(request, evaluation).residual_norm > safety_residual_tolerance;
+    };
+    if (is_safety_active(current, current_phi, current_theta)) {
+        result.safety_status = "active";
+    }
 
     if (current_phi <= request.equality_tolerance &&
-        current_theta <= request.inequality_tolerance) {
+        current_theta <= request.inequality_tolerance &&
+        !is_safety_active(current, current_phi, current_theta)) {
         result.converged = true;
         result.reason = "converged";
         return result;
@@ -1344,8 +1507,6 @@ HumanoidAbsoluteMJRestoreResult solveHumanoidAbsoluteTargetMJRestoreTrustRegion(
         request.regularization_weights,
         request.active_count
     );
-    const double phi_tolerance = std::max(1e-12, std::max(0.0, request.equality_tolerance) * 1e-3);
-    const double theta_tolerance = std::max(1e-12, std::max(0.0, request.inequality_tolerance) * 1e-3);
     const double min_radius = std::max(1e-8, request.min_trust_radius);
     const double max_radius = std::max(min_radius, request.max_trust_radius);
     const double shrink_factor = std::min(0.99, std::max(0.1, request.trust_region_shrink_factor));
@@ -1361,6 +1522,21 @@ HumanoidAbsoluteMJRestoreResult solveHumanoidAbsoluteTargetMJRestoreTrustRegion(
 
     double trust_radius = result.trust_radius;
     std::vector<FilterEntry> filter = { { current_phi, current_theta } };
+    const auto finish_safety_limited = [&]() {
+        result.converged = true;
+        result.reason = "safety_limited";
+        result.q_applied = q_current;
+        result.command_residual_norm = current.absolute_residual_norm;
+        result.relative_residual_norm = current.relative_residual_norm;
+        result.body_residual_norm = current.body_residual_norm;
+        result.inequality_violation = current.inequality_violation;
+        result.best_constraint_violation = std::min(result.best_constraint_violation, current_theta);
+        result.trust_radius = trust_radius;
+        result.filter_size = static_cast<int>(filter.size());
+        result.safety_status = "limited";
+        result.safety_residual_after = current_safety;
+        return result;
+    };
 
     for (int iter = 0; iter < request.max_iterations; ++iter) {
         result.iterations = iter + 1;
@@ -1376,6 +1552,7 @@ HumanoidAbsoluteMJRestoreResult solveHumanoidAbsoluteTargetMJRestoreTrustRegion(
             double rho = std::numeric_limits<double>::quiet_NaN();
             double predicted_reduction = std::numeric_limits<double>::quiet_NaN();
             double actual_reduction = std::numeric_limits<double>::quiet_NaN();
+            double safety = 0.0;
             std::string accepted_by;
             std::vector<FilterEntry> next_filter;
             double next_radius = std::numeric_limits<double>::quiet_NaN();
@@ -1388,6 +1565,10 @@ HumanoidAbsoluteMJRestoreResult solveHumanoidAbsoluteTargetMJRestoreTrustRegion(
         std::vector<double> last_reference_residual;
         std::vector<double> last_constraint_motion;
         double candidate_radius = trust_radius;
+        const bool safety_active_this_iteration = is_safety_active(current, current_phi, current_theta);
+        if (safety_active_this_iteration) {
+            result.safety_status = "active";
+        }
 
         for (int damping_attempt = 0;
              damping_attempt <= request.max_damping_retries && !accepted_trial;
@@ -1397,15 +1578,20 @@ HumanoidAbsoluteMJRestoreResult solveHumanoidAbsoluteTargetMJRestoreTrustRegion(
             std::vector<double> dq;
             std::vector<double> reference_residual;
             std::vector<double> constraint_motion;
+            std::vector<double> model_reference_residual;
+            MatrixXd model_jacobian;
             if (!solveRestorationStep(
                     request,
                     current,
                     previous_accepted_step,
                     attempt_damping,
                     normalized_regularization_weights,
+                    safety_active_this_iteration,
                     dq,
                     reference_residual,
-                    constraint_motion
+                    constraint_motion,
+                    model_reference_residual,
+                    model_jacobian
                 )) {
                 continue;
             }
@@ -1425,29 +1611,30 @@ HumanoidAbsoluteMJRestoreResult solveHumanoidAbsoluteTargetMJRestoreTrustRegion(
                 Evaluation trial = evaluateConfiguration(context, q_trial);
                 const double trial_phi = trial.active_residual_norm;
                 const double trial_theta = trial.inequality_violation;
+                const double trial_safety = buildSafetyObjective(request, trial).residual_norm;
                 const double trial_penalty = std::max(current_penalty, trial_phi + 1.0);
                 const double trial_merit = computeRestorationMerit(trial_phi, trial_theta, trial_penalty);
                 const double predicted_reduction =
-                    computeModelObjective(
-                        current,
+                    computeModelObjectiveForRows(
+                        model_jacobian,
                         std::vector<double>(static_cast<std::size_t>(request.active_count), 0.0),
                         attempt_damping,
                         normalized_regularization_weights,
-                        reference_residual
+                        model_reference_residual
                     ) -
-                    computeModelObjective(
-                        current,
+                    computeModelObjectiveForRows(
+                        model_jacobian,
                         clipped_step.dq,
                         attempt_damping,
                         normalized_regularization_weights,
-                        reference_residual
+                        model_reference_residual
                     );
                 const double actual_reduction = current_merit - trial_merit;
                 const double rho = predicted_reduction > 1e-12
                     ? actual_reduction / predicted_reduction
                     : std::numeric_limits<double>::infinity();
 
-                const FilterAcceptance acceptance = acceptRestorationCandidateByFilter(
+                FilterAcceptance acceptance = acceptRestorationCandidateByFilter(
                     filter,
                     current_phi,
                     current_theta,
@@ -1460,6 +1647,16 @@ HumanoidAbsoluteMJRestoreResult solveHumanoidAbsoluteTargetMJRestoreTrustRegion(
                     phi_tolerance,
                     theta_tolerance
                 );
+                const bool safety_accepted =
+                    safety_active_this_iteration &&
+                    is_primary_held_for_safety(current_phi, current_theta) &&
+                    is_primary_held_for_safety(trial_phi, trial_theta) &&
+                    trial_safety + safety_residual_tolerance < current_safety;
+                if (!acceptance.accepted && safety_accepted) {
+                    acceptance.accepted = true;
+                    acceptance.reason = "safety";
+                    acceptance.next_filter = filter;
+                }
                 const double next_radius = updateTrustRegionRadius(
                     candidate_radius,
                     rho,
@@ -1484,9 +1681,10 @@ HumanoidAbsoluteMJRestoreResult solveHumanoidAbsoluteTargetMJRestoreTrustRegion(
                     accepted_trial_state.rho = rho;
                     accepted_trial_state.predicted_reduction = predicted_reduction;
                     accepted_trial_state.actual_reduction = actual_reduction;
+                    accepted_trial_state.safety = trial_safety;
                     accepted_trial_state.accepted_by = acceptance.reason;
                     accepted_trial_state.next_filter = acceptance.next_filter;
-                    accepted_trial_state.next_radius = next_radius;
+                    accepted_trial_state.next_radius = acceptance.reason == "safety" ? candidate_radius : next_radius;
                     accepted_trial_state.reference_residual = reference_residual;
                     accepted_trial_state.constraint_motion = constraint_motion;
                     break;
@@ -1508,6 +1706,9 @@ HumanoidAbsoluteMJRestoreResult solveHumanoidAbsoluteTargetMJRestoreTrustRegion(
             : last_constraint_motion;
 
         if (!accepted_trial) {
+            if (safety_active_this_iteration && is_primary_held_for_safety(current_phi, current_theta)) {
+                return finish_safety_limited();
+            }
             result.reason = has_accepted ? "best_effort" : "line_search_failed";
             result.q_applied = has_accepted ? q_accepted : context.q_initial_active;
             result.command_residual_norm = has_accepted ? accepted.absolute_residual_norm : current.absolute_residual_norm;
@@ -1527,6 +1728,7 @@ HumanoidAbsoluteMJRestoreResult solveHumanoidAbsoluteTargetMJRestoreTrustRegion(
         current = accepted_trial_state.trial_evaluation;
         current_phi = accepted_trial_state.phi;
         current_theta = accepted_trial_state.theta;
+        current_safety = accepted_trial_state.safety;
         current_penalty = std::max(current_penalty, current_phi + 1.0);
         current_merit = accepted_trial_state.merit;
         q_accepted = q_current;
@@ -1548,16 +1750,26 @@ HumanoidAbsoluteMJRestoreResult solveHumanoidAbsoluteTargetMJRestoreTrustRegion(
         result.last_predicted_reduction = accepted_trial_state.predicted_reduction;
         result.last_actual_reduction = accepted_trial_state.actual_reduction;
         result.accepted_by = accepted_trial_state.accepted_by;
+        if (accepted_trial_state.accepted_by == "safety") {
+            result.safety_accepted_iterations += 1;
+        }
+        result.safety_residual_after = current_safety;
         result.best_constraint_violation = std::min(result.best_constraint_violation, current_theta);
         result.filter_size = static_cast<int>(filter.size());
 
         if (current_phi <= request.equality_tolerance &&
-            current_theta <= request.inequality_tolerance) {
+            current_theta <= request.inequality_tolerance &&
+            !is_safety_active(current, current_phi, current_theta)) {
             result.converged = true;
             result.reason = "converged";
             result.q_applied = q_accepted;
             return result;
         }
+    }
+
+    if (is_primary_held_for_safety(current_phi, current_theta) &&
+        is_safety_active(current, current_phi, current_theta)) {
+        return finish_safety_limited();
     }
 
     result.reason = (

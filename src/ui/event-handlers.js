@@ -396,6 +396,8 @@ export function setupHumanoidParameterControls() {
     const humanoidJointLimitEtaStatus = document.getElementById('humanoid-joint-limit-eta-status');
     const humanoidWaistXEtaInput = document.getElementById('humanoid-waist-x-eta-input');
     const humanoidWaistXVFIStatus = document.getElementById('humanoid-waist-x-vfi-status');
+    const humanoidTRSafetyPushWeightInput = document.getElementById('humanoid-tr-safety-push-weight-input');
+    const humanoidTRSafetyPushStatus = document.getElementById('humanoid-tr-safety-push-status');
     const humanoidRos2ArmVelInput = document.getElementById('humanoid-ros2-arm-vel-input');
     const humanoidRos2ArmAccInput = document.getElementById('humanoid-ros2-arm-acc-input');
     const humanoidRos2WaistVelInput = document.getElementById('humanoid-ros2-waist-vel-input');
@@ -403,6 +405,7 @@ export function setupHumanoidParameterControls() {
     const humanoidRos2PublishDefaultsStatus = document.getElementById('humanoid-ros2-publish-defaults-status');
     const HUMANOID_JOINT_LIMIT_ETA_STORAGE_KEY = 'humanoid-joint-limit-eta';
     const HUMANOID_WAIST_X_ETA_STORAGE_KEY = 'humanoid-waist-x-eta';
+    const HUMANOID_TR_SAFETY_PUSH_WEIGHT_STORAGE_KEY = 'humanoid-tr-safety-push-weight';
     const HUMANOID_ROS2_ARM_VEL_STORAGE_KEY = 'humanoid-ros2-arm-vel';
     const HUMANOID_ROS2_ARM_ACC_STORAGE_KEY = 'humanoid-ros2-arm-acc';
     const HUMANOID_ROS2_WAIST_VEL_STORAGE_KEY = 'humanoid-ros2-waist-vel';
@@ -427,6 +430,10 @@ export function setupHumanoidParameterControls() {
         if (!humanoidWaistXVFIStatus) return;
         humanoidWaistXVFIStatus.textContent = message;
     };
+    const updateHumanoidTRSafetyPushStatus = (message) => {
+        if (!humanoidTRSafetyPushStatus) return;
+        humanoidTRSafetyPushStatus.textContent = message;
+    };
     const updateHumanoidRos2PublishDefaultsStatus = (message) => {
         if (!humanoidRos2PublishDefaultsStatus) return;
         humanoidRos2PublishDefaultsStatus.textContent = message;
@@ -446,9 +453,17 @@ export function setupHumanoidParameterControls() {
         if (Number.isFinite(windowEta) && windowEta > 0) return windowEta;
         return 1.0;
     };
+    const readCurrentHumanoidTRSafetyPushWeight = () => {
+        const visualizerWeight = appState.visualizer?.vfiConfig?.mjRestoreSafetyPushWeight;
+        const windowWeight = typeof window !== 'undefined' ? window.humanoidTRSafetyPushWeight : null;
+        if (Number.isFinite(visualizerWeight) && visualizerWeight >= 0) return visualizerWeight;
+        if (Number.isFinite(windowWeight) && windowWeight >= 0) return windowWeight;
+        return 0.05;
+    };
 
     let appliedHumanoidJointLimitEta = readCurrentHumanoidJointLimitEta();
     let appliedHumanoidWaistXEta = readCurrentHumanoidWaistXEta();
+    let appliedHumanoidTRSafetyPushWeight = readCurrentHumanoidTRSafetyPushWeight();
     let appliedHumanoidRos2PublishDefaults = {
         armVel: Number.isFinite(appState.humanoidRos2PublishDefaults?.armVel) ? appState.humanoidRos2PublishDefaults.armVel : 0.5,
         armAcc: Number.isFinite(appState.humanoidRos2PublishDefaults?.armAcc) ? appState.humanoidRos2PublishDefaults.armAcc : 1.0,
@@ -483,6 +498,36 @@ export function setupHumanoidParameterControls() {
     const normalizePositiveParameterNumber = (valueRaw) => {
         const parsed = Number(valueRaw);
         return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+    };
+    const normalizeNonnegativeParameterNumber = (valueRaw) => {
+        const parsed = Number(valueRaw);
+        return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+    };
+    const applyHumanoidTRSafetyPushWeight = (valueRaw) => {
+        const value = normalizeNonnegativeParameterNumber(valueRaw);
+        if (value == null) {
+            if (humanoidTRSafetyPushWeightInput) {
+                humanoidTRSafetyPushWeightInput.value = String(appliedHumanoidTRSafetyPushWeight);
+            }
+            updateHumanoidTRSafetyPushStatus(`输入无效，已恢复为 β=${appliedHumanoidTRSafetyPushWeight}`);
+            return false;
+        }
+
+        appliedHumanoidTRSafetyPushWeight = value;
+        if (humanoidTRSafetyPushWeightInput) humanoidTRSafetyPushWeightInput.value = String(value);
+        if (typeof window !== 'undefined') {
+            window.humanoidTRSafetyPushWeight = value;
+        }
+        if (appState.visualizer?.setHumanoidTRSafetyPushWeight) {
+            appState.visualizer.setHumanoidTRSafetyPushWeight(value);
+        } else if (appState.visualizer?.vfiConfig) {
+            appState.visualizer.vfiConfig.mjRestoreSafetyPushWeight = value;
+        }
+        try {
+            localStorage.setItem(HUMANOID_TR_SAFETY_PUSH_WEIGHT_STORAGE_KEY, String(value));
+        } catch (_) {}
+        updateHumanoidTRSafetyPushStatus(`当前值已应用：β=${value}`);
+        return true;
     };
     const applyHumanoidWaistXVFIParams = (paramsRaw = {}) => {
         const rawEta = paramsRaw && typeof paramsRaw === 'object'
@@ -569,10 +614,14 @@ export function setupHumanoidParameterControls() {
     const savedHumanoidWaistXEta = (() => {
         try { return localStorage.getItem(HUMANOID_WAIST_X_ETA_STORAGE_KEY); } catch (_) { return null; }
     })();
+    const savedHumanoidTRSafetyPushWeight = (() => {
+        try { return localStorage.getItem(HUMANOID_TR_SAFETY_PUSH_WEIGHT_STORAGE_KEY); } catch (_) { return null; }
+    })();
     applyHumanoidJointLimitEta(savedHumanoidJointLimitEta ?? appliedHumanoidJointLimitEta);
     applyHumanoidWaistXVFIParams({
         eta: savedHumanoidWaistXEta ?? appliedHumanoidWaistXEta
     });
+    applyHumanoidTRSafetyPushWeight(savedHumanoidTRSafetyPushWeight ?? appliedHumanoidTRSafetyPushWeight);
     applyHumanoidRos2PublishDefaults({
         armVel: (() => { try { return localStorage.getItem(HUMANOID_ROS2_ARM_VEL_STORAGE_KEY); } catch (_) { return null; } })() ?? appliedHumanoidRos2PublishDefaults.armVel,
         armAcc: (() => { try { return localStorage.getItem(HUMANOID_ROS2_ARM_ACC_STORAGE_KEY); } catch (_) { return null; } })() ?? appliedHumanoidRos2PublishDefaults.armAcc,
@@ -605,6 +654,18 @@ export function setupHumanoidParameterControls() {
         });
     };
     bindHumanoidWaistXVFIInput(humanoidWaistXEtaInput);
+    const bindHumanoidTRSafetyPushWeightInput = (input) => {
+        if (!input) return;
+        const applyFromInput = () => applyHumanoidTRSafetyPushWeight(input.value);
+        input.addEventListener('change', applyFromInput);
+        input.addEventListener('blur', applyFromInput);
+        input.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter') return;
+            e.preventDefault?.();
+            applyFromInput();
+        });
+    };
+    bindHumanoidTRSafetyPushWeightInput(humanoidTRSafetyPushWeightInput);
     const bindRos2DefaultInput = (input, key) => {
         if (!input) return;
         const applyFromInputs = () => applyHumanoidRos2PublishDefaults({
@@ -629,12 +690,14 @@ export function setupHumanoidParameterControls() {
     if (typeof window !== 'undefined') {
         window.setHumanoidJointLimitEta = applyHumanoidJointLimitEta;
         window.setHumanoidWaistXVFIParams = applyHumanoidWaistXVFIParams;
+        window.setHumanoidTRSafetyPushWeight = applyHumanoidTRSafetyPushWeight;
         window.setHumanoidRos2PublishDefaults = applyHumanoidRos2PublishDefaults;
     }
 
     return {
         applyHumanoidJointLimitEta,
         applyHumanoidWaistXVFIParams,
+        applyHumanoidTRSafetyPushWeight,
         applyHumanoidRos2PublishDefaults
     };
 }

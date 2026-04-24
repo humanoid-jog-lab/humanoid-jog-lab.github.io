@@ -95,6 +95,30 @@ function getActiveResidualNorm(problem = {}) {
     );
 }
 
+function getSafetyResidualNorm(problem = {}) {
+    return asFinite(problem?.safetyObjective?.residualNorm, 0);
+}
+
+function buildSafetyLeastSquaresRows(problem = {}, weight = 0) {
+    const objective = problem?.safetyObjective;
+    const rows = Array.isArray(objective?.rows) ? objective.rows : [];
+    const targets = Array.isArray(objective?.targets) ? objective.targets : [];
+    const scale = Math.sqrt(Math.max(0, asFinite(weight, 0)));
+    const width = Array.isArray(problem?.q) ? problem.q.length : 0;
+    if (scale <= 0 || rows.length === 0 || rows.length !== targets.length || width <= 0) {
+        return { rows: [], targets: [] };
+    }
+    const modelRows = [];
+    const modelTargets = [];
+    for (let i = 0; i < rows.length; i++) {
+        const row = Array.isArray(rows[i]) ? rows[i] : null;
+        if (!row || row.length !== width) continue;
+        modelRows.push(row.map((value) => scale * asFinite(value, 0)));
+        modelTargets.push(scale * Math.max(0, asFinite(targets[i], 0)));
+    }
+    return { rows: modelRows, targets: modelTargets };
+}
+
 function normalizeRegularizationWeights(regularizationWeights, width = 0) {
     if (!Array.isArray(regularizationWeights) || width <= 0) return null;
     const weights = new Array(width).fill(1);
@@ -250,33 +274,54 @@ function solveEqualityConstrainedLeastSquares({
     return Array.isArray(solution) ? solution.slice(0, width) : null;
 }
 
-function buildRestorationStep(problem = {}, previousStep = [], damping = 1e-6, regularizationWeights = null) {
+function buildRestorationStep(
+    problem = {},
+    previousStep = [],
+    damping = 1e-6,
+    regularizationWeights = null,
+    safetyOptions = {}
+) {
     const jacobian = Array.isArray(problem?.equalities?.weightedJacobian)
         ? problem.equalities.weightedJacobian
         : [];
     const width = Array.isArray(problem?.q) ? problem.q.length : 0;
     if (jacobian.length === 0 || width === 0) {
-        return { dq: new Array(width).fill(0), referenceResidual: [], constraintMotion: [] };
+        return {
+            dq: new Array(width).fill(0),
+            referenceResidual: [],
+            constraintMotion: [],
+            modelJacobian: [],
+            modelReferenceResidual: []
+        };
     }
     const { referenceResidual, constraintMotion } = buildReferenceResidual(problem, previousStep);
+    const safetyRows = safetyOptions?.enabled === true
+        ? buildSafetyLeastSquaresRows(problem, safetyOptions.weight)
+        : { rows: [], targets: [] };
+    const modelJacobian = safetyRows.rows.length > 0
+        ? [...jacobian, ...safetyRows.rows]
+        : jacobian;
+    const modelReferenceResidual = safetyRows.targets.length > 0
+        ? [...referenceResidual, ...safetyRows.targets]
+        : referenceResidual;
     const linearStepRows = collectLinearStepInequalities(problem, width);
     const unconstrainedDQ = solveUnconstrainedLeastSquares(
-        jacobian,
-        referenceResidual,
+        modelJacobian,
+        modelReferenceResidual,
         width,
         damping,
         regularizationWeights
     );
     if (!Array.isArray(unconstrainedDQ) || unconstrainedDQ.length !== width) {
-        return { dq: null, referenceResidual, constraintMotion };
+        return { dq: null, referenceResidual, constraintMotion, modelJacobian, modelReferenceResidual };
     }
     const activeInequalities = selectViolatedStepRows(unconstrainedDQ, linearStepRows.rows, linearStepRows.rhs);
     if (activeInequalities.rows.length === 0) {
-        return { dq: unconstrainedDQ, referenceResidual, constraintMotion };
+        return { dq: unconstrainedDQ, referenceResidual, constraintMotion, modelJacobian, modelReferenceResidual };
     }
     const constrainedDQ = solveEqualityConstrainedLeastSquares({
-        jacobian,
-        referenceResidual,
+        jacobian: modelJacobian,
+        referenceResidual: modelReferenceResidual,
         width,
         damping,
         regularizationWeights,
@@ -286,7 +331,9 @@ function buildRestorationStep(problem = {}, previousStep = [], damping = 1e-6, r
     return {
         dq: Array.isArray(constrainedDQ) && constrainedDQ.length === width ? constrainedDQ : unconstrainedDQ,
         referenceResidual,
-        constraintMotion
+        constraintMotion,
+        modelJacobian,
+        modelReferenceResidual
     };
 }
 
@@ -298,10 +345,19 @@ function computeRestorationMerit(phi, theta, penalty) {
     return asFinite(phi) + penalty * asFinite(theta);
 }
 
-function computeModelObjective(problem = {}, dqStep = [], damping = 1e-6, regularizationWeights = null, referenceResidual = null) {
-    const jacobian = Array.isArray(problem?.equalities?.weightedJacobian)
+function computeModelObjective(
+    problem = {},
+    dqStep = [],
+    damping = 1e-6,
+    regularizationWeights = null,
+    referenceResidual = null,
+    modelJacobian = null
+) {
+    const jacobian = Array.isArray(modelJacobian)
+        ? modelJacobian
+        : (Array.isArray(problem?.equalities?.weightedJacobian)
         ? problem.equalities.weightedJacobian
-        : [];
+        : []);
     const target = Array.isArray(referenceResidual)
         ? referenceResidual
         : (Array.isArray(problem?.equalities?.weightedResidual) ? problem.equalities.weightedResidual : []);
@@ -436,7 +492,11 @@ export function restoreHumanoidJogMJTrustRegion({
     rhoShrinkThreshold = 0.05,
     rhoExpandThreshold = 0.75,
     maxSolveMs = Number.POSITIVE_INFINITY,
-    nowMs = defaultNowMs
+    nowMs = defaultNowMs,
+    safetyPushEnabled = true,
+    safetyPushWeight = 0.05,
+    safetyPushActivationResidual = 1e-5,
+    safetyPushPoseHoldTolerance = 2e-6
 } = {}) {
     const qStart = Array.isArray(qInitial) ? qInitial.slice() : [];
     const normalizedRegularizationWeights = normalizeRegularizationWeights(regularizationWeights, qStart.length);
@@ -463,7 +523,11 @@ export function restoreHumanoidJogMJTrustRegion({
         lastRejectedReason: '',
         bestConstraintViolation: Number.POSITIVE_INFINITY,
         filterSize: 1,
-        timeBudgetExceeded: false
+        timeBudgetExceeded: false,
+        safetyStatus: 'skipped',
+        safetyResidualBefore: Number.NaN,
+        safetyResidualAfter: Number.NaN,
+        safetyAcceptedIterations: 0
     };
     if (typeof evaluateProblem !== 'function') return result;
 
@@ -484,6 +548,24 @@ export function restoreHumanoidJogMJTrustRegion({
         ? Math.max(0, rawSolveBudgetMs)
         : Number.POSITIVE_INFINITY;
     const hasSolveBudget = Number.isFinite(solveBudgetMs);
+    const safetyWeight = Math.max(0, asFinite(safetyPushWeight, 0.05));
+    const safetyActivationResidual = Math.max(0, asFinite(safetyPushActivationResidual, 1e-5));
+    const safetyHoldTolerance = Math.max(
+        Math.max(0, equalityTolerance),
+        Math.max(0, asFinite(safetyPushPoseHoldTolerance, 2e-6))
+    );
+    const safetyResidualTolerance = 1e-12;
+    const isPrimaryHeldForSafety = (phi, theta) => (
+        asFinite(phi, Number.POSITIVE_INFINITY) <= safetyHoldTolerance &&
+        asFinite(theta, Number.POSITIVE_INFINITY) <= Math.max(0, inequalityTolerance) + thetaTolerance
+    );
+    const isSafetyActive = (problem, phi, theta) => (
+        safetyPushEnabled !== false &&
+        safetyWeight > 0 &&
+        asFinite(phi, Number.POSITIVE_INFINITY) <= safetyActivationResidual &&
+        asFinite(theta, Number.POSITIVE_INFINITY) <= Math.max(0, inequalityTolerance) + thetaTolerance &&
+        getSafetyResidualNorm(problem) > safetyResidualTolerance
+    );
     const isSolveBudgetExceeded = () => (
         hasSolveBudget &&
         solveClock() - solveStartMs >= solveBudgetMs
@@ -497,12 +579,18 @@ export function restoreHumanoidJogMJTrustRegion({
     }
     let currentPhi = getActiveResidualNorm(currentProblem);
     let currentTheta = computeConstraintViolation(currentProblem);
+    let currentSafety = getSafetyResidualNorm(currentProblem);
     let currentPenalty = Math.max(1, currentPhi + 1);
     let currentMerit = computeRestorationMerit(currentPhi, currentTheta, currentPenalty);
     result.currentProblem = currentProblem;
     result.currentResidualNorm = currentPhi;
     result.bestConstraintViolation = currentTheta;
-    if (currentPhi <= equalityTolerance && currentTheta <= inequalityTolerance) {
+    result.safetyResidualBefore = currentSafety;
+    result.safetyResidualAfter = currentSafety;
+    if (isSafetyActive(currentProblem, currentPhi, currentTheta)) {
+        result.safetyStatus = 'active';
+    }
+    if (currentPhi <= equalityTolerance && currentTheta <= inequalityTolerance && !isSafetyActive(currentProblem, currentPhi, currentTheta)) {
         result.converged = true;
         result.reason = 'converged';
         return result;
@@ -529,6 +617,19 @@ export function restoreHumanoidJogMJTrustRegion({
         result.timeBudgetExceeded = true;
         return result;
     };
+    const finishSafetyLimited = () => {
+        result.converged = true;
+        result.reason = 'safety_limited';
+        result.qApplied = qCurrent.slice();
+        result.currentProblem = currentProblem;
+        result.currentResidualNorm = currentPhi;
+        result.bestConstraintViolation = Math.min(result.bestConstraintViolation, currentTheta);
+        result.trustRadius = trustRadius;
+        result.filterSize = filter.length;
+        result.safetyStatus = 'limited';
+        result.safetyResidualAfter = currentSafety;
+        return result;
+    };
 
     for (let iter = 0; iter < maxIters; iter++) {
         result.iterations = iter + 1;
@@ -539,14 +640,22 @@ export function restoreHumanoidJogMJTrustRegion({
         let lastReferenceResidual = [];
         let lastConstraintMotion = [];
         let candidateRadius = trustRadius;
+        const safetyActiveThisIteration = isSafetyActive(currentProblem, currentPhi, currentTheta);
+        if (safetyActiveThisIteration) {
+            result.safetyStatus = 'active';
+        }
 
         for (let dampingAttempt = 0; dampingAttempt <= retryCount && !acceptedTrial; dampingAttempt++) {
             const attemptDamping = damping * (dampingGrowth ** dampingAttempt);
-            const { dq, referenceResidual, constraintMotion } = buildRestorationStep(
+            const { dq, referenceResidual, constraintMotion, modelJacobian, modelReferenceResidual } = buildRestorationStep(
                 currentProblem,
                 previousAcceptedStep,
                 attemptDamping,
-                normalizedRegularizationWeights
+                normalizedRegularizationWeights,
+                {
+                    enabled: safetyActiveThisIteration,
+                    weight: safetyWeight
+                }
             );
             lastReferenceResidual = Array.isArray(referenceResidual) ? referenceResidual.slice() : [];
             lastConstraintMotion = Array.isArray(constraintMotion) ? constraintMotion.slice() : [];
@@ -566,6 +675,7 @@ export function restoreHumanoidJogMJTrustRegion({
                 }
                 const trialPhi = getActiveResidualNorm(trialProblem);
                 const trialTheta = computeConstraintViolation(trialProblem);
+                const trialSafety = getSafetyResidualNorm(trialProblem);
                 const trialPenalty = Math.max(currentPenalty, trialPhi + 1);
                 const trialMerit = computeRestorationMerit(trialPhi, trialTheta, trialPenalty);
                 const predictedReduction = computeModelObjective(
@@ -573,17 +683,19 @@ export function restoreHumanoidJogMJTrustRegion({
                     new Array(qCurrent.length).fill(0),
                     attemptDamping,
                     normalizedRegularizationWeights,
-                    referenceResidual
+                    modelReferenceResidual,
+                    modelJacobian
                 ) - computeModelObjective(
                     currentProblem,
                     clippedStep.dq,
                     attemptDamping,
                     normalizedRegularizationWeights,
-                    referenceResidual
+                    modelReferenceResidual,
+                    modelJacobian
                 );
                 const actualReduction = currentMerit - trialMerit;
                 const rho = predictedReduction > 1e-12 ? actualReduction / predictedReduction : Number.POSITIVE_INFINITY;
-                const acceptance = acceptRestorationCandidateByFilter({
+                let acceptance = acceptRestorationCandidateByFilter({
                     filter,
                     currentPhi,
                     currentTheta,
@@ -596,6 +708,24 @@ export function restoreHumanoidJogMJTrustRegion({
                     phiTolerance,
                     thetaTolerance
                 });
+                const safetyImproved = trialSafety + safetyResidualTolerance < currentSafety;
+                const safetyAccepted = (
+                    safetyActiveThisIteration &&
+                    isPrimaryHeldForSafety(currentPhi, currentTheta) &&
+                    isPrimaryHeldForSafety(trialPhi, trialTheta) &&
+                    safetyImproved
+                );
+                if (!acceptance.accepted && safetyAccepted) {
+                    acceptance = {
+                        accepted: true,
+                        reason: 'safety',
+                        nextFilter: filter,
+                        phiImproved: false,
+                        thetaImproved: false,
+                        predictedReduction: Math.max(0, predictedReduction),
+                        actualReduction
+                    };
+                }
                 const nextRadius = updateTrustRegionRadius(candidateRadius, rho, clippedStep.stepNorm, clippedStep.clipped, {
                     minTrustRadius: minRadius,
                     maxTrustRadius: maxRadius,
@@ -617,8 +747,9 @@ export function restoreHumanoidJogMJTrustRegion({
                         predictedReduction,
                         actualReduction,
                         acceptedBy: acceptance.reason,
+                        trialSafety,
                         nextFilter: acceptance.nextFilter,
-                        nextRadius
+                        nextRadius: acceptance.reason === 'safety' ? candidateRadius : nextRadius
                     };
                     break;
                 }
@@ -634,6 +765,9 @@ export function restoreHumanoidJogMJTrustRegion({
         result.lastReferenceResidual = lastReferenceResidual;
         result.lastConstraintMotion = lastConstraintMotion;
         if (!acceptedTrial) {
+            if (safetyActiveThisIteration && isPrimaryHeldForSafety(currentPhi, currentTheta)) {
+                return finishSafetyLimited();
+            }
             result.reason = hasAccepted ? 'best_effort' : 'line_search_failed';
             result.qApplied = hasAccepted ? qAccepted.slice() : qStart.slice();
             result.currentProblem = hasAccepted ? acceptedProblem : currentProblem;
@@ -648,6 +782,7 @@ export function restoreHumanoidJogMJTrustRegion({
         currentProblem = acceptedTrial.trialProblem;
         currentPhi = acceptedTrial.trialPhi;
         currentTheta = acceptedTrial.trialTheta;
+        currentSafety = acceptedTrial.trialSafety;
         currentPenalty = Math.max(currentPenalty, currentPhi + 1);
         currentMerit = acceptedTrial.trialMerit;
         qAccepted = qCurrent.slice();
@@ -669,10 +804,14 @@ export function restoreHumanoidJogMJTrustRegion({
         result.lastPredictedReduction = acceptedTrial.predictedReduction;
         result.lastActualReduction = acceptedTrial.actualReduction;
         result.acceptedBy = acceptedTrial.acceptedBy;
+        if (acceptedTrial.acceptedBy === 'safety') {
+            result.safetyAcceptedIterations += 1;
+        }
+        result.safetyResidualAfter = currentSafety;
         result.bestConstraintViolation = Math.min(result.bestConstraintViolation, currentTheta);
         result.filterSize = filter.length;
 
-        if (currentPhi <= equalityTolerance && currentTheta <= inequalityTolerance) {
+        if (currentPhi <= equalityTolerance && currentTheta <= inequalityTolerance && !isSafetyActive(currentProblem, currentPhi, currentTheta)) {
             result.converged = true;
             result.reason = 'converged';
             result.qApplied = qAccepted.slice();
@@ -680,6 +819,9 @@ export function restoreHumanoidJogMJTrustRegion({
         }
     }
 
+    if (isPrimaryHeldForSafety(currentPhi, currentTheta) && isSafetyActive(currentProblem, currentPhi, currentTheta)) {
+        return finishSafetyLimited();
+    }
     result.reason = (
         hasAccepted &&
         (acceptedPhi + phiTolerance < startPhi || acceptedTheta + thetaTolerance < startTheta)

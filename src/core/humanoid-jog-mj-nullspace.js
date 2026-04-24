@@ -3,7 +3,7 @@ export function shouldEnableHumanoidJogMJNullspaceRefine({
     metric = 'none'
 } = {}) {
     if (enabled === true) return true;
-    return metric === 'w_vfi' || metric === 'w_abs_hier_vfi' || metric === 'w_abs_hier' || metric === 'w_abs_arm' || metric === 'w_abs_arm_vfi' || metric === 'w_abs_vfi';
+    return metric === 'w_vfi' || metric === 'safety_margin' || metric === 'w_abs_hier_vfi' || metric === 'w_abs_hier' || metric === 'w_abs_arm' || metric === 'w_abs_arm_vfi' || metric === 'w_abs_vfi';
 }
 
 export function shouldUseHumanoidJogMJProjectionOnlyMetricStep({
@@ -101,6 +101,7 @@ export function shouldComputeHumanoidJogMJTrialManipData({
 } = {}) {
     if (Number.isFinite(wvfiLowerBound) && wvfiLowerBound > 0) return true;
     if (nullspaceRefineEnabled !== true) return false;
+    if (metric === 'safety_margin') return false;
     return metric !== 'none';
 }
 

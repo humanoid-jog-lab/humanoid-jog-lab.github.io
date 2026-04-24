@@ -240,6 +240,8 @@ test('setupHumanoidParameterControls restores, applies, and validates humanoid j
     const humanoidJointLimitEtaStatus = createMockElement('');
     const humanoidWaistXEtaInput = createMockElement('');
     const humanoidWaistXVFIStatus = createMockElement('');
+    const humanoidTRSafetyPushWeightInput = createMockElement('');
+    const humanoidTRSafetyPushStatus = createMockElement('');
     const humanoidRos2ArmVelInput = createMockElement('');
     const humanoidRos2ArmAccInput = createMockElement('');
     const humanoidRos2WaistVelInput = createMockElement('');
@@ -247,6 +249,7 @@ test('setupHumanoidParameterControls restores, applies, and validates humanoid j
     const humanoidRos2PublishDefaultsStatus = createMockElement('');
     const etaCalls = [];
     const waistXVFICalls = [];
+    const safetyPushWeightCalls = [];
 
     globalThis.window = {};
     globalThis.document = {
@@ -255,6 +258,8 @@ test('setupHumanoidParameterControls restores, applies, and validates humanoid j
             if (id === 'humanoid-joint-limit-eta-status') return humanoidJointLimitEtaStatus;
             if (id === 'humanoid-waist-x-eta-input') return humanoidWaistXEtaInput;
             if (id === 'humanoid-waist-x-vfi-status') return humanoidWaistXVFIStatus;
+            if (id === 'humanoid-tr-safety-push-weight-input') return humanoidTRSafetyPushWeightInput;
+            if (id === 'humanoid-tr-safety-push-status') return humanoidTRSafetyPushStatus;
             if (id === 'humanoid-ros2-arm-vel-input') return humanoidRos2ArmVelInput;
             if (id === 'humanoid-ros2-arm-acc-input') return humanoidRos2ArmAccInput;
             if (id === 'humanoid-ros2-waist-vel-input') return humanoidRos2WaistVelInput;
@@ -266,6 +271,7 @@ test('setupHumanoidParameterControls restores, applies, and validates humanoid j
     globalThis.localStorage = createMockLocalStorage([
         ['humanoid-joint-limit-eta', '4.5'],
         ['humanoid-waist-x-eta', '2.5'],
+        ['humanoid-tr-safety-push-weight', '0.08'],
         ['humanoid-ros2-arm-vel', '0.6'],
         ['humanoid-ros2-arm-acc', '1.1'],
         ['humanoid-ros2-waist-vel', '0.7'],
@@ -275,7 +281,8 @@ test('setupHumanoidParameterControls restores, applies, and validates humanoid j
         vfiConfig: {
             jointLimitEta: 5,
             waistXEta: 1,
-            waistXActivationThreshold: 0.12
+            waistXActivationThreshold: 0.12,
+            mjRestoreSafetyPushWeight: 0.05
         },
         setHumanoidJointLimitEta(value) {
             etaCalls.push(value);
@@ -284,6 +291,10 @@ test('setupHumanoidParameterControls restores, applies, and validates humanoid j
         setHumanoidWaistXVFIParams(value) {
             waistXVFICalls.push(value);
             this.vfiConfig.waistXEta = value.eta;
+        },
+        setHumanoidTRSafetyPushWeight(value) {
+            safetyPushWeightCalls.push(value);
+            this.vfiConfig.mjRestoreSafetyPushWeight = value;
         }
     };
 
@@ -299,6 +310,10 @@ test('setupHumanoidParameterControls restores, applies, and validates humanoid j
         assert.equal(globalThis.window.humanoidWaistXEta, 2.5);
         assert.equal(globalThis.window.humanoidWaistXActivationThreshold, undefined);
         assert.deepEqual(waistXVFICalls, [{ eta: 2.5 }]);
+        assert.equal(humanoidTRSafetyPushWeightInput.value, '0.08');
+        assert.equal(humanoidTRSafetyPushStatus.textContent, '当前值已应用：β=0.08');
+        assert.equal(globalThis.window.humanoidTRSafetyPushWeight, 0.08);
+        assert.deepEqual(safetyPushWeightCalls, [0.08]);
         assert.equal(humanoidRos2ArmVelInput.value, '0.6');
         assert.equal(humanoidRos2ArmAccInput.value, '1.1');
         assert.equal(humanoidRos2WaistVelInput.value, '0.7');
@@ -331,6 +346,22 @@ test('setupHumanoidParameterControls restores, applies, and validates humanoid j
             { eta: 3.5 }
         ]);
 
+        humanoidTRSafetyPushWeightInput.value = '0.12';
+        humanoidTRSafetyPushWeightInput.trigger('change', '0.12');
+
+        assert.equal(humanoidTRSafetyPushWeightInput.value, '0.12');
+        assert.equal(humanoidTRSafetyPushStatus.textContent, '当前值已应用：β=0.12');
+        assert.equal(globalThis.localStorage.getItem('humanoid-tr-safety-push-weight'), '0.12');
+        assert.deepEqual(safetyPushWeightCalls, [0.08, 0.12]);
+
+        humanoidTRSafetyPushWeightInput.value = '0';
+        humanoidTRSafetyPushWeightInput.trigger('change', '0');
+
+        assert.equal(humanoidTRSafetyPushWeightInput.value, '0');
+        assert.equal(humanoidTRSafetyPushStatus.textContent, '当前值已应用：β=0');
+        assert.equal(globalThis.localStorage.getItem('humanoid-tr-safety-push-weight'), '0');
+        assert.deepEqual(safetyPushWeightCalls, [0.08, 0.12, 0]);
+
         humanoidRos2ArmVelInput.value = '0.9';
         humanoidRos2ArmVelInput.trigger('change', '0.9');
 
@@ -358,6 +389,12 @@ test('setupHumanoidParameterControls restores, applies, and validates humanoid j
         assert.equal(humanoidWaistXVFIStatus.textContent, '输入无效，已恢复为 η_x=3.5');
         assert.equal(globalThis.window.humanoidWaistXEta, 3.5);
         assert.equal(globalThis.window.humanoidWaistXActivationThreshold, undefined);
+
+        humanoidTRSafetyPushWeightInput.value = 'bad';
+        humanoidTRSafetyPushWeightInput.trigger('change', 'bad');
+
+        assert.equal(humanoidTRSafetyPushWeightInput.value, '0');
+        assert.equal(humanoidTRSafetyPushStatus.textContent, '输入无效，已恢复为 β=0');
 
         humanoidRos2WaistAccInput.value = 'bad';
         humanoidRos2WaistAccInput.trigger('change', 'bad');

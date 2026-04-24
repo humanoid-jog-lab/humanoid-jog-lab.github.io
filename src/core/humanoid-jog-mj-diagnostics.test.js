@@ -162,7 +162,11 @@ test('buildHumanoidJogMJDiagnostics preserves the trust-region restoration solve
             lastRejectedRho: -0.15,
             lastRejectedPredictedReduction: 0.08,
             lastRejectedActualReduction: -0.01,
-            lastRejectedReason: 'poor_ratio'
+            lastRejectedReason: 'poor_ratio',
+            safetyStatus: 'active',
+            safetyResidualBefore: 0.012,
+            safetyResidualAfter: 0.004,
+            safetyAcceptedIterations: 2
         }
     });
 
@@ -176,6 +180,10 @@ test('buildHumanoidJogMJDiagnostics preserves the trust-region restoration solve
     assert.equal(payload.restoreRejectedPredictedReduction, 0.08);
     assert.equal(payload.restoreRejectedActualReduction, -0.01);
     assert.equal(payload.restoreRejectedReason, 'poor_ratio');
+    assert.equal(payload.trSafetyStatus, 'active');
+    assert.equal(payload.safetyResidualBefore, 0.012);
+    assert.equal(payload.safetyResidualAfter, 0.004);
+    assert.equal(payload.safetyAcceptedIterations, 2);
 });
 
 test('buildHumanoidJogMJDiagnostics falls back to the supported mj_restore solver id for removed variants', () => {

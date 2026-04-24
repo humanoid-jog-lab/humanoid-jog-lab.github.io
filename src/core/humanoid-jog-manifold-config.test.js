@@ -27,6 +27,16 @@ test('RobotVisualizer sets manifold reference restoration defaults', () => {
     assert.equal(visualizer.vfiConfig.manifoldReferenceDamping, 0.35);
 });
 
+test('RobotVisualizer sets TR safety push defaults', () => {
+    const visualizer = new RobotVisualizer(null);
+    assert.equal(visualizer.vfiConfig.mjRestoreSafetyPushEnabled, true);
+    assert.equal(visualizer.vfiConfig.mjRestoreSafetyPushWeight, 0.05);
+    assert.equal(visualizer.vfiConfig.mjRestoreSafetyPushActivationResidual, 1e-5);
+    assert.equal(visualizer.vfiConfig.mjRestoreSafetyPushPoseHoldTolerance, 2e-6);
+    assert.equal(visualizer.vfiConfig.mjRestoreSafetyPushTargetFraction, 0.25);
+    assert.equal(visualizer.vfiConfig.mjRestoreSafetyPushMaxDistanceStep, 0.01);
+});
+
 test('RobotVisualizer sets hierarchical VFI blend default to 1', () => {
     const visualizer = new RobotVisualizer(null);
     assert.equal(visualizer.vfiConfig.manifoldHierarchicalVfiBlend, 1);
@@ -578,7 +588,7 @@ test('RobotVisualizer local metric-only absolute w_abs_hier_vfi request skips th
     }
 });
 
-test('RobotVisualizer decoupled-upright mj_restore_tr auto-promotes default refine to w_vfi only', async () => {
+test('RobotVisualizer decoupled-upright mj_restore_tr keeps explicit none from running automatic refine', async () => {
     const visualizer = new RobotVisualizer(null);
     const q0 = new Array(20).fill(0);
     const absCurrent = [1, 0, 0, 0, 0, 0, 0, 0];
@@ -652,11 +662,12 @@ test('RobotVisualizer decoupled-upright mj_restore_tr auto-promotes default refi
             {
                 solverMode: 'mj_restore_tr',
                 preferWorker: false,
+                jogMetricOverride: 'none',
                 metricDirection: 'increase'
             }
         );
         assert.equal(result, true);
-        assert.deepEqual(metricCalls, ['w_vfi']);
+        assert.deepEqual(metricCalls, []);
     } finally {
         globalThis.document = originalDocument;
         if (originalWindow === undefined) {
@@ -667,7 +678,7 @@ test('RobotVisualizer decoupled-upright mj_restore_tr auto-promotes default refi
     }
 });
 
-test('RobotVisualizer decoupled-upright mj_restore_tr auto-promotes w_vfi refine even when joint-limit flag is off', async () => {
+test('RobotVisualizer decoupled-upright mj_restore_tr does not auto-refine when joint-limit flag is off', async () => {
     const visualizer = new RobotVisualizer(null);
     const q0 = new Array(20).fill(0);
     const absCurrent = [1, 0, 0, 0, 0, 0, 0, 0];
@@ -748,7 +759,111 @@ test('RobotVisualizer decoupled-upright mj_restore_tr auto-promotes w_vfi refine
             }
         );
         assert.equal(result, true);
-        assert.deepEqual(metricCalls, ['w_vfi']);
+        assert.deepEqual(metricCalls, []);
+    } finally {
+        globalThis.document = originalDocument;
+        if (originalWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = originalWindow;
+        }
+    }
+});
+
+test('RobotVisualizer decoupled-upright mj_restore_tr ignores configured secondary metric for automatic refine', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const q0 = new Array(20).fill(0);
+    const absCurrent = [1, 0, 0, 0, 0, 0, 0, 0];
+    const relCurrent = [1, 0, 0, 0, 0, 0, 0, 0];
+    const Jabs = Array.from({ length: 8 }, () => new Array(q0.length).fill(0));
+    const Jrel = Array.from({ length: 8 }, () => new Array(q0.length).fill(0));
+    const metricCalls = [];
+    const restoreIterationCaps = [];
+    let diagnosticJogMetric = '';
+    let diagnosticLabel = '';
+
+    visualizer.humanoidModel = {};
+    visualizer.humanoidWaistLength = 4;
+    visualizer.humanoidLeftArmLength = 7;
+    visualizer.humanoidRightArmLength = 7;
+    visualizer.vfiConfig.mjRestoreAbsoluteDQSetpointError = false;
+    visualizer.vfiConfig.mjRestoreEnableNullspaceRefine = true;
+    visualizer.vfiConfig.mjRestoreNullspaceRestoreMaxIter = 24;
+    visualizer._canUseHumanoidJogMJRestoreWorker = () => false;
+    visualizer._getHumanoidManifoldJogSecondaryMetric = () => 'w_abs_hier_vfi';
+    visualizer._getHumanoidAbsolutePose = () => absCurrent.slice();
+    visualizer._getHumanoidRelativePose = () => relCurrent.slice();
+    visualizer._getHumanoidAbsolutePoseJacobian = () => Jabs.map((row) => row.slice());
+    visualizer._getHumanoidRelativePoseJacobian = () => Jrel.map((row) => row.slice());
+    visualizer._getHumanoidBodyVerticalState = () => ({
+        error: [0],
+        Jrows: [new Array(18).fill(0)]
+    });
+    visualizer._buildManipulabilityVFIConstraints = () => [];
+    visualizer._computeModeCCTSM = () => ({
+        w_abs_hier_vfi: 0.009,
+        w_abs_vfi: 0.009,
+        w_abs_hier: 0.011,
+        w_abs: 0.011,
+        w_vfi: 0.005,
+        w: 0.007
+    });
+    visualizer._attemptHumanoidJogManifoldMetricRefinement = async (options) => {
+        metricCalls.push(options.metric);
+        restoreIterationCaps.push(options.restoreMaxIterations);
+        return {
+            state: 'active',
+            before: 0.005,
+            after: 0.006,
+            applied: true,
+            finalProblem: null,
+            refineResult: {
+                converged: true,
+                reason: 'projected_candidate',
+                qApplied: q0.slice(0, 18),
+                iterations: 0,
+                acceptedIterations: 1
+            },
+            nullspaceResult: { reason: 'accepted' }
+        };
+    };
+    visualizer._publishHumanoidJogDiagnostics = (payload) => {
+        diagnosticJogMetric = payload?.jogMetric;
+        diagnosticLabel = payload?.diagnosticLabel || '';
+    };
+    visualizer._applyHumanoidJointSolution = () => {};
+
+    const originalWindow = globalThis.window;
+    const originalDocument = globalThis.document;
+    globalThis.window = {
+        humanoidQ: q0.slice(),
+        DQModule: { DQWrapper: {} },
+        updateGlobalVariables: () => {},
+        updateRobotPose: () => {}
+    };
+    globalThis.document = {
+        getElementById: () => null
+    };
+
+    try {
+        const result = await visualizer._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstManifold(
+            absCurrent.slice(),
+            q0.slice(),
+            true,
+            true,
+            true,
+            relCurrent.slice(),
+            {
+                solverMode: 'mj_restore_tr',
+                preferWorker: false,
+                metricDirection: 'increase'
+            }
+        );
+        assert.equal(result, true);
+        assert.deepEqual(metricCalls, []);
+        assert.deepEqual(restoreIterationCaps, []);
+        assert.equal(diagnosticJogMetric, 'none');
+        assert.equal(diagnosticLabel.includes('refine_ms='), false);
     } finally {
         globalThis.document = originalDocument;
         if (originalWindow === undefined) {

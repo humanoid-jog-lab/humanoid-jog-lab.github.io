@@ -83,6 +83,11 @@ test('shouldEnableHumanoidJogMJNullspaceRefine allows w_vfi refine even when mj_
 
     assert.equal(shouldEnableHumanoidJogMJNullspaceRefine({
         enabled: false,
+        metric: 'safety_margin'
+    }), true);
+
+    assert.equal(shouldEnableHumanoidJogMJNullspaceRefine({
+        enabled: false,
         metric: 'w_abs'
     }), false);
 });
@@ -99,6 +104,12 @@ test('shouldComputeHumanoidJogMJTrialManipData skips trial manipulability data f
         nullspaceRefineEnabled: true,
         wvfiLowerBound: 0
     }), true);
+
+    assert.equal(shouldComputeHumanoidJogMJTrialManipData({
+        metric: 'safety_margin',
+        nullspaceRefineEnabled: true,
+        wvfiLowerBound: 0
+    }), false);
 
     assert.equal(shouldComputeHumanoidJogMJTrialManipData({
         metric: 'none',
