@@ -239,3 +239,39 @@ test('buildHumanoidJogMJProblem can exclude waist corridor from safety push whil
     assertCloseArray(problem.safetyObjective.targets, [0.01]);
     assert.equal(problem.safetyObjective.count, 1);
 });
+
+test('buildHumanoidJogMJProblem applies soft waist corridor safety push scaling', () => {
+    const problem = buildHumanoidJogMJProblem({
+        q: [0.49, 0],
+        qCurrent: [0, 0],
+        absoluteTarget: [1],
+        relativeTarget: [2],
+        absolutePose: () => [1],
+        relativePose: () => [2],
+        absoluteJacobian: () => [[1, 0]],
+        relativeJacobian: () => [[0, 1]],
+        waistXCorridor: {
+            enabled: true,
+            evaluateX: (q) => q[0],
+            min: -0.5,
+            max: 0.5,
+            vfiRows: [[1, 0], [-1, 0]],
+            rhs: [0.01, 0.99],
+            vfiConstraints: [
+                { row: [-1, 0], distance: 0.01, threshold: 0.2 },
+                { row: [1, 0], distance: 0.99, threshold: 0.2 }
+            ]
+        },
+        mjRestoreSafetyPushEnabled: true,
+        safetyPushTargetFraction: 0.25,
+        safetyPushMaxDistanceStep: 0.01,
+        safetyPushWaistCorridorTargetDistance: 0.03,
+        safetyPushWaistCorridorMaxDistanceStep: 0.002,
+        safetyPushWaistCorridorWeightScale: 0.25
+    });
+
+    assert.equal(problem.safetyObjective.enabled, true);
+    assert.deepEqual(problem.safetyObjective.rows, [[-0.25, 0]]);
+    assertCloseArray(problem.safetyObjective.targets, [0.0005]);
+    assert.equal(problem.safetyObjective.count, 1);
+});

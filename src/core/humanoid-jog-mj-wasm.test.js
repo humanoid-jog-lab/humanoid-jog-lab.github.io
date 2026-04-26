@@ -77,6 +77,9 @@ test('buildHumanoidJogMJRestoreWasmRequest clones arrays and fills defaults', ()
         safetyPushTargetFraction: 0.4,
         safetyPushMaxDistanceStep: 0.03,
         safetyPushIncludeWaistCorridor: false,
+        safetyPushWaistCorridorTargetDistance: 0.025,
+        safetyPushWaistCorridorMaxDistanceStep: 0.001,
+        safetyPushWaistCorridorWeightScale: 0.2,
         referenceModel: {
             absolute: { stiffness: 1.2 },
             bodyZ: { damping: 0.8 }
@@ -105,7 +108,10 @@ test('buildHumanoidJogMJRestoreWasmRequest clones arrays and fills defaults', ()
         poseHoldTolerance: 3e-6,
         targetFraction: 0.4,
         maxDistanceStep: 0.03,
-        includeWaistCorridor: false
+        includeWaistCorridor: false,
+        waistCorridorTargetDistance: 0.025,
+        waistCorridorMaxDistanceStep: 0.001,
+        waistCorridorWeightScale: 0.2
     });
     assert.deepEqual(request.jointLimitVFI, {
         enabled: true,

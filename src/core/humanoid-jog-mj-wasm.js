@@ -38,7 +38,10 @@ export const HUMANOID_MJ_RESTORE_WASM_DEFAULTS = Object.freeze({
         poseHoldTolerance: 2e-6,
         targetFraction: 0.25,
         maxDistanceStep: 0.01,
-        includeWaistCorridor: true
+        includeWaistCorridor: true,
+        waistCorridorTargetDistance: 0.025,
+        waistCorridorMaxDistanceStep: 0.001,
+        waistCorridorWeightScale: 0.25
     }
 });
 
@@ -162,7 +165,10 @@ export function buildHumanoidJogMJRestoreWasmRequest({
     safetyPushPoseHoldTolerance,
     safetyPushTargetFraction,
     safetyPushMaxDistanceStep,
-    safetyPushIncludeWaistCorridor
+    safetyPushIncludeWaistCorridor,
+    safetyPushWaistCorridorTargetDistance,
+    safetyPushWaistCorridorMaxDistanceStep,
+    safetyPushWaistCorridorWeightScale
 } = {}) {
     const fallback = HUMANOID_MJ_RESTORE_WASM_DEFAULTS;
     return {
@@ -270,7 +276,19 @@ export function buildHumanoidJogMJRestoreWasmRequest({
             maxDistanceStep: Math.max(0, finiteOr(safetyPushMaxDistanceStep, fallback.safetyPush.maxDistanceStep)),
             includeWaistCorridor: safetyPushIncludeWaistCorridor == null
                 ? fallback.safetyPush.includeWaistCorridor
-                : safetyPushIncludeWaistCorridor !== false
+                : safetyPushIncludeWaistCorridor !== false,
+            waistCorridorTargetDistance: Math.max(
+                0,
+                finiteOr(safetyPushWaistCorridorTargetDistance, fallback.safetyPush.waistCorridorTargetDistance)
+            ),
+            waistCorridorMaxDistanceStep: Math.max(
+                0,
+                finiteOr(safetyPushWaistCorridorMaxDistanceStep, fallback.safetyPush.waistCorridorMaxDistanceStep)
+            ),
+            waistCorridorWeightScale: Math.max(
+                0,
+                finiteOr(safetyPushWaistCorridorWeightScale, fallback.safetyPush.waistCorridorWeightScale)
+            )
         }
     };
 }
@@ -427,7 +445,10 @@ export function attemptHumanoidJogMJRestoreWasm({
     safetyPushPoseHoldTolerance,
     safetyPushTargetFraction,
     safetyPushMaxDistanceStep,
-    safetyPushIncludeWaistCorridor
+    safetyPushIncludeWaistCorridor,
+    safetyPushWaistCorridorTargetDistance,
+    safetyPushWaistCorridorMaxDistanceStep,
+    safetyPushWaistCorridorWeightScale
 } = {}) {
     const normalizedSolverMode = normalizeSolverMode(solverMode);
     const normalizedSolveVariant = normalizeSolveVariant(solveVariant);
@@ -494,7 +515,10 @@ export function attemptHumanoidJogMJRestoreWasm({
         safetyPushPoseHoldTolerance,
         safetyPushTargetFraction,
         safetyPushMaxDistanceStep,
-        safetyPushIncludeWaistCorridor
+        safetyPushIncludeWaistCorridor,
+        safetyPushWaistCorridorTargetDistance,
+        safetyPushWaistCorridorMaxDistanceStep,
+        safetyPushWaistCorridorWeightScale
     });
     const preMs = nowMs() - preStartMs;
 
@@ -657,6 +681,9 @@ export async function attemptHumanoidJogMJRestoreWasmWorker({
     safetyPushTargetFraction,
     safetyPushMaxDistanceStep,
     safetyPushIncludeWaistCorridor,
+    safetyPushWaistCorridorTargetDistance,
+    safetyPushWaistCorridorMaxDistanceStep,
+    safetyPushWaistCorridorWeightScale,
     secondaryMetricRequest = null
 } = {}) {
     if (!workerClient || !modelSpec || typeof workerClient.solve !== 'function' || typeof evaluateProblem !== 'function') {
@@ -720,7 +747,10 @@ export async function attemptHumanoidJogMJRestoreWasmWorker({
         safetyPushPoseHoldTolerance,
         safetyPushTargetFraction,
         safetyPushMaxDistanceStep,
-        safetyPushIncludeWaistCorridor
+        safetyPushIncludeWaistCorridor,
+        safetyPushWaistCorridorTargetDistance,
+        safetyPushWaistCorridorMaxDistanceStep,
+        safetyPushWaistCorridorWeightScale
     });
     const preMs = nowMs() - preStartMs;
 

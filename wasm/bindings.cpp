@@ -878,6 +878,21 @@ private:
                 safety_push_js["includeWaistCorridor"].isUndefined()
                     ? request.safety_push.include_waist_corridor
                     : safety_push_js["includeWaistCorridor"].as<bool>();
+            request.safety_push.waist_corridor_target_distance = getOptionalNumberField(
+                safety_push_js,
+                "waistCorridorTargetDistance",
+                request.safety_push.waist_corridor_target_distance
+            );
+            request.safety_push.waist_corridor_max_distance_step = getOptionalNumberField(
+                safety_push_js,
+                "waistCorridorMaxDistanceStep",
+                request.safety_push.waist_corridor_max_distance_step
+            );
+            request.safety_push.waist_corridor_weight_scale = getOptionalNumberField(
+                safety_push_js,
+                "waistCorridorWeightScale",
+                request.safety_push.waist_corridor_weight_scale
+            );
         }
 
         const val reference_model_js = request_js["referenceModel"];

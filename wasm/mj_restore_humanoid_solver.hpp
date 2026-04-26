@@ -31,6 +31,9 @@ struct HumanoidMJRestoreSafetyPushRequest {
     double target_fraction = 0.25;
     double max_distance_step = 0.01;
     bool include_waist_corridor = true;
+    double waist_corridor_target_distance = 0.025;
+    double waist_corridor_max_distance_step = 0.001;
+    double waist_corridor_weight_scale = 0.25;
 };
 
 struct HumanoidMJRestoreJointLimitVFIRequest {

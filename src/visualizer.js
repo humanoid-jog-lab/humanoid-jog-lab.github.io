@@ -467,6 +467,10 @@ export class RobotVisualizer {
             mjRestoreSafetyPushPoseHoldTolerance: 2e-6,
             mjRestoreSafetyPushTargetFraction: 0.25,
             mjRestoreSafetyPushMaxDistanceStep: 0.01,
+            mjRestoreSafetyPushWaistCorridorEnabled: true,
+            mjRestoreSafetyPushWaistCorridorTargetDistance: 0.025,
+            mjRestoreSafetyPushWaistCorridorMaxDistanceStep: 0.001,
+            mjRestoreSafetyPushWaistCorridorWeightScale: 0.25,
             mjRestoreNullspaceSafetyRefineEnabled: true,
             mjRestoreSafetyRefineJointActivationDistance: 0.15,
             mjRestoreSafetyRefineWaistActivationDistance: 0.08,
@@ -13137,8 +13141,17 @@ export class RobotVisualizer {
         const mjRestoreSafetyPushMaxDistanceStep = Number.isFinite(cfg.mjRestoreSafetyPushMaxDistanceStep)
             ? Math.max(0, cfg.mjRestoreSafetyPushMaxDistanceStep)
             : 0.01;
+        const mjRestoreSafetyPushWaistCorridorTargetDistance = Number.isFinite(cfg.mjRestoreSafetyPushWaistCorridorTargetDistance)
+            ? Math.max(0, cfg.mjRestoreSafetyPushWaistCorridorTargetDistance)
+            : 0.025;
+        const mjRestoreSafetyPushWaistCorridorMaxDistanceStep = Number.isFinite(cfg.mjRestoreSafetyPushWaistCorridorMaxDistanceStep)
+            ? Math.max(0, cfg.mjRestoreSafetyPushWaistCorridorMaxDistanceStep)
+            : 0.001;
+        const mjRestoreSafetyPushWaistCorridorWeightScale = Number.isFinite(cfg.mjRestoreSafetyPushWaistCorridorWeightScale)
+            ? Math.max(0, cfg.mjRestoreSafetyPushWaistCorridorWeightScale)
+            : 0.25;
         const mjRestoreSafetyPushIncludeWaistCorridor = isSafetyBiasTR
-            ? false
+            ? cfg.mjRestoreSafetyPushWaistCorridorEnabled !== false
             : cfg.mjRestoreSafetyPushIncludeWaistCorridor !== false;
 
         const evaluateProblem = (qActiveEval, options = {}) => {
@@ -13275,6 +13288,9 @@ export class RobotVisualizer {
                 safetyPushTargetFraction: mjRestoreSafetyPushTargetFraction,
                 safetyPushMaxDistanceStep: mjRestoreSafetyPushMaxDistanceStep,
                 safetyPushIncludeWaistCorridor: mjRestoreSafetyPushIncludeWaistCorridor,
+                safetyPushWaistCorridorTargetDistance: mjRestoreSafetyPushWaistCorridorTargetDistance,
+                safetyPushWaistCorridorMaxDistanceStep: mjRestoreSafetyPushWaistCorridorMaxDistanceStep,
+                safetyPushWaistCorridorWeightScale: mjRestoreSafetyPushWaistCorridorWeightScale,
                 waistXCorridor: this._buildHumanoidManifoldWaistXCorridor({
                     qFull,
                     qInitialFull,
@@ -13397,6 +13413,9 @@ export class RobotVisualizer {
                     safetyPushTargetFraction: mjRestoreSafetyPushTargetFraction,
                     safetyPushMaxDistanceStep: mjRestoreSafetyPushMaxDistanceStep,
                     safetyPushIncludeWaistCorridor: mjRestoreSafetyPushIncludeWaistCorridor,
+                    safetyPushWaistCorridorTargetDistance: mjRestoreSafetyPushWaistCorridorTargetDistance,
+                    safetyPushWaistCorridorMaxDistanceStep: mjRestoreSafetyPushWaistCorridorMaxDistanceStep,
+                    safetyPushWaistCorridorWeightScale: mjRestoreSafetyPushWaistCorridorWeightScale,
                     regularizationWeights: mjRestoreRegularizationWeights,
                     initialScale,
                     minScale,
@@ -19469,6 +19488,15 @@ export class RobotVisualizer {
                 safetyPushMaxDistanceStep: Number.isFinite(cfg.mjRestoreSafetyPushMaxDistanceStep)
                     ? cfg.mjRestoreSafetyPushMaxDistanceStep
                     : 0.01,
+                safetyPushWaistCorridorTargetDistance: Number.isFinite(cfg.mjRestoreSafetyPushWaistCorridorTargetDistance)
+                    ? cfg.mjRestoreSafetyPushWaistCorridorTargetDistance
+                    : 0.025,
+                safetyPushWaistCorridorMaxDistanceStep: Number.isFinite(cfg.mjRestoreSafetyPushWaistCorridorMaxDistanceStep)
+                    ? cfg.mjRestoreSafetyPushWaistCorridorMaxDistanceStep
+                    : 0.001,
+                safetyPushWaistCorridorWeightScale: Number.isFinite(cfg.mjRestoreSafetyPushWaistCorridorWeightScale)
+                    ? cfg.mjRestoreSafetyPushWaistCorridorWeightScale
+                    : 0.25,
                 waistXCorridor: this._buildHumanoidManifoldWaistXCorridor({
                     qFull,
                     qInitialFull,
@@ -23117,6 +23145,15 @@ export class RobotVisualizer {
                 safetyPushMaxDistanceStep: Number.isFinite(cfg.mjRestoreSafetyPushMaxDistanceStep)
                     ? cfg.mjRestoreSafetyPushMaxDistanceStep
                     : 0.01,
+                safetyPushWaistCorridorTargetDistance: Number.isFinite(cfg.mjRestoreSafetyPushWaistCorridorTargetDistance)
+                    ? cfg.mjRestoreSafetyPushWaistCorridorTargetDistance
+                    : 0.025,
+                safetyPushWaistCorridorMaxDistanceStep: Number.isFinite(cfg.mjRestoreSafetyPushWaistCorridorMaxDistanceStep)
+                    ? cfg.mjRestoreSafetyPushWaistCorridorMaxDistanceStep
+                    : 0.001,
+                safetyPushWaistCorridorWeightScale: Number.isFinite(cfg.mjRestoreSafetyPushWaistCorridorWeightScale)
+                    ? cfg.mjRestoreSafetyPushWaistCorridorWeightScale
+                    : 0.25,
                 waistXCorridor: this._buildHumanoidManifoldWaistXCorridor({
                     qFull,
                     qInitialFull,

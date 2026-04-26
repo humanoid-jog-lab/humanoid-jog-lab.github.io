@@ -35,6 +35,10 @@ test('RobotVisualizer sets TR safety push defaults', () => {
     assert.equal(visualizer.vfiConfig.mjRestoreSafetyPushPoseHoldTolerance, 2e-6);
     assert.equal(visualizer.vfiConfig.mjRestoreSafetyPushTargetFraction, 0.25);
     assert.equal(visualizer.vfiConfig.mjRestoreSafetyPushMaxDistanceStep, 0.01);
+    assert.equal(visualizer.vfiConfig.mjRestoreSafetyPushWaistCorridorEnabled, true);
+    assert.equal(visualizer.vfiConfig.mjRestoreSafetyPushWaistCorridorTargetDistance, 0.025);
+    assert.equal(visualizer.vfiConfig.mjRestoreSafetyPushWaistCorridorMaxDistanceStep, 0.001);
+    assert.equal(visualizer.vfiConfig.mjRestoreSafetyPushWaistCorridorWeightScale, 0.25);
     assert.equal(visualizer.vfiConfig.mjRestoreNullspaceSafetyRefineEnabled, true);
     assert.equal(visualizer.vfiConfig.mjRestoreSafetyRefineJointActivationDistance, 0.15);
     assert.equal(visualizer.vfiConfig.mjRestoreSafetyRefineWaistActivationDistance, 0.08);

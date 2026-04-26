@@ -565,6 +565,9 @@ bool validateRequest(
         !isFiniteValue(request.safety_push.pose_hold_tolerance) ||
         !isFiniteValue(request.safety_push.target_fraction) ||
         !isFiniteValue(request.safety_push.max_distance_step) ||
+        !isFiniteValue(request.safety_push.waist_corridor_target_distance) ||
+        !isFiniteValue(request.safety_push.waist_corridor_max_distance_step) ||
+        !isFiniteValue(request.safety_push.waist_corridor_weight_scale) ||
         !isFiniteValue(request.waist_x_corridor.activation_threshold) ||
         !isFiniteValue(request.waist_x_corridor.tolerance)) {
         reason = "request scalar fields must be finite";
@@ -587,6 +590,9 @@ bool validateRequest(
         request.safety_push.pose_hold_tolerance < 0.0 ||
         request.safety_push.target_fraction < 0.0 ||
         request.safety_push.max_distance_step < 0.0 ||
+        request.safety_push.waist_corridor_target_distance < 0.0 ||
+        request.safety_push.waist_corridor_max_distance_step < 0.0 ||
+        request.safety_push.waist_corridor_weight_scale < 0.0 ||
         request.waist_x_corridor.activation_threshold < 0.0) {
         reason = "safety push parameters must be non-negative";
         return false;
@@ -706,13 +712,24 @@ SafetyObjective buildSafetyObjective(
     const int width = request.active_count;
     const double target_fraction = std::max(0.0, request.safety_push.target_fraction);
     const double max_distance_step = std::max(0.0, request.safety_push.max_distance_step);
+    const double waist_corridor_target_distance = std::max(0.0, request.safety_push.waist_corridor_target_distance);
+    const double waist_corridor_max_distance_step = std::max(0.0, request.safety_push.waist_corridor_max_distance_step);
+    const double waist_corridor_weight_scale = std::max(0.0, request.safety_push.waist_corridor_weight_scale);
 
-    const auto add_distance_target = [&](const std::vector<double>& row, double distance, double target_margin) {
+    const auto add_distance_target = [&](
+        const std::vector<double>& row,
+        double distance,
+        double target_margin,
+        double step_limit,
+        double weight_scale
+    ) {
         if (static_cast<int>(row.size()) != width || !std::isfinite(distance)) return;
         const double residual = std::max(0.0, target_margin) - std::max(0.0, distance);
-        if (!(residual > 1e-12)) return;
-        rows.push_back(row);
-        targets.push_back(std::min(max_distance_step, residual));
+        if (!(residual > 1e-12) || !(weight_scale > 0.0)) return;
+        std::vector<double> scaled_row = row;
+        for (double& value : scaled_row) value *= weight_scale;
+        rows.push_back(scaled_row);
+        targets.push_back(std::min(std::max(0.0, step_limit), residual) * weight_scale);
     };
 
     const double joint_target_margin =
@@ -725,32 +742,43 @@ SafetyObjective buildSafetyObjective(
             if (std::isfinite(upper)) {
                 std::vector<double> row(static_cast<std::size_t>(width), 0.0);
                 row[static_cast<std::size_t>(i)] = -1.0;
-                add_distance_target(row, upper - qi, joint_target_margin);
+                add_distance_target(row, upper - qi, joint_target_margin, max_distance_step, 1.0);
             }
             if (std::isfinite(lower)) {
                 std::vector<double> row(static_cast<std::size_t>(width), 0.0);
                 row[static_cast<std::size_t>(i)] = 1.0;
-                add_distance_target(row, qi - lower, joint_target_margin);
+                add_distance_target(row, qi - lower, joint_target_margin, max_distance_step, 1.0);
             }
         }
     }
 
-    if (request.safety_push.include_waist_corridor && request.waist_x_corridor.enabled && max_distance_step > 0.0) {
-        const double corridor_target_margin =
-            std::max(0.0, request.waist_x_corridor.activation_threshold) * target_fraction;
+    if (request.safety_push.include_waist_corridor && request.waist_x_corridor.enabled && waist_corridor_max_distance_step > 0.0) {
+        const double corridor_target_margin = waist_corridor_target_distance;
         std::size_t row_index = 0;
         if (std::isfinite(request.waist_x_corridor.max) &&
             row_index < request.waist_x_corridor.rows.size()) {
             std::vector<double> row = request.waist_x_corridor.rows[row_index];
             for (double& value : row) value = -value;
-            add_distance_target(row, request.waist_x_corridor.max - evaluation.waist_x_position, corridor_target_margin);
+            add_distance_target(
+                row,
+                request.waist_x_corridor.max - evaluation.waist_x_position,
+                corridor_target_margin,
+                waist_corridor_max_distance_step,
+                waist_corridor_weight_scale
+            );
             row_index += 1;
         }
         if (std::isfinite(request.waist_x_corridor.min) &&
             row_index < request.waist_x_corridor.rows.size()) {
             std::vector<double> row = request.waist_x_corridor.rows[row_index];
             for (double& value : row) value = -value;
-            add_distance_target(row, evaluation.waist_x_position - request.waist_x_corridor.min, corridor_target_margin);
+            add_distance_target(
+                row,
+                evaluation.waist_x_position - request.waist_x_corridor.min,
+                corridor_target_margin,
+                waist_corridor_max_distance_step,
+                waist_corridor_weight_scale
+            );
         }
     }
 

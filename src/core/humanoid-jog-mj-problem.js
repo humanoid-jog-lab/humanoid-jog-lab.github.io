@@ -70,7 +70,10 @@ function buildHumanoidJogMJSafetyObjective({
     jointLimitActivationThreshold = 0.15,
     safetyPushTargetFraction = 0.25,
     safetyPushMaxDistanceStep = 0.01,
-    safetyPushIncludeWaistCorridor = true
+    safetyPushIncludeWaistCorridor = true,
+    safetyPushWaistCorridorTargetDistance,
+    safetyPushWaistCorridorMaxDistanceStep,
+    safetyPushWaistCorridorWeightScale
 } = {}) {
     const qEval = Array.isArray(problem?.q) ? problem.q : [];
     const width = qEval.length;
@@ -79,14 +82,27 @@ function buildHumanoidJogMJSafetyObjective({
     const maxDistanceStep = Math.max(0, asFinite(safetyPushMaxDistanceStep, 0.01));
     const targetFraction = Math.max(0, asFinite(safetyPushTargetFraction, 0.25));
     const jointTargetMargin = Math.max(0, asFinite(jointLimitActivationThreshold, 0.15)) * targetFraction;
+    const waistCorridorTargetDistance = Number.isFinite(safetyPushWaistCorridorTargetDistance)
+        ? Math.max(0, safetyPushWaistCorridorTargetDistance)
+        : Number.NaN;
+    const waistCorridorMaxDistanceStep = Number.isFinite(safetyPushWaistCorridorMaxDistanceStep)
+        ? Math.max(0, safetyPushWaistCorridorMaxDistanceStep)
+        : maxDistanceStep;
+    const waistCorridorWeightScale = Number.isFinite(safetyPushWaistCorridorWeightScale)
+        ? Math.max(0, safetyPushWaistCorridorWeightScale)
+        : 1;
 
-    const addDistanceTarget = (row, distance, targetMargin) => {
+    const addDistanceTarget = (row, distance, targetMargin, {
+        maxStep = maxDistanceStep,
+        weightScale = 1
+    } = {}) => {
         if (!Array.isArray(row) || row.length !== width || !Number.isFinite(distance)) return;
         const margin = Math.max(0, asFinite(targetMargin, 0));
         const residual = margin - Math.max(0, distance);
-        if (residual <= 1e-12) return;
-        rows.push(row.map((value) => asFinite(value, 0)));
-        targets.push(Math.min(maxDistanceStep, residual));
+        const scale = Math.max(0, asFinite(weightScale, 1));
+        if (residual <= 1e-12 || scale <= 0) return;
+        rows.push(row.map((value) => asFinite(value, 0) * scale));
+        targets.push(Math.min(Math.max(0, asFinite(maxStep, maxDistanceStep)), residual) * scale);
     };
 
     if (jointTargetMargin > 0 && maxDistanceStep > 0) {
@@ -108,27 +124,42 @@ function buildHumanoidJogMJSafetyObjective({
     }
 
     const corridor = problem?.inequalities?.waistXCorridor;
-    if (safetyPushIncludeWaistCorridor !== false && corridor?.enabled === true && width > 0 && maxDistanceStep > 0) {
+    if (safetyPushIncludeWaistCorridor !== false && corridor?.enabled === true && width > 0 && waistCorridorMaxDistanceStep > 0) {
         const value = Number.isFinite(corridor.value) ? corridor.value : Number.NaN;
         const constraints = Array.isArray(corridor.vfiConstraints) ? corridor.vfiConstraints : [];
         if (constraints.length > 0) {
             for (const constraint of constraints) {
-                const targetMargin = Math.max(0, asFinite(constraint?.threshold, 0)) * targetFraction;
-                addDistanceTarget(constraint?.row, constraint?.distance, targetMargin);
+                const targetMargin = Number.isFinite(waistCorridorTargetDistance)
+                    ? waistCorridorTargetDistance
+                    : Math.max(0, asFinite(constraint?.threshold, 0)) * targetFraction;
+                addDistanceTarget(constraint?.row, constraint?.distance, targetMargin, {
+                    maxStep: waistCorridorMaxDistanceStep,
+                    weightScale: waistCorridorWeightScale
+                });
             }
         } else if (Number.isFinite(value)) {
             const vfiRows = Array.isArray(corridor.vfiRows) ? corridor.vfiRows : [];
             let rowIndex = 0;
             if (Number.isFinite(corridor.max) && Array.isArray(vfiRows[rowIndex])) {
                 const row = vfiRows[rowIndex].map((entry) => -asFinite(entry, 0));
-                const targetMargin = Math.max(0, asFinite(corridor.threshold, asFinite(corridor.activationThreshold, 0))) * targetFraction;
-                addDistanceTarget(row, corridor.max - value, targetMargin);
+                const targetMargin = Number.isFinite(waistCorridorTargetDistance)
+                    ? waistCorridorTargetDistance
+                    : Math.max(0, asFinite(corridor.threshold, asFinite(corridor.activationThreshold, 0))) * targetFraction;
+                addDistanceTarget(row, corridor.max - value, targetMargin, {
+                    maxStep: waistCorridorMaxDistanceStep,
+                    weightScale: waistCorridorWeightScale
+                });
                 rowIndex += 1;
             }
             if (Number.isFinite(corridor.min) && Array.isArray(vfiRows[rowIndex])) {
                 const row = vfiRows[rowIndex].map((entry) => -asFinite(entry, 0));
-                const targetMargin = Math.max(0, asFinite(corridor.threshold, asFinite(corridor.activationThreshold, 0))) * targetFraction;
-                addDistanceTarget(row, value - corridor.min, targetMargin);
+                const targetMargin = Number.isFinite(waistCorridorTargetDistance)
+                    ? waistCorridorTargetDistance
+                    : Math.max(0, asFinite(corridor.threshold, asFinite(corridor.activationThreshold, 0))) * targetFraction;
+                addDistanceTarget(row, value - corridor.min, targetMargin, {
+                    maxStep: waistCorridorMaxDistanceStep,
+                    weightScale: waistCorridorWeightScale
+                });
             }
         }
     }
@@ -207,7 +238,10 @@ export function buildHumanoidJogMJProblem(options = {}) {
             jointLimitActivationThreshold: options?.jointLimitActivationThreshold,
             safetyPushTargetFraction: options?.safetyPushTargetFraction,
             safetyPushMaxDistanceStep: options?.safetyPushMaxDistanceStep,
-            safetyPushIncludeWaistCorridor: options?.safetyPushIncludeWaistCorridor
+            safetyPushIncludeWaistCorridor: options?.safetyPushIncludeWaistCorridor,
+            safetyPushWaistCorridorTargetDistance: options?.safetyPushWaistCorridorTargetDistance,
+            safetyPushWaistCorridorMaxDistanceStep: options?.safetyPushWaistCorridorMaxDistanceStep,
+            safetyPushWaistCorridorWeightScale: options?.safetyPushWaistCorridorWeightScale
         })
         : {
             enabled: false,
