@@ -1,13 +1,15 @@
 {
-  "name": "dq-vizlab",
+  "name": "humanoid-jog-lab",
   "version": "1.0.0",
-  "description": "DQ Robotics 可视化实验室 - 基于 WebAssembly 的机器人运动学可视化平台",
+  "description": "Humanoid Jog Lab - interactive jog teaching for humanoid upper-body manipulation",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
     "benchmark:humanoid-jog": "node tools/run-humanoid-jog-benchmark.mjs",
+    "sample:humanoid-jog": "node tools/run-humanoid-jog-offline-sampler.mjs",
+    "plot:humanoid-jog": "node tools/plot-humanoid-jog-data.mjs",
     "build:wasm": "./build.sh",
     "ros2-backend": "node server/ros2-backend.js",
     "dev:full": "concurrently \"npm run dev\" \"npm run ros2-backend\""

@@ -1,6 +1,6 @@
-# DQ Robotics 可视化实验室
+# Humanoid Jog Lab
 
-基于 WebAssembly 的机器人运动学可视化平台，使用对偶四元数（Dual Quaternion）进行机器人运动学计算和可视化。
+Interactive jog teaching for humanoid upper-body manipulation, powered by WebAssembly and dual-quaternion kinematics.
 
 ## 🌟 主要特性
 
@@ -54,7 +54,7 @@
 1. **克隆仓库**
    ```bash
    git clone <repository-url>
-   cd dq_vizlab
+   cd humanoid-jog-lab.github.io
    ```
 
 2. **初始化子模块**（Eigen）
@@ -215,4 +215,3 @@ MIT License
 - [Eigen](https://eigen.tuxfamily.org/) - C++ 线性代数库
 - [Three.js](https://threejs.org/) - 3D 图形库
 - [Emscripten](https://emscripten.org/) - WebAssembly 工具链
-
