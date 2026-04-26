@@ -17,6 +17,7 @@ export function buildHumanoidJogMJDiagnostics({
     keepBodyZVertical = false,
     restorationResult = null,
     nullspaceResult = null,
+    safetyRefineResult = null,
     referenceModel = null,
     jogMetric = '',
     jogMetricState = '',
@@ -59,7 +60,9 @@ export function buildHumanoidJogMJDiagnostics({
 } = {}) {
     const normalizedSolverMode = solverMode === 'mj_restore_pre_w'
         ? 'mj_restore_pre_w'
-        : (solverMode === 'mj_restore_tr' ? 'mj_restore_tr' : 'mj_restore');
+        : (solverMode === 'mj_restore_tr_safe'
+            ? 'mj_restore_tr_safe'
+            : (solverMode === 'mj_restore_tr' ? 'mj_restore_tr' : 'mj_restore'));
     return {
         solverMode: normalizedSolverMode,
         modeTag,
@@ -91,6 +94,22 @@ export function buildHumanoidJogMJDiagnostics({
         safetyAcceptedIterations: Number.isFinite(restorationResult?.safetyAcceptedIterations)
             ? restorationResult.safetyAcceptedIterations
             : 0,
+        safetyRefineState: typeof safetyRefineResult?.state === 'string'
+            ? safetyRefineResult.state
+            : '',
+        safetyRefineReason: typeof safetyRefineResult?.reason === 'string'
+            ? safetyRefineResult.reason
+            : '',
+        safetyRefineApplied: safetyRefineResult?.applied === true,
+        safetyRefineRows: Number.isFinite(safetyRefineResult?.rowCount)
+            ? safetyRefineResult.rowCount
+            : 0,
+        safetyRefineMarginBefore: asFinite(safetyRefineResult?.marginBefore),
+        safetyRefineMarginAfter: asFinite(safetyRefineResult?.marginAfter),
+        safetyRefineObjectiveBefore: asFinite(safetyRefineResult?.objectiveBefore),
+        safetyRefineObjectiveAfter: asFinite(safetyRefineResult?.objectiveAfter),
+        safetyRefineTaskCorrectionApplied: safetyRefineResult?.taskCorrectionResult?.accepted === true ||
+            safetyRefineResult?.refineResult?.safetyRefineTaskCorrectionApplied === true,
         polishIterations: asFinite(polishIterations),
         nullspaceAccepted: nullspaceResult?.accepted === true,
         nullspaceReason: typeof nullspaceResult?.reason === 'string' ? nullspaceResult.reason : null,

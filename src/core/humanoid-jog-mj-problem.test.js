@@ -91,6 +91,32 @@ test('buildHumanoidJogMJProblem exposes joint-limit VFI step rows for TR restora
     assert.equal(problem.inequalities.jointLimitVFI.count, 4);
 });
 
+test('buildHumanoidJogMJProblem stops joint-limit VFI inward motion inside the edge deadband', () => {
+    const problem = buildHumanoidJogMJProblem({
+        q: [0.99995, -0.99995],
+        qCurrent: [0, 0],
+        absoluteTarget: [1],
+        relativeTarget: [2],
+        absolutePose: () => [0.7],
+        relativePose: () => [1.5],
+        absoluteJacobian: () => [[1, 0]],
+        relativeJacobian: () => [[0, 1]],
+        lowerBounds: [-1, -1],
+        upperBounds: [1, 1],
+        stepBounds: [1, 1],
+        jointLimitEta: 5,
+        jointLimitEdgeStopDistance: 1e-4
+    });
+
+    assert.deepEqual(problem.inequalities.jointLimitVFI.rows, [
+        [1, 0],
+        [-1, 0],
+        [0, 1],
+        [0, -1]
+    ]);
+    assertCloseArray(problem.inequalities.jointLimitVFI.rhs, [0, 1, 1, 0]);
+});
+
 test('buildHumanoidJogMJProblem can disable joint-limit VFI rows while preserving other problem data', () => {
     const problem = buildHumanoidJogMJProblem({
         q: [0.8, -0.9],
@@ -129,6 +155,7 @@ test('buildHumanoidJogMJProblem builds safety push rows away from tight joint li
         lowerBounds: [-1, -1, -1],
         upperBounds: [1, 1, 1],
         stepBounds: [1, 1, 1],
+        mjRestoreSafetyPushEnabled: true,
         jointLimitActivationThreshold: 0.2,
         safetyPushTargetFraction: 0.25,
         safetyPushMaxDistanceStep: 0.01
@@ -165,6 +192,44 @@ test('buildHumanoidJogMJProblem builds safety push rows away from waist x corrid
                 { row: [1, 0], distance: 0.96, threshold: 0.2 }
             ]
         },
+        mjRestoreSafetyPushEnabled: true,
+        safetyPushTargetFraction: 0.25,
+        safetyPushMaxDistanceStep: 0.01
+    });
+
+    assert.equal(problem.safetyObjective.enabled, true);
+    assert.deepEqual(problem.safetyObjective.rows, [[-1, 0]]);
+    assertCloseArray(problem.safetyObjective.targets, [0.01]);
+    assert.equal(problem.safetyObjective.count, 1);
+});
+
+test('buildHumanoidJogMJProblem can exclude waist corridor from safety push while keeping joint retreat', () => {
+    const problem = buildHumanoidJogMJProblem({
+        q: [0.96, 0.46],
+        qCurrent: [0, 0],
+        absoluteTarget: [1],
+        relativeTarget: [2],
+        absolutePose: () => [1],
+        relativePose: () => [2],
+        absoluteJacobian: () => [[1, 0]],
+        relativeJacobian: () => [[0, 1]],
+        lowerBounds: [-1, -1],
+        upperBounds: [1, 1],
+        waistXCorridor: {
+            enabled: true,
+            evaluateX: (q) => q[1],
+            min: -0.5,
+            max: 0.5,
+            vfiRows: [[0, 1], [0, -1]],
+            rhs: [0.04, 0.96],
+            vfiConstraints: [
+                { row: [0, -1], distance: 0.04, threshold: 0.2 },
+                { row: [0, 1], distance: 0.96, threshold: 0.2 }
+            ]
+        },
+        mjRestoreSafetyPushEnabled: true,
+        safetyPushIncludeWaistCorridor: false,
+        jointLimitActivationThreshold: 0.2,
         safetyPushTargetFraction: 0.25,
         safetyPushMaxDistanceStep: 0.01
     });

@@ -874,6 +874,10 @@ private:
                 "maxDistanceStep",
                 request.safety_push.max_distance_step
             );
+            request.safety_push.include_waist_corridor =
+                safety_push_js["includeWaistCorridor"].isUndefined()
+                    ? request.safety_push.include_waist_corridor
+                    : safety_push_js["includeWaistCorridor"].as<bool>();
         }
 
         const val reference_model_js = request_js["referenceModel"];

@@ -29,12 +29,15 @@ test('RobotVisualizer sets manifold reference restoration defaults', () => {
 
 test('RobotVisualizer sets TR safety push defaults', () => {
     const visualizer = new RobotVisualizer(null);
-    assert.equal(visualizer.vfiConfig.mjRestoreSafetyPushEnabled, true);
-    assert.equal(visualizer.vfiConfig.mjRestoreSafetyPushWeight, 0.05);
+    assert.equal(visualizer.vfiConfig.mjRestoreSafetyPushEnabled, false);
+    assert.equal(visualizer.vfiConfig.mjRestoreSafetyPushWeight, 0.002);
     assert.equal(visualizer.vfiConfig.mjRestoreSafetyPushActivationResidual, 1e-5);
     assert.equal(visualizer.vfiConfig.mjRestoreSafetyPushPoseHoldTolerance, 2e-6);
     assert.equal(visualizer.vfiConfig.mjRestoreSafetyPushTargetFraction, 0.25);
     assert.equal(visualizer.vfiConfig.mjRestoreSafetyPushMaxDistanceStep, 0.01);
+    assert.equal(visualizer.vfiConfig.mjRestoreNullspaceSafetyRefineEnabled, true);
+    assert.equal(visualizer.vfiConfig.mjRestoreSafetyRefineJointActivationDistance, 0.15);
+    assert.equal(visualizer.vfiConfig.mjRestoreSafetyRefineWaistActivationDistance, 0.08);
 });
 
 test('RobotVisualizer sets hierarchical VFI blend default to 1', () => {
@@ -45,10 +48,17 @@ test('RobotVisualizer sets hierarchical VFI blend default to 1', () => {
 test('RobotVisualizer sets joint-limit manipulability activation threshold default to 0.15 rad', () => {
     const visualizer = new RobotVisualizer(null);
     assert.equal(visualizer.vfiConfig.jointLimitEta, 5);
+    assert.equal(visualizer.vfiConfig.jointLimitEdgeStopDistance, 1e-4);
     assert.equal(visualizer.vfiConfig.jointLimitManipulabilityActivationThreshold, 0.15);
     assert.equal(visualizer.vfiConfig.manifoldActiveLimitRetreatHoldFraction, 0.5);
     assert.equal(visualizer.vfiConfig.manifoldActiveLimitRetreatHoldDistance, 1e-3);
     assert.equal(visualizer.vfiConfig.manifoldActiveLimitRetreatTargetFraction, 0.2);
+});
+
+test('RobotVisualizer sets waist x edge stop tolerance default to the corridor tolerance', () => {
+    const visualizer = new RobotVisualizer(null);
+    assert.equal(visualizer.vfiConfig.waistXEdgeStopTolerance, 5e-4);
+    assert.equal(visualizer.vfiConfig.manifoldWaistXCorridorTolerance, 5e-4);
 });
 
 test('RobotVisualizer can enable temporary dual-arm test lock limits for ljoint2 and rjoint2', () => {
@@ -119,7 +129,7 @@ test('RobotVisualizer safety-margin metric uses the tightest joint or waist corr
     assert.ok(Math.abs(margin - 0.02) < 1e-12);
 });
 
-test('RobotVisualizer safety-margin gradient can use waist corridor distance before active VFI rows appear', () => {
+test('RobotVisualizer safety-margin gradient uses the reverse waist VFI row as the inward distance gradient', () => {
     const visualizer = new RobotVisualizer(null);
     const problem = {
         q: [0, 0],
@@ -152,7 +162,7 @@ test('RobotVisualizer safety-margin gradient can use waist corridor distance bef
         ]
     });
 
-    assert.deepEqual(gradient, [-2, 0]);
+    assert.deepEqual(gradient, [2, 0]);
 });
 
 test('RobotVisualizer safety-margin refinement moves away from a tight joint limit without task error', async () => {
@@ -272,6 +282,376 @@ test('RobotVisualizer safety-margin refinement moves both joint2 limits inward w
     assert.ok((result.refineResult?.qApplied?.[1] ?? 0) < 0);
 });
 
+test('RobotVisualizer nullspace safety refine pushes an active joint limit after TR convergence', () => {
+    const visualizer = new RobotVisualizer(null);
+    const makeProblem = (qActive) => ({
+        q: qActive.slice(),
+        equalities: {
+            activeResidualNorm: Math.abs(qActive[0]),
+            activeJacobian: [[1, 0]],
+            blocks: {
+                absolute: { residual: [qActive[0]] },
+                relative: { residual: [] },
+                bodyZ: null
+            }
+        },
+        inequalities: {
+            wvfiFloor: { violation: 0 },
+            waistXCorridor: { enabled: false, violation: 0 }
+        },
+        bounds: {
+            effectiveLower: [-1, -1],
+            effectiveUpper: [1, 1]
+        }
+    });
+
+    const result = visualizer._attemptHumanoidJogNullspaceSafetyRefine({
+        baseResult: { converged: true, qApplied: [0, 0.96], currentResidualNorm: 0 },
+        baseProblem: makeProblem([0, 0.96]),
+        baseQActive: [0, 0.96],
+        evaluateProblem: makeProblem,
+        activeLimits: [
+            { lower: -1, upper: 1 },
+            { lower: -1, upper: 1 }
+        ],
+        activeCount: 2,
+        lowerBounds: [-1, -1],
+        upperBounds: [1, 1],
+        stepBounds: [1, 1],
+        stepSize: 0.02,
+        commandTolerance: 1e-9,
+        relativeTolerance: 1e-9,
+        bodyTolerance: 1e-9,
+        inequalityTolerance: 1e-9
+    });
+
+    assert.equal(result.applied, true);
+    assert.equal(result.state, 'applied');
+    assert.ok(result.refineResult.qApplied[1] < 0.96);
+    assert.equal(result.refineResult.qApplied[0], 0);
+});
+
+test('RobotVisualizer safety refine ignores step bounds as fake joint limits', () => {
+    const visualizer = new RobotVisualizer(null);
+    const candidates = visualizer._buildHumanoidJogSafetyMarginCandidates({
+        problem: {
+            q: [0],
+            bounds: {
+                lower: [-10],
+                upper: [10],
+                effectiveLower: [-0.02],
+                effectiveUpper: [0.02]
+            },
+            inequalities: {
+                waistXCorridor: { enabled: false }
+            }
+        },
+        activeLimits: null,
+        activeCount: 1
+    });
+
+    assert.deepEqual(
+        candidates
+            .filter((candidate) => candidate.source.startsWith('joint_'))
+            .map((candidate) => candidate.margin),
+        [10, 10]
+    );
+});
+
+test('RobotVisualizer nullspace safety refine skips cleanly when no nullspace exists', () => {
+    const visualizer = new RobotVisualizer(null);
+    const makeProblem = (qActive) => ({
+        q: qActive.slice(),
+        equalities: {
+            activeResidualNorm: 0,
+            activeJacobian: [[1]],
+            blocks: {
+                absolute: { residual: [0] },
+                relative: { residual: [] },
+                bodyZ: null
+            }
+        },
+        inequalities: {
+            wvfiFloor: { violation: 0 },
+            waistXCorridor: { enabled: false, violation: 0 }
+        },
+        bounds: {
+            effectiveLower: [-1],
+            effectiveUpper: [1]
+        }
+    });
+
+    const result = visualizer._attemptHumanoidJogNullspaceSafetyRefine({
+        baseResult: { converged: true, qApplied: [0.96], currentResidualNorm: 0 },
+        baseProblem: makeProblem([0.96]),
+        baseQActive: [0.96],
+        evaluateProblem: makeProblem,
+        activeLimits: [{ lower: -1, upper: 1 }],
+        activeCount: 1,
+        lowerBounds: [-1],
+        upperBounds: [1],
+        stepBounds: [1],
+        stepSize: 0.02
+    });
+
+    assert.equal(result.applied, false);
+    assert.equal(result.state, 'skipped');
+    assert.equal(result.reason, 'no_nullspace');
+});
+
+test('RobotVisualizer nullspace safety refine rejects a step that drifts the protected task', () => {
+    const visualizer = new RobotVisualizer(null);
+    const makeProblem = (qActive) => ({
+        q: qActive.slice(),
+        equalities: {
+            activeResidualNorm: Math.abs(qActive[1] - 0.96),
+            activeJacobian: [],
+            blocks: {
+                absolute: { residual: [qActive[1] - 0.96] },
+                relative: { residual: [] },
+                bodyZ: null
+            }
+        },
+        inequalities: {
+            wvfiFloor: { violation: 0 },
+            waistXCorridor: { enabled: false, violation: 0 }
+        },
+        bounds: {
+            effectiveLower: [-1, -1],
+            effectiveUpper: [1, 1]
+        }
+    });
+
+    const result = visualizer._attemptHumanoidJogNullspaceSafetyRefine({
+        baseResult: { converged: true, qApplied: [0, 0.96], currentResidualNorm: 0 },
+        baseProblem: makeProblem([0, 0.96]),
+        baseQActive: [0, 0.96],
+        evaluateProblem: makeProblem,
+        activeLimits: [
+            { lower: -1, upper: 1 },
+            { lower: -1, upper: 1 }
+        ],
+        activeCount: 2,
+        lowerBounds: [-1, -1],
+        upperBounds: [1, 1],
+        stepBounds: [1, 1],
+        stepSize: 0.02,
+        commandTolerance: 1e-9,
+        relativeTolerance: 1e-9,
+        bodyTolerance: 1e-9,
+        inequalityTolerance: 1e-9
+    });
+
+    assert.equal(result.applied, false);
+    assert.equal(result.state, 'rejected');
+    assert.equal(result.reason, 'task_drift');
+});
+
+test('RobotVisualizer nullspace safety refine corrects second-order task drift back to the task manifold', () => {
+    const visualizer = new RobotVisualizer(null);
+    const yReference = 0.96;
+    const makeProblem = (qActive) => {
+        const x = qActive[0];
+        const y = qActive[1];
+        const dy = y - yReference;
+        const residual = x + dy * dy;
+        return {
+            q: qActive.slice(),
+            equalities: {
+                activeResidualNorm: Math.abs(residual),
+                activeJacobian: [[-1, -2 * dy]],
+                blocks: {
+                    absolute: { residual: [residual], jacobian: [[-1, -2 * dy]] },
+                    relative: { residual: [] },
+                    bodyZ: null
+                }
+            },
+            inequalities: {
+                wvfiFloor: { violation: 0 },
+                waistXCorridor: { enabled: false, violation: 0 }
+            },
+            bounds: {
+                lower: [-1, -1],
+                upper: [1, 1],
+                effectiveLower: [-1, -1],
+                effectiveUpper: [1, 1]
+            }
+        };
+    };
+
+    const result = visualizer._attemptHumanoidJogNullspaceSafetyRefine({
+        baseResult: { converged: true, qApplied: [0, yReference], currentResidualNorm: 0 },
+        baseProblem: makeProblem([0, yReference]),
+        baseQActive: [0, yReference],
+        evaluateProblem: makeProblem,
+        activeLimits: [
+            { lower: -1, upper: 1 },
+            { lower: -1, upper: 1 }
+        ],
+        activeCount: 2,
+        lowerBounds: [-1, -1],
+        upperBounds: [1, 1],
+        stepBounds: [1, 1],
+        stepSize: 0.02,
+        commandTolerance: 1e-6,
+        relativeTolerance: 1e-6,
+        bodyTolerance: 1e-6,
+        inequalityTolerance: 1e-9
+    });
+
+    assert.equal(result.applied, true);
+    assert.equal(result.state, 'applied');
+    assert.ok(result.refineResult.qApplied[1] < yReference);
+    assert.ok(Math.abs(result.finalProblem.equalities.blocks.absolute.residual[0]) <= 1e-6);
+});
+
+test('RobotVisualizer safety refine correction avoids undoing active joint-limit retreat when alternatives exist', () => {
+    const visualizer = new RobotVisualizer(null);
+    const makeProblem = (qActive) => {
+        const residual = -(qActive[0] + 10 * qActive[1] + qActive[2]);
+        return {
+            q: qActive.slice(),
+            equalities: {
+                activeResidualNorm: Math.abs(residual),
+                activeJacobian: [[1, 0, 0]],
+                blocks: {
+                    absolute: { residual: [residual], jacobian: [[1, 10, 1]] },
+                    relative: { residual: [] },
+                    bodyZ: null
+                }
+            },
+            inequalities: {
+                wvfiFloor: { violation: 0 },
+                waistXCorridor: { enabled: false, violation: 0 }
+            },
+            bounds: {
+                lower: [-1, -1, -1],
+                upper: [1, 0, 1],
+                effectiveLower: [-1, -1, -1],
+                effectiveUpper: [1, 0, 1]
+            }
+        };
+    };
+
+    const result = visualizer._attemptHumanoidJogNullspaceSafetyRefine({
+        baseResult: { converged: true, qApplied: [0, 0, 0], currentResidualNorm: 0 },
+        baseProblem: makeProblem([0, 0, 0]),
+        baseQActive: [0, 0, 0],
+        evaluateProblem: makeProblem,
+        activeLimits: [
+            { lower: -1, upper: 1 },
+            { lower: -1, upper: 0 },
+            { lower: -1, upper: 1 }
+        ],
+        activeCount: 3,
+        lowerBounds: [-1, -1, -1],
+        upperBounds: [1, 0, 1],
+        stepBounds: [1, 1, 1],
+        stepSize: 0.02,
+        commandTolerance: 1e-6,
+        relativeTolerance: 1e-6,
+        bodyTolerance: 1e-6,
+        inequalityTolerance: 1e-9
+    });
+
+    assert.equal(result.applied, true);
+    assert.ok(result.refineResult.qApplied[1] < -0.01);
+});
+
+test('RobotVisualizer safety refine retreats ljoint2 and rjoint2 from the upright absolute start posture', () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.humanoidWaistLength = 4;
+    visualizer.humanoidLeftArmLength = 7;
+    visualizer.humanoidRightArmLength = 7;
+
+    const qFull = [
+        -0.20794, 0.90626, -0.69682, 0,
+        -0.611, 0, 0.00586, -0.94966, -0.00966, 0.00069, -0.01189,
+        0.611, 0, -0.00586, 0.94966, 0.00966, -0.00069, 0.01189,
+        0, 0
+    ];
+    const qActive = qFull.slice(0, 18);
+    const activeLimits = [
+        { lower: -3.14, upper: 3.14 },
+        { lower: -3.14, upper: 3.14 },
+        { lower: -3.14, upper: 3.14 },
+        { lower: -3.14, upper: 3.14 },
+        { lower: -3.14, upper: 3.14 },
+        { lower: 0, upper: 3.14 },
+        { lower: -3.14, upper: 3.14 },
+        { lower: -3.14, upper: 3.14 },
+        { lower: -3.14, upper: 3.14 },
+        { lower: -3.14, upper: 3.14 },
+        { lower: -3.14, upper: 3.14 },
+        { lower: -3.14, upper: 3.14 },
+        { lower: -3.14, upper: 0 },
+        { lower: -3.14, upper: 3.14 },
+        { lower: -3.14, upper: 3.14 },
+        { lower: -3.14, upper: 3.14 },
+        { lower: -3.14, upper: 3.14 },
+        { lower: -3.14, upper: 3.14 }
+    ];
+    const lowerBounds = activeLimits.map((limit) => limit.lower);
+    const upperBounds = activeLimits.map((limit) => limit.upper);
+    const currentJacobianRow = [
+        0, 0, 0, 0, 0,
+        10, 1, 0, 0, 0, 0,
+        0, -10, 1, 0, 0, 0, 0
+    ];
+    const makeProblem = (qActiveEval) => {
+        const currentError = currentJacobianRow.reduce(
+            (sum, value, index) => sum + value * (qActiveEval[index] - qActive[index]),
+            0
+        );
+        const residual = -currentError;
+        return {
+            q: qActiveEval.slice(),
+            equalities: {
+                activeResidualNorm: Math.abs(residual),
+                activeJacobian: [currentJacobianRow.slice()],
+                blocks: {
+                    absolute: { residual: [residual], jacobian: [currentJacobianRow.slice()] },
+                    relative: { residual: [], jacobian: [] },
+                    bodyZ: { residual: [0], jacobian: [new Array(18).fill(0)] }
+                }
+            },
+            inequalities: {
+                wvfiFloor: { violation: 0 },
+                waistXCorridor: { enabled: false, violation: 0 }
+            },
+            bounds: {
+                lower: lowerBounds.slice(),
+                upper: upperBounds.slice(),
+                effectiveLower: lowerBounds.slice(),
+                effectiveUpper: upperBounds.slice()
+            }
+        };
+    };
+
+    const result = visualizer._attemptHumanoidJogNullspaceSafetyRefine({
+        baseResult: { converged: true, qApplied: qActive.slice(), currentResidualNorm: 0 },
+        baseProblem: makeProblem(qActive),
+        baseQActive: qActive.slice(),
+        evaluateProblem: makeProblem,
+        activeLimits,
+        activeCount: 18,
+        lowerBounds,
+        upperBounds,
+        stepBounds: new Array(18).fill(1),
+        stepSize: 0.02,
+        commandTolerance: 1e-6,
+        relativeTolerance: 1e-6,
+        bodyTolerance: 1e-6,
+        inequalityTolerance: 1e-9,
+        includeBodyZ: true
+    });
+
+    assert.equal(result.applied, true);
+    assert.ok(result.refineResult.qApplied[5] > qActive[5]);
+    assert.ok(result.refineResult.qApplied[12] < qActive[12]);
+    assert.ok(Math.abs(result.finalProblem.equalities.blocks.absolute.residual[0]) <= 1e-6);
+});
+
 test('RobotVisualizer priority absolute full-body jog respects the waist x corridor when waist motion is active', () => {
     const visualizer = new RobotVisualizer(null);
     visualizer.humanoidMode = true;
@@ -337,6 +717,92 @@ test('RobotVisualizer priority absolute full-body jog respects the waist x corri
             globalThis.window = originalWindow;
         }
     }
+});
+
+test('RobotVisualizer mj_restore_tr does not hard-hold waist corridor commands before restoration by default', () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.humanoidWaistLength = 4;
+    visualizer.humanoidLeftArmLength = 7;
+    visualizer.humanoidRightArmLength = 7;
+    visualizer.vfiConfig.waistXCorridorEnabled = true;
+    visualizer.vfiConfig.waistXMin = -0.1;
+    visualizer.vfiConfig.waistXMax = 0.08;
+    visualizer.vfiConfig.waistXEdgeStopTolerance = 5e-4;
+    visualizer._getHumanoidAbsolutePose = () => [1, 0, 0, 0, 0, 0, 0, 0];
+    visualizer._getHumanoidRelativePose = () => [1, 0, 0, 0, 0, 0, 0, 0];
+    visualizer._buildHumanoidManifoldWaistXCorridor = () => ({
+        enabled: true,
+        min: -0.1,
+        max: 0.08,
+        tolerance: 5e-4,
+        evaluateX: () => -0.4718,
+        vfiRows: [],
+        rhs: []
+    });
+    const diagnostics = [];
+    visualizer._publishHumanoidJogDiagnostics = (payload) => diagnostics.push(payload);
+    let manifoldCalled = false;
+    visualizer._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstManifold = () => {
+        manifoldCalled = true;
+        return true;
+    };
+
+    const result = visualizer._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstMJRestore(
+        [1, 0, 0, 0, 0, 0, 0, 0],
+        new Array(20).fill(0),
+        true,
+        true,
+        true,
+        null,
+        { commandDelta: [-0.005, 0, 0] },
+        { solverMode: 'mj_restore_tr' }
+    );
+
+    assert.equal(result, true);
+    assert.equal(manifoldCalled, true);
+    assert.equal(diagnostics.length, 0);
+});
+
+test('RobotVisualizer mj_restore_tr can still opt into hard waist corridor command hold', () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.humanoidWaistLength = 4;
+    visualizer.humanoidLeftArmLength = 7;
+    visualizer.humanoidRightArmLength = 7;
+    visualizer.vfiConfig.waistXCorridorEnabled = true;
+    visualizer.vfiConfig.waistXMin = -0.1;
+    visualizer.vfiConfig.waistXMax = 0.08;
+    visualizer.vfiConfig.waistXEdgeStopTolerance = 5e-4;
+    visualizer.vfiConfig.mjRestoreWaistXCorridorCommandHoldEnabled = true;
+    visualizer._getHumanoidAbsolutePose = () => [1, 0, 0, 0, 0, 0, 0, 0];
+    visualizer._getHumanoidRelativePose = () => [1, 0, 0, 0, 0, 0, 0, 0];
+    visualizer._buildHumanoidManifoldWaistXCorridor = () => ({
+        enabled: true,
+        min: -0.1,
+        max: 0.08,
+        tolerance: 5e-4,
+        evaluateX: () => -0.4718,
+        vfiRows: [],
+        rhs: []
+    });
+    const diagnostics = [];
+    visualizer._publishHumanoidJogDiagnostics = (payload) => diagnostics.push(payload);
+
+    const result = visualizer._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstMJRestore(
+        [1, 0, 0, 0, 0, 0, 0, 0],
+        new Array(20).fill(0),
+        true,
+        true,
+        true,
+        null,
+        { commandDelta: [-0.005, 0, 0] },
+        { solverMode: 'mj_restore_tr' }
+    );
+
+    assert.equal(result, false);
+    assert.equal(visualizer.lastIKSolveStatus.applied, false);
+    assert.equal(visualizer.lastIKSolveStatus.reason, 'waist_corridor_lower_command_hold');
+    assert.equal(diagnostics[0].stepNorm, 0);
+    assert.equal(diagnostics[0].waistXPx, -0.4718);
 });
 
 test('RobotVisualizer sets manifoldJogSecondaryMetric default to none', () => {

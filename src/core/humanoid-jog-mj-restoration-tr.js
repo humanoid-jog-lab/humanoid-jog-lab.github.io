@@ -496,7 +496,10 @@ export function restoreHumanoidJogMJTrustRegion({
     safetyPushEnabled = true,
     safetyPushWeight = 0.05,
     safetyPushActivationResidual = 1e-5,
-    safetyPushPoseHoldTolerance = 2e-6
+    safetyPushPoseHoldTolerance = 2e-6,
+    safetyBiasReleaseResidual = null,
+    safetyBiasDuringRestore = false,
+    safetyPushPostConvergenceEnabled = true
 } = {}) {
     const qStart = Array.isArray(qInitial) ? qInitial.slice() : [];
     const normalizedRegularizationWeights = normalizeRegularizationWeights(regularizationWeights, qStart.length);
@@ -554,13 +557,36 @@ export function restoreHumanoidJogMJTrustRegion({
         Math.max(0, equalityTolerance),
         Math.max(0, asFinite(safetyPushPoseHoldTolerance, 2e-6))
     );
+    const safetyBiasRelease = Math.max(
+        safetyActivationResidual * 5,
+        Math.max(0, equalityTolerance) * 50,
+        safetyHoldTolerance * 2,
+        Math.max(0, asFinite(safetyBiasReleaseResidual, 0))
+    );
     const safetyResidualTolerance = 1e-12;
+    const getSafetyBiasWeight = (problem, phi) => {
+        if (
+            safetyPushEnabled === false ||
+            safetyBiasDuringRestore !== true ||
+            safetyWeight <= 0 ||
+            getSafetyResidualNorm(problem) <= safetyResidualTolerance
+        ) {
+            return 0;
+        }
+        // Bias is allowed to guide the coarse TR step, but the final hard
+        // tolerance must be owned by the primary pose/body/relative task.
+        if (asFinite(phi, Number.POSITIVE_INFINITY) <= safetyBiasRelease) {
+            return 0;
+        }
+        return safetyWeight;
+    };
     const isPrimaryHeldForSafety = (phi, theta) => (
         asFinite(phi, Number.POSITIVE_INFINITY) <= safetyHoldTolerance &&
         asFinite(theta, Number.POSITIVE_INFINITY) <= Math.max(0, inequalityTolerance) + thetaTolerance
     );
     const isSafetyActive = (problem, phi, theta) => (
         safetyPushEnabled !== false &&
+        safetyPushPostConvergenceEnabled !== false &&
         safetyWeight > 0 &&
         asFinite(phi, Number.POSITIVE_INFINITY) <= safetyActivationResidual &&
         asFinite(theta, Number.POSITIVE_INFINITY) <= Math.max(0, inequalityTolerance) + thetaTolerance &&
@@ -641,8 +667,12 @@ export function restoreHumanoidJogMJTrustRegion({
         let lastConstraintMotion = [];
         let candidateRadius = trustRadius;
         const safetyActiveThisIteration = isSafetyActive(currentProblem, currentPhi, currentTheta);
+        const safetyBiasWeightThisIteration = getSafetyBiasWeight(currentProblem, currentPhi);
+        const safetyBiasThisIteration = safetyBiasWeightThisIteration > 0;
         if (safetyActiveThisIteration) {
             result.safetyStatus = 'active';
+        } else if (safetyBiasThisIteration) {
+            result.safetyStatus = 'bias';
         }
 
         for (let dampingAttempt = 0; dampingAttempt <= retryCount && !acceptedTrial; dampingAttempt++) {
@@ -653,8 +683,8 @@ export function restoreHumanoidJogMJTrustRegion({
                 attemptDamping,
                 normalizedRegularizationWeights,
                 {
-                    enabled: safetyActiveThisIteration,
-                    weight: safetyWeight
+                    enabled: safetyActiveThisIteration || safetyBiasThisIteration,
+                    weight: safetyActiveThisIteration ? safetyWeight : safetyBiasWeightThisIteration
                 }
             );
             lastReferenceResidual = Array.isArray(referenceResidual) ? referenceResidual.slice() : [];

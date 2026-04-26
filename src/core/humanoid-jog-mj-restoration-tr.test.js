@@ -177,6 +177,51 @@ function buildSafetyPushProblem(q, {
     };
 }
 
+function buildConflictingSafetyBiasProblem(q) {
+    const poseTarget = 0.997;
+    const residual = poseTarget - q[0];
+    const safetyDistance = 1 - q[0];
+    const safetyResidual = Math.max(0, 0.01 - Math.max(0, safetyDistance));
+    return {
+        q: q.slice(),
+        equalities: {
+            residual: [residual],
+            jacobian: [[1]],
+            residualNorm: Math.abs(residual),
+            activeResidual: [residual],
+            activeJacobian: [[1]],
+            activeResidualNorm: Math.abs(residual),
+            weightedResidual: [residual],
+            weightedJacobian: [[1]],
+            blocks: {
+                absolute: { residual: [residual] },
+                relative: { residual: [] },
+                bodyZ: null
+            }
+        },
+        inequalities: {
+            wvfiFloor: { enabled: false, violation: 0 },
+            waistXCorridor: { enabled: false, violation: 0, vfiRows: [], rhs: [] }
+        },
+        bounds: {
+            effectiveLower: [-10],
+            effectiveUpper: [10]
+        },
+        safetyObjective: {
+            enabled: safetyResidual > 0,
+            rows: [[-1]],
+            targets: [safetyResidual],
+            residual: [safetyResidual],
+            residualNorm: safetyResidual,
+            count: safetyResidual > 0 ? 1 : 0
+        },
+        referenceModel: {
+            stiffnessRows: [1.0],
+            dampingRows: [0]
+        }
+    };
+}
+
 test('restoreHumanoidJogMJTrustRegion converges a simple restoration problem', () => {
     const result = restoreHumanoidJogMJTrustRegion({
         qInitial: [0],
@@ -232,6 +277,45 @@ test('restoreHumanoidJogMJTrustRegion respects joint-limit VFI step rows during 
     assert.equal(result.acceptedIterations, 1);
     assert.ok(result.qApplied[0] <= 0.1 + 1e-9);
     assert.ok(result.qApplied[0] > 0);
+});
+
+test('restoreHumanoidJogMJTrustRegion can bias the primary restore step away from a limit', () => {
+    const result = restoreHumanoidJogMJTrustRegion({
+        qInitial: [0, 0.995],
+        evaluateProblem: (q) => buildSafetyPushProblem(q, { poseTarget: 0.1 }),
+        maxIterations: 1,
+        equalityTolerance: 1e-9,
+        safetyPushEnabled: true,
+        safetyPushWeight: 1,
+        safetyBiasDuringRestore: true,
+        safetyPushPostConvergenceEnabled: false,
+        initialTrustRadius: 0.2
+    });
+
+    assert.equal(result.acceptedIterations, 1);
+    assert.ok(Math.abs(result.qApplied[0] - 0.1) <= 1e-6);
+    assert.ok(result.qApplied[1] < 0.995 - 1e-6);
+    assert.equal(result.safetyStatus, 'bias');
+    assert.ok(result.safetyResidualAfter < result.safetyResidualBefore);
+});
+
+test('restoreHumanoidJogMJTrustRegion lets small safety-biased commands finish primary convergence', () => {
+    const result = restoreHumanoidJogMJTrustRegion({
+        qInitial: [0.995],
+        evaluateProblem: (q) => buildConflictingSafetyBiasProblem(q),
+        maxIterations: 8,
+        equalityTolerance: 1e-6,
+        safetyPushEnabled: true,
+        safetyPushWeight: 0.002,
+        safetyPushActivationResidual: 1e-5,
+        safetyBiasDuringRestore: true,
+        safetyPushPostConvergenceEnabled: false,
+        initialTrustRadius: 0.2
+    });
+
+    assert.equal(result.converged, true);
+    assert.equal(result.reason, 'converged');
+    assert.ok(Math.abs(result.qApplied[0] - 0.997) <= 1e-6);
 });
 
 test('restoreHumanoidJogMJTrustRegion stops instead of overrunning a synchronous solve budget', () => {

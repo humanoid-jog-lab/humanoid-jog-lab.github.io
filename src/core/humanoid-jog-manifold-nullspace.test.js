@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { computeHumanoidJogManifoldNullspaceStep } from './humanoid-jog-manifold-nullspace.js';
+import {
+    computeHumanoidJogManifoldNullspaceStep,
+    computeHumanoidJogManifoldTaskCorrection
+} from './humanoid-jog-manifold-nullspace.js';
 
 function matVec(A, x) {
     return A.map((row) => row.reduce((sum, value, index) => sum + value * x[index], 0));
@@ -126,4 +129,28 @@ test('computeHumanoidJogManifoldNullspaceStep can prefer the wvfi gradient when 
     assert.equal(result.gradientSource, 'wvfi');
     assert.ok(result.step[0] > 0);
     assert.ok(result.qNext[0] > 0.001);
+});
+
+test('computeHumanoidJogManifoldTaskCorrection can preserve safety-critical joints with regularization weights', () => {
+    const unweighted = computeHumanoidJogManifoldTaskCorrection({
+        qCurrent: [0, -0.02, 0],
+        equalityJacobian: [[1, 10, 1]],
+        residual: [0.2],
+        lowerBounds: [-1, -1, -1],
+        upperBounds: [1, 1, 1],
+        stepBounds: [1, 1, 1]
+    });
+    const weighted = computeHumanoidJogManifoldTaskCorrection({
+        qCurrent: [0, -0.02, 0],
+        equalityJacobian: [[1, 10, 1]],
+        residual: [0.2],
+        lowerBounds: [-1, -1, -1],
+        upperBounds: [1, 1, 1],
+        stepBounds: [1, 1, 1],
+        regularizationWeights: [1, 1000, 1]
+    });
+
+    assert.equal(unweighted.accepted, true);
+    assert.equal(weighted.accepted, true);
+    assert.ok(Math.abs(weighted.step[1]) < Math.abs(unweighted.step[1]) * 0.1);
 });

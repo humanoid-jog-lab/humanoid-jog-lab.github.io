@@ -242,6 +242,9 @@ test('setupHumanoidParameterControls restores, applies, and validates humanoid j
     const humanoidWaistXVFIStatus = createMockElement('');
     const humanoidTRSafetyPushWeightInput = createMockElement('');
     const humanoidTRSafetyPushStatus = createMockElement('');
+    const humanoidSafetyRefineJointInput = createMockElement('');
+    const humanoidSafetyRefineWaistInput = createMockElement('');
+    const humanoidSafetyRefineStatus = createMockElement('');
     const humanoidRos2ArmVelInput = createMockElement('');
     const humanoidRos2ArmAccInput = createMockElement('');
     const humanoidRos2WaistVelInput = createMockElement('');
@@ -250,6 +253,7 @@ test('setupHumanoidParameterControls restores, applies, and validates humanoid j
     const etaCalls = [];
     const waistXVFICalls = [];
     const safetyPushWeightCalls = [];
+    const safetyRefineCalls = [];
 
     globalThis.window = {};
     globalThis.document = {
@@ -260,6 +264,9 @@ test('setupHumanoidParameterControls restores, applies, and validates humanoid j
             if (id === 'humanoid-waist-x-vfi-status') return humanoidWaistXVFIStatus;
             if (id === 'humanoid-tr-safety-push-weight-input') return humanoidTRSafetyPushWeightInput;
             if (id === 'humanoid-tr-safety-push-status') return humanoidTRSafetyPushStatus;
+            if (id === 'humanoid-safety-refine-joint-activation-input') return humanoidSafetyRefineJointInput;
+            if (id === 'humanoid-safety-refine-waist-activation-input') return humanoidSafetyRefineWaistInput;
+            if (id === 'humanoid-safety-refine-status') return humanoidSafetyRefineStatus;
             if (id === 'humanoid-ros2-arm-vel-input') return humanoidRos2ArmVelInput;
             if (id === 'humanoid-ros2-arm-acc-input') return humanoidRos2ArmAccInput;
             if (id === 'humanoid-ros2-waist-vel-input') return humanoidRos2WaistVelInput;
@@ -272,6 +279,8 @@ test('setupHumanoidParameterControls restores, applies, and validates humanoid j
         ['humanoid-joint-limit-eta', '4.5'],
         ['humanoid-waist-x-eta', '2.5'],
         ['humanoid-tr-safety-push-weight', '0.08'],
+        ['humanoid-safety-refine-joint-activation', '0.2'],
+        ['humanoid-safety-refine-waist-activation', '0.09'],
         ['humanoid-ros2-arm-vel', '0.6'],
         ['humanoid-ros2-arm-acc', '1.1'],
         ['humanoid-ros2-waist-vel', '0.7'],
@@ -282,7 +291,9 @@ test('setupHumanoidParameterControls restores, applies, and validates humanoid j
             jointLimitEta: 5,
             waistXEta: 1,
             waistXActivationThreshold: 0.12,
-            mjRestoreSafetyPushWeight: 0.05
+            mjRestoreSafetyPushWeight: 0.05,
+            mjRestoreSafetyRefineJointActivationDistance: 0.15,
+            mjRestoreSafetyRefineWaistActivationDistance: 0.08
         },
         setHumanoidJointLimitEta(value) {
             etaCalls.push(value);
@@ -295,6 +306,11 @@ test('setupHumanoidParameterControls restores, applies, and validates humanoid j
         setHumanoidTRSafetyPushWeight(value) {
             safetyPushWeightCalls.push(value);
             this.vfiConfig.mjRestoreSafetyPushWeight = value;
+        },
+        setHumanoidNullspaceSafetyRefineParams(value) {
+            safetyRefineCalls.push(value);
+            this.vfiConfig.mjRestoreSafetyRefineJointActivationDistance = value.jointActivationDistance;
+            this.vfiConfig.mjRestoreSafetyRefineWaistActivationDistance = value.waistActivationDistance;
         }
     };
 
@@ -314,6 +330,10 @@ test('setupHumanoidParameterControls restores, applies, and validates humanoid j
         assert.equal(humanoidTRSafetyPushStatus.textContent, '当前值已应用：β=0.08');
         assert.equal(globalThis.window.humanoidTRSafetyPushWeight, 0.08);
         assert.deepEqual(safetyPushWeightCalls, [0.08]);
+        assert.equal(humanoidSafetyRefineJointInput.value, '0.2');
+        assert.equal(humanoidSafetyRefineWaistInput.value, '0.09');
+        assert.equal(humanoidSafetyRefineStatus.textContent, '当前值已应用：关节=0.2rad，腰部=0.09m');
+        assert.deepEqual(safetyRefineCalls, [{ jointActivationDistance: 0.2, waistActivationDistance: 0.09 }]);
         assert.equal(humanoidRos2ArmVelInput.value, '0.6');
         assert.equal(humanoidRos2ArmAccInput.value, '1.1');
         assert.equal(humanoidRos2WaistVelInput.value, '0.7');
@@ -362,6 +382,19 @@ test('setupHumanoidParameterControls restores, applies, and validates humanoid j
         assert.equal(globalThis.localStorage.getItem('humanoid-tr-safety-push-weight'), '0');
         assert.deepEqual(safetyPushWeightCalls, [0.08, 0.12, 0]);
 
+        humanoidSafetyRefineJointInput.value = '0.25';
+        humanoidSafetyRefineJointInput.trigger('change', '0.25');
+
+        assert.equal(humanoidSafetyRefineJointInput.value, '0.25');
+        assert.equal(humanoidSafetyRefineWaistInput.value, '0.09');
+        assert.equal(humanoidSafetyRefineStatus.textContent, '当前值已应用：关节=0.25rad，腰部=0.09m');
+        assert.equal(globalThis.localStorage.getItem('humanoid-safety-refine-joint-activation'), '0.25');
+        assert.equal(globalThis.localStorage.getItem('humanoid-safety-refine-waist-activation'), '0.09');
+        assert.deepEqual(safetyRefineCalls, [
+            { jointActivationDistance: 0.2, waistActivationDistance: 0.09 },
+            { jointActivationDistance: 0.25, waistActivationDistance: 0.09 }
+        ]);
+
         humanoidRos2ArmVelInput.value = '0.9';
         humanoidRos2ArmVelInput.trigger('change', '0.9');
 
@@ -395,6 +428,13 @@ test('setupHumanoidParameterControls restores, applies, and validates humanoid j
 
         assert.equal(humanoidTRSafetyPushWeightInput.value, '0');
         assert.equal(humanoidTRSafetyPushStatus.textContent, '输入无效，已恢复为 β=0');
+
+        humanoidSafetyRefineWaistInput.value = 'bad';
+        humanoidSafetyRefineWaistInput.trigger('change', 'bad');
+
+        assert.equal(humanoidSafetyRefineJointInput.value, '0.25');
+        assert.equal(humanoidSafetyRefineWaistInput.value, '0.09');
+        assert.equal(humanoidSafetyRefineStatus.textContent, '输入无效，已恢复为 关节=0.25rad，腰部=0.09m');
 
         humanoidRos2WaistAccInput.value = 'bad';
         humanoidRos2WaistAccInput.trigger('change', 'bad');
@@ -1265,6 +1305,167 @@ test('setupEventListeners stops repeating cooperative ruled-surface polishing co
         assert.equal(moveCalls, 1);
         assert.equal(intervalCallbacks.size, 0);
         assert.deepEqual(clearedIntervals, [1]);
+    } finally {
+        if (originalWindow === undefined) delete globalThis.window;
+        else globalThis.window = originalWindow;
+        if (originalDocument === undefined) delete globalThis.document;
+        else globalThis.document = originalDocument;
+        if (originalLocalStorage === undefined) delete globalThis.localStorage;
+        else globalThis.localStorage = originalLocalStorage;
+        if (originalSetInterval === undefined) delete globalThis.setInterval;
+        else globalThis.setInterval = originalSetInterval;
+        if (originalClearInterval === undefined) delete globalThis.clearInterval;
+        else globalThis.clearInterval = originalClearInterval;
+        appState.visualizer = originalVisualizer;
+    }
+});
+
+test('setupEventListeners stops repeating decoupled-upright absolute jogs after a failed step', () => {
+    const originalWindow = globalThis.window;
+    const originalDocument = globalThis.document;
+    const originalLocalStorage = globalThis.localStorage;
+    const originalVisualizer = appState.visualizer;
+    const originalSetInterval = globalThis.setInterval;
+    const originalClearInterval = globalThis.clearInterval;
+
+    const teachButton = createMockElement('');
+    teachButton.dataset = { axis: 'x', direction: 'negative', type: 'translation' };
+    teachButton.classList = {
+        contains(className) {
+            return className === 'teach-btn';
+        }
+    };
+
+    const controlModeSelect = createMockElement('decoupled-upright');
+    const intervalCallbacks = new Map();
+    let nextTimerId = 1;
+    let moveCalls = 0;
+
+    globalThis.window = {
+        addEventListener() {},
+        removeEventListener() {}
+    };
+    globalThis.document = {
+        getElementById(id) {
+            if (id === 'dual-arm-control-mode-select') return controlModeSelect;
+            return null;
+        },
+        querySelectorAll(selector) {
+            if (selector === '.teach-btn') return [teachButton];
+            return [];
+        }
+    };
+    globalThis.localStorage = createMockLocalStorage();
+    globalThis.setInterval = (handler) => {
+        const id = nextTimerId++;
+        intervalCallbacks.set(id, handler);
+        return id;
+    };
+    globalThis.clearInterval = (id) => {
+        intervalCallbacks.delete(id);
+    };
+    appState.visualizer = {
+        humanoidMode: true,
+        recordHumanoidJogAxisIntent() {},
+        moveHumanoidAbsolutePoseAlongAxisDecoupledUpright() {
+            moveCalls += 1;
+            return false;
+        }
+    };
+
+    try {
+        setupEventListeners();
+
+        teachButton.trigger('mousedown');
+
+        assert.equal(moveCalls, 1);
+        assert.equal(intervalCallbacks.size, 0);
+    } finally {
+        if (originalWindow === undefined) delete globalThis.window;
+        else globalThis.window = originalWindow;
+        if (originalDocument === undefined) delete globalThis.document;
+        else globalThis.document = originalDocument;
+        if (originalLocalStorage === undefined) delete globalThis.localStorage;
+        else globalThis.localStorage = originalLocalStorage;
+        if (originalSetInterval === undefined) delete globalThis.setInterval;
+        else globalThis.setInterval = originalSetInterval;
+        if (originalClearInterval === undefined) delete globalThis.clearInterval;
+        else globalThis.clearInterval = originalClearInterval;
+        appState.visualizer = originalVisualizer;
+    }
+});
+
+test('setupEventListeners stops repeating decoupled-upright absolute jogs after an async failed step', async () => {
+    const originalWindow = globalThis.window;
+    const originalDocument = globalThis.document;
+    const originalLocalStorage = globalThis.localStorage;
+    const originalVisualizer = appState.visualizer;
+    const originalSetInterval = globalThis.setInterval;
+    const originalClearInterval = globalThis.clearInterval;
+
+    const teachButton = createMockElement('');
+    teachButton.dataset = { axis: 'x', direction: 'negative', type: 'translation' };
+    teachButton.classList = {
+        contains(className) {
+            return className === 'teach-btn';
+        }
+    };
+
+    const controlModeSelect = createMockElement('decoupled-upright');
+    const intervalCallbacks = new Map();
+    let nextTimerId = 1;
+    let resolveMove = null;
+    let moveCalls = 0;
+
+    globalThis.window = {
+        addEventListener() {},
+        removeEventListener() {}
+    };
+    globalThis.document = {
+        getElementById(id) {
+            if (id === 'dual-arm-control-mode-select') return controlModeSelect;
+            return null;
+        },
+        querySelectorAll(selector) {
+            if (selector === '.teach-btn') return [teachButton];
+            return [];
+        }
+    };
+    globalThis.localStorage = createMockLocalStorage();
+    globalThis.setInterval = (handler) => {
+        const id = nextTimerId++;
+        intervalCallbacks.set(id, handler);
+        return id;
+    };
+    globalThis.clearInterval = (id) => {
+        intervalCallbacks.delete(id);
+    };
+    appState.visualizer = {
+        humanoidMode: true,
+        recordHumanoidJogAxisIntent() {},
+        moveHumanoidAbsolutePoseAlongAxisDecoupledUpright() {
+            moveCalls += 1;
+            return new Promise((resolve) => {
+                resolveMove = resolve;
+            });
+        }
+    };
+
+    try {
+        setupEventListeners();
+
+        teachButton.trigger('mousedown');
+        assert.equal(moveCalls, 1);
+        assert.equal(intervalCallbacks.size, 1);
+
+        const repeatIntervalHandler = Array.from(intervalCallbacks.values())[0];
+        repeatIntervalHandler();
+        assert.equal(moveCalls, 1);
+
+        resolveMove(false);
+        await Promise.resolve();
+
+        assert.equal(intervalCallbacks.size, 0);
     } finally {
         if (originalWindow === undefined) delete globalThis.window;
         else globalThis.window = originalWindow;

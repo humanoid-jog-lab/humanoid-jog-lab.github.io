@@ -735,7 +735,7 @@ SafetyObjective buildSafetyObjective(
         }
     }
 
-    if (request.waist_x_corridor.enabled && max_distance_step > 0.0) {
+    if (request.safety_push.include_waist_corridor && request.waist_x_corridor.enabled && max_distance_step > 0.0) {
         const double corridor_target_margin =
             std::max(0.0, request.waist_x_corridor.activation_threshold) * target_fraction;
         std::size_t row_index = 0;

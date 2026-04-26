@@ -2,6 +2,33 @@ function asFinite(value, fallback = Number.POSITIVE_INFINITY) {
     return Number.isFinite(value) ? value : fallback;
 }
 
+export function resolveHumanoidJogWaistXCorridorCommandHold({
+    waistXCorridorEnabled = false,
+    waistXPosition = Number.NaN,
+    waistXMin = Number.NEGATIVE_INFINITY,
+    waistXMax = Number.POSITIVE_INFINITY,
+    edgeTolerance = 0,
+    commandDelta = null
+} = {}) {
+    if (waistXCorridorEnabled !== true || !Number.isFinite(waistXPosition)) {
+        return { hold: false, bound: '', reason: 'not_applicable' };
+    }
+    const commandX = Array.isArray(commandDelta) ? Number(commandDelta[0]) : Number.NaN;
+    if (!Number.isFinite(commandX) || Math.abs(commandX) <= 1e-12) {
+        return { hold: false, bound: '', reason: 'no_x_command' };
+    }
+    const tolerance = Math.max(Math.abs(commandX), Math.max(0, asFinite(edgeTolerance, 0)));
+    const nearOrBelowLower = Number.isFinite(waistXMin) && waistXPosition <= waistXMin + tolerance;
+    if (nearOrBelowLower && commandX < 0) {
+        return { hold: true, bound: 'lower', reason: 'waist_corridor_lower_command_hold' };
+    }
+    const nearOrAboveUpper = Number.isFinite(waistXMax) && waistXPosition >= waistXMax - tolerance;
+    if (nearOrAboveUpper && commandX > 0) {
+        return { hold: true, bound: 'upper', reason: 'waist_corridor_upper_command_hold' };
+    }
+    return { hold: false, bound: '', reason: 'not_pushing_outward' };
+}
+
 export function resolveHumanoidJogManifoldArmOnlyFallback({
     includeWaist = false,
     converged = false,

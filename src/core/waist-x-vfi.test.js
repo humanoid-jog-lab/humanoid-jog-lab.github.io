@@ -60,3 +60,32 @@ test('computeWaistXVFIRows uses signed distance so violated bounds push back ins
     assert.equal(result.vfiConstraints[0].threshold, 0.1);
     assert.equal(result.vfiConstraints[1].threshold, 0.1);
 });
+
+test('computeWaistXVFIRows stops inward motion inside the corridor edge deadband', () => {
+    const nearUpper = computeWaistXVFIRows({
+        fkmFn: (q) => [1, q[0], 0, 0, 0, 0, 0, 0],
+        q: [0.9998],
+        waistStart: 0,
+        waistCount: 1,
+        DQ: MockDQ,
+        xMax: 1,
+        xMin: -1,
+        eta: 2,
+        stopTolerance: 5e-4
+    });
+
+    const outsideUpper = computeWaistXVFIRows({
+        fkmFn: (q) => [1, q[0], 0, 0, 0, 0, 0, 0],
+        q: [1.0002],
+        waistStart: 0,
+        waistCount: 1,
+        DQ: MockDQ,
+        xMax: 1,
+        xMin: -1,
+        eta: 2,
+        stopTolerance: 5e-4
+    });
+
+    assertNear(nearUpper.rhs[0], 0);
+    assertNear(outsideUpper.rhs[0], -4e-4);
+});

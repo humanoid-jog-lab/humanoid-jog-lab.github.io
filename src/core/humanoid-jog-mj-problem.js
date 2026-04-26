@@ -8,7 +8,20 @@ function repeatValue(count, value) {
     return Array.from({ length: Math.max(0, count) }, () => value);
 }
 
-function buildJointLimitVFIRows({ q = [], lowerBounds = [], upperBounds = [], stepBounds = [], eta = 1 } = {}) {
+function stopInsideEdgeBand(slack, edgeStopDistance = 0) {
+    const distance = Math.max(0, asFinite(edgeStopDistance, 0));
+    if (!Number.isFinite(slack) || distance <= 0) return Math.max(0, slack);
+    return slack > 0 && slack <= distance ? 0 : Math.max(0, slack);
+}
+
+function buildJointLimitVFIRows({
+    q = [],
+    lowerBounds = [],
+    upperBounds = [],
+    stepBounds = [],
+    eta = 1,
+    edgeStopDistance = 0
+} = {}) {
     const qEval = Array.isArray(q) ? q : [];
     const width = qEval.length;
     const rows = [];
@@ -24,7 +37,7 @@ function buildJointLimitVFIRows({ q = [], lowerBounds = [], upperBounds = [], st
             : Number.POSITIVE_INFINITY;
 
         if (Number.isFinite(upper)) {
-            const upperSlack = Math.max(0, upper - qi);
+            const upperSlack = stopInsideEdgeBand(upper - qi, edgeStopDistance);
             const upperStep = Math.min(maxStep, gain * upperSlack);
             const row = new Array(width).fill(0);
             row[index] = 1;
@@ -33,7 +46,7 @@ function buildJointLimitVFIRows({ q = [], lowerBounds = [], upperBounds = [], st
         }
 
         if (Number.isFinite(lower)) {
-            const lowerSlack = Math.max(0, qi - lower);
+            const lowerSlack = stopInsideEdgeBand(qi - lower, edgeStopDistance);
             const lowerStep = Math.min(maxStep, gain * lowerSlack);
             const row = new Array(width).fill(0);
             row[index] = -1;
@@ -56,7 +69,8 @@ function buildHumanoidJogMJSafetyObjective({
     upperBounds = [],
     jointLimitActivationThreshold = 0.15,
     safetyPushTargetFraction = 0.25,
-    safetyPushMaxDistanceStep = 0.01
+    safetyPushMaxDistanceStep = 0.01,
+    safetyPushIncludeWaistCorridor = true
 } = {}) {
     const qEval = Array.isArray(problem?.q) ? problem.q : [];
     const width = qEval.length;
@@ -94,7 +108,7 @@ function buildHumanoidJogMJSafetyObjective({
     }
 
     const corridor = problem?.inequalities?.waistXCorridor;
-    if (corridor?.enabled === true && width > 0 && maxDistanceStep > 0) {
+    if (safetyPushIncludeWaistCorridor !== false && corridor?.enabled === true && width > 0 && maxDistanceStep > 0) {
         const value = Number.isFinite(corridor.value) ? corridor.value : Number.NaN;
         const constraints = Array.isArray(corridor.vfiConstraints) ? corridor.vfiConstraints : [];
         if (constraints.length > 0) {
@@ -182,25 +196,27 @@ export function buildHumanoidJogMJProblem(options = {}) {
             lowerBounds: options?.lowerBounds,
             upperBounds: options?.upperBounds,
             stepBounds: options?.stepBounds,
-            eta: options?.jointLimitEta
+            eta: options?.jointLimitEta,
+            edgeStopDistance: options?.jointLimitEdgeStopDistance
         });
-    problem.safetyObjective = options?.mjRestoreSafetyPushEnabled === false
-        ? {
+    problem.safetyObjective = options?.mjRestoreSafetyPushEnabled === true
+        ? buildHumanoidJogMJSafetyObjective({
+            problem,
+            lowerBounds: options?.lowerBounds,
+            upperBounds: options?.upperBounds,
+            jointLimitActivationThreshold: options?.jointLimitActivationThreshold,
+            safetyPushTargetFraction: options?.safetyPushTargetFraction,
+            safetyPushMaxDistanceStep: options?.safetyPushMaxDistanceStep,
+            safetyPushIncludeWaistCorridor: options?.safetyPushIncludeWaistCorridor
+        })
+        : {
             enabled: false,
             rows: [],
             targets: [],
             residual: [],
             residualNorm: 0,
             count: 0
-        }
-        : buildHumanoidJogMJSafetyObjective({
-            problem,
-            lowerBounds: options?.lowerBounds,
-            upperBounds: options?.upperBounds,
-            jointLimitActivationThreshold: options?.jointLimitActivationThreshold,
-            safetyPushTargetFraction: options?.safetyPushTargetFraction,
-            safetyPushMaxDistanceStep: options?.safetyPushMaxDistanceStep
-        });
+        };
 
     return problem;
 }

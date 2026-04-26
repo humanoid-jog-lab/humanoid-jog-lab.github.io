@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { resolveHumanoidJogManifoldArmOnlyFallback } from './humanoid-jog-manifold-fallback.js';
+import {
+    resolveHumanoidJogManifoldArmOnlyFallback,
+    resolveHumanoidJogWaistXCorridorCommandHold
+} from './humanoid-jog-manifold-fallback.js';
 
 test('resolveHumanoidJogManifoldArmOnlyFallback retries with arms when waist mode fails without body_z', () => {
     const result = resolveHumanoidJogManifoldArmOnlyFallback({
@@ -125,4 +128,80 @@ test('resolveHumanoidJogManifoldArmOnlyFallback keeps full-body mode when the co
         keepBodyZVertical: false,
         reason: 'waist_corridor_requires_waist'
     });
+});
+
+test('resolveHumanoidJogWaistXCorridorCommandHold holds when x command pushes farther below the lower corridor', () => {
+    const result = resolveHumanoidJogWaistXCorridorCommandHold({
+        waistXCorridorEnabled: true,
+        waistXPosition: -0.4718,
+        waistXMin: -0.1,
+        waistXMax: 0.08,
+        edgeTolerance: 5e-4,
+        commandDelta: [-0.005, 0, 0]
+    });
+
+    assert.deepEqual(result, {
+        hold: true,
+        bound: 'lower',
+        reason: 'waist_corridor_lower_command_hold'
+    });
+});
+
+test('resolveHumanoidJogWaistXCorridorCommandHold allows a command that releases the lower corridor', () => {
+    const result = resolveHumanoidJogWaistXCorridorCommandHold({
+        waistXCorridorEnabled: true,
+        waistXPosition: -0.4718,
+        waistXMin: -0.1,
+        waistXMax: 0.08,
+        edgeTolerance: 5e-4,
+        commandDelta: [0.005, 0, 0]
+    });
+
+    assert.deepEqual(result, {
+        hold: false,
+        bound: '',
+        reason: 'not_pushing_outward'
+    });
+});
+
+test('resolveHumanoidJogWaistXCorridorCommandHold holds inside the lower edge deadband', () => {
+    const result = resolveHumanoidJogWaistXCorridorCommandHold({
+        waistXCorridorEnabled: true,
+        waistXPosition: -0.0998,
+        waistXMin: -0.1,
+        waistXMax: 0.08,
+        edgeTolerance: 5e-4,
+        commandDelta: [-0.005, 0, 0]
+    });
+
+    assert.equal(result.hold, true);
+    assert.equal(result.bound, 'lower');
+});
+
+test('resolveHumanoidJogWaistXCorridorCommandHold holds before an outward x command would cross the lower corridor', () => {
+    const result = resolveHumanoidJogWaistXCorridorCommandHold({
+        waistXCorridorEnabled: true,
+        waistXPosition: -0.097,
+        waistXMin: -0.1,
+        waistXMax: 0.08,
+        edgeTolerance: 5e-4,
+        commandDelta: [-0.005, 0, 0]
+    });
+
+    assert.equal(result.hold, true);
+    assert.equal(result.bound, 'lower');
+});
+
+test('resolveHumanoidJogWaistXCorridorCommandHold allows an outward x command that remains inside the lower corridor', () => {
+    const result = resolveHumanoidJogWaistXCorridorCommandHold({
+        waistXCorridorEnabled: true,
+        waistXPosition: -0.09,
+        waistXMin: -0.1,
+        waistXMax: 0.08,
+        edgeTolerance: 5e-4,
+        commandDelta: [-0.005, 0, 0]
+    });
+
+    assert.equal(result.hold, false);
+    assert.equal(result.reason, 'not_pushing_outward');
 });

@@ -18,6 +18,12 @@ function asFinite(v, fb = 0) {
     return Number.isFinite(v) ? v : fb;
 }
 
+function stopInsideEdgeBand(distance, stopTolerance = 0) {
+    const tol = Math.max(0, asFinite(stopTolerance, 0));
+    if (!Number.isFinite(distance) || tol <= 0) return distance;
+    return distance > 0 && distance <= tol ? 0 : distance;
+}
+
 /**
  * Compute the x-component of the waist-end position from a DQ pose array.
  *
@@ -98,6 +104,7 @@ function computeWaistPxJacobianRow(fkmFn, q, waistStart, waistCount, DQ, eps = 1
  * @param {number}   [opts.xMin]      lower x limit (default -Infinity, inactive)
  * @param {number}   [opts.eta]       VFI decay rate (default 1.0)
  * @param {number}   [opts.activationThreshold]  CCTSM attenuation scale
+ * @param {number}   [opts.stopTolerance]  small inside-boundary deadband for smoother edge holding
  * @returns {{
  *   rows: number[][],
  *   rhs: number[],
@@ -116,7 +123,8 @@ export function computeWaistXVFIRows({
     xMax = 0.05,
     xMin = -Infinity,
     eta = 1.0,
-    activationThreshold = 0.12
+    activationThreshold = 0.12,
+    stopTolerance = 0
 } = {}) {
     if (typeof fkmFn !== 'function' || !Array.isArray(q) || waistCount <= 0 || !DQ) return null;
 
@@ -141,7 +149,7 @@ export function computeWaistXVFIRows({
         const safeD = Math.max(0, d_upper);
         vfiConstraints.push({ row: JpxRow.map((v) => -v), distance: safeD, threshold: activationThreshold });
         rows.push([...JpxRow]);
-        rhs.push(eta * d_upper);
+        rhs.push(eta * stopInsideEdgeBand(d_upper, stopTolerance));
     }
 
     // Lower bound: p0_x >= x_min  →  -J_px * u <= eta * d_lower
@@ -149,7 +157,7 @@ export function computeWaistXVFIRows({
         const safeD = Math.max(0, d_lower);
         vfiConstraints.push({ row: [...JpxRow], distance: safeD, threshold: activationThreshold });
         rows.push(JpxRow.map((v) => -v));
-        rhs.push(eta * d_lower);
+        rhs.push(eta * stopInsideEdgeBand(d_lower, stopTolerance));
     }
 
     return { rows, rhs, vfiConstraints, p0x, d_upper, d_lower };

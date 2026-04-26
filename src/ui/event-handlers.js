@@ -398,6 +398,9 @@ export function setupHumanoidParameterControls() {
     const humanoidWaistXVFIStatus = document.getElementById('humanoid-waist-x-vfi-status');
     const humanoidTRSafetyPushWeightInput = document.getElementById('humanoid-tr-safety-push-weight-input');
     const humanoidTRSafetyPushStatus = document.getElementById('humanoid-tr-safety-push-status');
+    const humanoidSafetyRefineJointActivationInput = document.getElementById('humanoid-safety-refine-joint-activation-input');
+    const humanoidSafetyRefineWaistActivationInput = document.getElementById('humanoid-safety-refine-waist-activation-input');
+    const humanoidSafetyRefineStatus = document.getElementById('humanoid-safety-refine-status');
     const humanoidRos2ArmVelInput = document.getElementById('humanoid-ros2-arm-vel-input');
     const humanoidRos2ArmAccInput = document.getElementById('humanoid-ros2-arm-acc-input');
     const humanoidRos2WaistVelInput = document.getElementById('humanoid-ros2-waist-vel-input');
@@ -406,6 +409,8 @@ export function setupHumanoidParameterControls() {
     const HUMANOID_JOINT_LIMIT_ETA_STORAGE_KEY = 'humanoid-joint-limit-eta';
     const HUMANOID_WAIST_X_ETA_STORAGE_KEY = 'humanoid-waist-x-eta';
     const HUMANOID_TR_SAFETY_PUSH_WEIGHT_STORAGE_KEY = 'humanoid-tr-safety-push-weight';
+    const HUMANOID_SAFETY_REFINE_JOINT_ACTIVATION_STORAGE_KEY = 'humanoid-safety-refine-joint-activation';
+    const HUMANOID_SAFETY_REFINE_WAIST_ACTIVATION_STORAGE_KEY = 'humanoid-safety-refine-waist-activation';
     const HUMANOID_ROS2_ARM_VEL_STORAGE_KEY = 'humanoid-ros2-arm-vel';
     const HUMANOID_ROS2_ARM_ACC_STORAGE_KEY = 'humanoid-ros2-arm-acc';
     const HUMANOID_ROS2_WAIST_VEL_STORAGE_KEY = 'humanoid-ros2-waist-vel';
@@ -434,6 +439,10 @@ export function setupHumanoidParameterControls() {
         if (!humanoidTRSafetyPushStatus) return;
         humanoidTRSafetyPushStatus.textContent = message;
     };
+    const updateHumanoidSafetyRefineStatus = (message) => {
+        if (!humanoidSafetyRefineStatus) return;
+        humanoidSafetyRefineStatus.textContent = message;
+    };
     const updateHumanoidRos2PublishDefaultsStatus = (message) => {
         if (!humanoidRos2PublishDefaultsStatus) return;
         humanoidRos2PublishDefaultsStatus.textContent = message;
@@ -458,12 +467,27 @@ export function setupHumanoidParameterControls() {
         const windowWeight = typeof window !== 'undefined' ? window.humanoidTRSafetyPushWeight : null;
         if (Number.isFinite(visualizerWeight) && visualizerWeight >= 0) return visualizerWeight;
         if (Number.isFinite(windowWeight) && windowWeight >= 0) return windowWeight;
-        return 0.05;
+        return 0.002;
+    };
+    const readCurrentHumanoidSafetyRefineParams = () => {
+        const visualizerJoint = appState.visualizer?.vfiConfig?.mjRestoreSafetyRefineJointActivationDistance;
+        const visualizerWaist = appState.visualizer?.vfiConfig?.mjRestoreSafetyRefineWaistActivationDistance;
+        const windowJoint = typeof window !== 'undefined' ? window.humanoidSafetyRefineJointActivationDistance : null;
+        const windowWaist = typeof window !== 'undefined' ? window.humanoidSafetyRefineWaistActivationDistance : null;
+        return {
+            jointActivationDistance: Number.isFinite(visualizerJoint) && visualizerJoint > 0
+                ? visualizerJoint
+                : (Number.isFinite(windowJoint) && windowJoint > 0 ? windowJoint : 0.15),
+            waistActivationDistance: Number.isFinite(visualizerWaist) && visualizerWaist > 0
+                ? visualizerWaist
+                : (Number.isFinite(windowWaist) && windowWaist > 0 ? windowWaist : 0.08)
+        };
     };
 
     let appliedHumanoidJointLimitEta = readCurrentHumanoidJointLimitEta();
     let appliedHumanoidWaistXEta = readCurrentHumanoidWaistXEta();
     let appliedHumanoidTRSafetyPushWeight = readCurrentHumanoidTRSafetyPushWeight();
+    let appliedHumanoidSafetyRefineParams = readCurrentHumanoidSafetyRefineParams();
     let appliedHumanoidRos2PublishDefaults = {
         armVel: Number.isFinite(appState.humanoidRos2PublishDefaults?.armVel) ? appState.humanoidRos2PublishDefaults.armVel : 0.5,
         armAcc: Number.isFinite(appState.humanoidRos2PublishDefaults?.armAcc) ? appState.humanoidRos2PublishDefaults.armAcc : 1.0,
@@ -527,6 +551,48 @@ export function setupHumanoidParameterControls() {
             localStorage.setItem(HUMANOID_TR_SAFETY_PUSH_WEIGHT_STORAGE_KEY, String(value));
         } catch (_) {}
         updateHumanoidTRSafetyPushStatus(`当前值已应用：β=${value}`);
+        return true;
+    };
+    const applyHumanoidSafetyRefineParams = (paramsRaw = {}) => {
+        const rawJoint = paramsRaw && typeof paramsRaw === 'object'
+            ? (paramsRaw.jointActivationDistance ?? appliedHumanoidSafetyRefineParams.jointActivationDistance)
+            : appliedHumanoidSafetyRefineParams.jointActivationDistance;
+        const rawWaist = paramsRaw && typeof paramsRaw === 'object'
+            ? (paramsRaw.waistActivationDistance ?? appliedHumanoidSafetyRefineParams.waistActivationDistance)
+            : appliedHumanoidSafetyRefineParams.waistActivationDistance;
+        const jointActivationDistance = normalizePositiveParameterNumber(rawJoint);
+        const waistActivationDistance = normalizePositiveParameterNumber(rawWaist);
+        if (jointActivationDistance == null || waistActivationDistance == null) {
+            if (humanoidSafetyRefineJointActivationInput) {
+                humanoidSafetyRefineJointActivationInput.value = String(appliedHumanoidSafetyRefineParams.jointActivationDistance);
+            }
+            if (humanoidSafetyRefineWaistActivationInput) {
+                humanoidSafetyRefineWaistActivationInput.value = String(appliedHumanoidSafetyRefineParams.waistActivationDistance);
+            }
+            updateHumanoidSafetyRefineStatus(
+                `输入无效，已恢复为 关节=${appliedHumanoidSafetyRefineParams.jointActivationDistance}rad，腰部=${appliedHumanoidSafetyRefineParams.waistActivationDistance}m`
+            );
+            return false;
+        }
+
+        appliedHumanoidSafetyRefineParams = { jointActivationDistance, waistActivationDistance };
+        if (humanoidSafetyRefineJointActivationInput) humanoidSafetyRefineJointActivationInput.value = String(jointActivationDistance);
+        if (humanoidSafetyRefineWaistActivationInput) humanoidSafetyRefineWaistActivationInput.value = String(waistActivationDistance);
+        if (typeof window !== 'undefined') {
+            window.humanoidSafetyRefineJointActivationDistance = jointActivationDistance;
+            window.humanoidSafetyRefineWaistActivationDistance = waistActivationDistance;
+        }
+        if (appState.visualizer?.setHumanoidNullspaceSafetyRefineParams) {
+            appState.visualizer.setHumanoidNullspaceSafetyRefineParams(appliedHumanoidSafetyRefineParams);
+        } else if (appState.visualizer?.vfiConfig) {
+            appState.visualizer.vfiConfig.mjRestoreSafetyRefineJointActivationDistance = jointActivationDistance;
+            appState.visualizer.vfiConfig.mjRestoreSafetyRefineWaistActivationDistance = waistActivationDistance;
+        }
+        try {
+            localStorage.setItem(HUMANOID_SAFETY_REFINE_JOINT_ACTIVATION_STORAGE_KEY, String(jointActivationDistance));
+            localStorage.setItem(HUMANOID_SAFETY_REFINE_WAIST_ACTIVATION_STORAGE_KEY, String(waistActivationDistance));
+        } catch (_) {}
+        updateHumanoidSafetyRefineStatus(`当前值已应用：关节=${jointActivationDistance}rad，腰部=${waistActivationDistance}m`);
         return true;
     };
     const applyHumanoidWaistXVFIParams = (paramsRaw = {}) => {
@@ -617,11 +683,21 @@ export function setupHumanoidParameterControls() {
     const savedHumanoidTRSafetyPushWeight = (() => {
         try { return localStorage.getItem(HUMANOID_TR_SAFETY_PUSH_WEIGHT_STORAGE_KEY); } catch (_) { return null; }
     })();
+    const savedHumanoidSafetyRefineJointActivation = (() => {
+        try { return localStorage.getItem(HUMANOID_SAFETY_REFINE_JOINT_ACTIVATION_STORAGE_KEY); } catch (_) { return null; }
+    })();
+    const savedHumanoidSafetyRefineWaistActivation = (() => {
+        try { return localStorage.getItem(HUMANOID_SAFETY_REFINE_WAIST_ACTIVATION_STORAGE_KEY); } catch (_) { return null; }
+    })();
     applyHumanoidJointLimitEta(savedHumanoidJointLimitEta ?? appliedHumanoidJointLimitEta);
     applyHumanoidWaistXVFIParams({
         eta: savedHumanoidWaistXEta ?? appliedHumanoidWaistXEta
     });
     applyHumanoidTRSafetyPushWeight(savedHumanoidTRSafetyPushWeight ?? appliedHumanoidTRSafetyPushWeight);
+    applyHumanoidSafetyRefineParams({
+        jointActivationDistance: savedHumanoidSafetyRefineJointActivation ?? appliedHumanoidSafetyRefineParams.jointActivationDistance,
+        waistActivationDistance: savedHumanoidSafetyRefineWaistActivation ?? appliedHumanoidSafetyRefineParams.waistActivationDistance
+    });
     applyHumanoidRos2PublishDefaults({
         armVel: (() => { try { return localStorage.getItem(HUMANOID_ROS2_ARM_VEL_STORAGE_KEY); } catch (_) { return null; } })() ?? appliedHumanoidRos2PublishDefaults.armVel,
         armAcc: (() => { try { return localStorage.getItem(HUMANOID_ROS2_ARM_ACC_STORAGE_KEY); } catch (_) { return null; } })() ?? appliedHumanoidRos2PublishDefaults.armAcc,
@@ -666,6 +742,22 @@ export function setupHumanoidParameterControls() {
         });
     };
     bindHumanoidTRSafetyPushWeightInput(humanoidTRSafetyPushWeightInput);
+    const bindHumanoidSafetyRefineInput = (input) => {
+        if (!input) return;
+        const applyFromInputs = () => applyHumanoidSafetyRefineParams({
+            jointActivationDistance: humanoidSafetyRefineJointActivationInput?.value,
+            waistActivationDistance: humanoidSafetyRefineWaistActivationInput?.value
+        });
+        input.addEventListener('change', applyFromInputs);
+        input.addEventListener('blur', applyFromInputs);
+        input.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter') return;
+            e.preventDefault?.();
+            applyFromInputs();
+        });
+    };
+    bindHumanoidSafetyRefineInput(humanoidSafetyRefineJointActivationInput);
+    bindHumanoidSafetyRefineInput(humanoidSafetyRefineWaistActivationInput);
     const bindRos2DefaultInput = (input, key) => {
         if (!input) return;
         const applyFromInputs = () => applyHumanoidRos2PublishDefaults({
@@ -728,6 +820,7 @@ function setupHumanoidJogSolverControls() {
         mode === 'mj_restore'
         || mode === 'mj_restore_pre_w'
         || mode === 'mj_restore_tr'
+        || mode === 'mj_restore_tr_safe'
     );
     const normalizeHumanoidJogSolverModeForUI = (modeRaw) => {
         const mode = normalizeHumanoidJogSolverMode(modeRaw);
@@ -1273,6 +1366,37 @@ function setupEventListeners() {
     const teachButtons = document.querySelectorAll('.teach-btn');
     teachButtons.forEach(button => {
         let intervalId = null;
+        let repeatStepPending = false;
+        const startRepeatingUntilFailed = (stepFn) => {
+            const stopRepeating = () => {
+                if (intervalId !== null) {
+                    clearInterval(intervalId);
+                    intervalId = null;
+                }
+            };
+            const settleResult = (result) => {
+                repeatStepPending = false;
+                if (result === false) {
+                    stopRepeating();
+                }
+            };
+            const runStep = () => {
+                if (repeatStepPending) return true;
+                const result = stepFn();
+                if (result && typeof result.then === 'function') {
+                    repeatStepPending = true;
+                    void result.then(settleResult).catch(() => {
+                        settleResult(false);
+                    });
+                    return true;
+                }
+                settleResult(result);
+                return result;
+            };
+            const firstResult = runStep();
+            if (firstResult === false) return;
+            intervalId = setInterval(runStep, 20);
+        };
         
         button.addEventListener('mousedown', (e) => {
             // 相对距离按钮单独处理（避免走 6 轴逻辑）
@@ -1471,30 +1595,18 @@ function setupEventListeners() {
                     // 全身绝对位姿：腰部+双臂联动，控制绝对位姿
                     if (appState.visualizer.humanoidMode) {
                         if (type === 'rotation') {
-                            appState.visualizer.rotateHumanoidAbsolutePoseAroundAxisDecoupled(axis, direction);
-                            intervalId = setInterval(() => {
-                                appState.visualizer.rotateHumanoidAbsolutePoseAroundAxisDecoupled(axis, direction);
-                            }, 20);
+                            startRepeatingUntilFailed(() => appState.visualizer.rotateHumanoidAbsolutePoseAroundAxisDecoupled(axis, direction));
                         } else {
-                            appState.visualizer.moveHumanoidAbsolutePoseAlongAxisDecoupled(axis, direction);
-                            intervalId = setInterval(() => {
-                                appState.visualizer.moveHumanoidAbsolutePoseAlongAxisDecoupled(axis, direction);
-                            }, 20);
+                            startRepeatingUntilFailed(() => appState.visualizer.moveHumanoidAbsolutePoseAlongAxisDecoupled(axis, direction));
                         }
                     }
                 } else if (controlMode === 'decoupled-upright') {
                     // 全身绝对位姿（腰部竖直）：腰部+双臂联动，控制绝对位姿并约束 body_link z 轴
                     if (appState.visualizer.humanoidMode) {
                         if (type === 'rotation') {
-                            appState.visualizer.rotateHumanoidAbsolutePoseAroundAxisDecoupledUpright(axis, direction);
-                            intervalId = setInterval(() => {
-                                appState.visualizer.rotateHumanoidAbsolutePoseAroundAxisDecoupledUpright(axis, direction);
-                            }, 20);
+                            startRepeatingUntilFailed(() => appState.visualizer.rotateHumanoidAbsolutePoseAroundAxisDecoupledUpright(axis, direction));
                         } else {
-                            appState.visualizer.moveHumanoidAbsolutePoseAlongAxisDecoupledUpright(axis, direction);
-                            intervalId = setInterval(() => {
-                                appState.visualizer.moveHumanoidAbsolutePoseAlongAxisDecoupledUpright(axis, direction);
-                            }, 20);
+                            startRepeatingUntilFailed(() => appState.visualizer.moveHumanoidAbsolutePoseAlongAxisDecoupledUpright(axis, direction));
                         }
                     }
                 } else if (controlMode === 'waist-body-link-xz') {

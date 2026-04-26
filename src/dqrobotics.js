@@ -780,6 +780,16 @@ export class HumanoidDualArmAdapter {
         }
     }
 
+    _requireFullJointVector(jointAngles) {
+        if (!Array.isArray(jointAngles)) {
+            throw new Error('joint angle vector length mismatch: expected an array');
+        }
+        const expected = Number(this.totalJointCount);
+        if (Number.isFinite(expected) && expected > 0 && jointAngles.length !== expected) {
+            throw new Error(`joint angle vector length mismatch: expected ${expected}, got ${jointAngles.length}`);
+        }
+    }
+
     /**
      * 获取相对位姿（左臂相对右臂：conj(x2)*x1）
      * @param {number[]} jointAngles - 全关节角 [腰, 左臂, 右臂, 头]
@@ -787,6 +797,7 @@ export class HumanoidDualArmAdapter {
      */
     getRelativePose(jointAngles) {
         this._requireDualArmWasm();
+        this._requireFullJointVector(jointAngles);
         return this._humanoid.relativePoseDualArm(jointAngles);
     }
 
@@ -797,6 +808,7 @@ export class HumanoidDualArmAdapter {
      */
     getAbsolutePose(jointAngles) {
         this._requireDualArmWasm();
+        this._requireFullJointVector(jointAngles);
         return this._humanoid.absolutePoseDualArm(jointAngles);
     }
 
@@ -807,6 +819,7 @@ export class HumanoidDualArmAdapter {
      */
     getRelativePoseJacobian(jointAngles) {
         this._requireDualArmWasm();
+        this._requireFullJointVector(jointAngles);
         return this._humanoid.relativePoseJacobianDualArm(jointAngles);
     }
 
@@ -817,6 +830,7 @@ export class HumanoidDualArmAdapter {
      */
     getAbsolutePoseJacobian(jointAngles) {
         this._requireDualArmWasm();
+        this._requireFullJointVector(jointAngles);
         return this._humanoid.absolutePoseJacobianDualArm(jointAngles);
     }
 

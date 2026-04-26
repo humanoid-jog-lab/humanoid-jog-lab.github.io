@@ -26,6 +26,25 @@ test('HumanoidDualArmAdapter fails fast when cooperative dual-arm WASM pose API 
     );
 });
 
+test('HumanoidDualArmAdapter rejects wrong-size joint vectors before calling WASM', () => {
+    let wasmCalled = false;
+    const adapter = new HumanoidDualArmAdapter(buildHumanoidStub({
+        absolutePoseDualArm: () => {
+            wasmCalled = true;
+            throw new Error('WASM should not be called');
+        },
+        relativePoseDualArm: () => new Array(8).fill(0),
+        absolutePoseJacobianDualArm: () => [],
+        relativePoseJacobianDualArm: () => []
+    }));
+
+    assert.throws(
+        () => adapter.getAbsolutePose(new Array(18).fill(0)),
+        /joint angle vector length mismatch/
+    );
+    assert.equal(wasmCalled, false);
+});
+
 test('HumanoidDualArmAdapter fails fast when cooperative dual-arm WASM jacobian API is unavailable', () => {
     const adapter = new HumanoidDualArmAdapter(buildHumanoidStub({
         absolutePoseDualArm: () => new Array(8).fill(0),
@@ -48,6 +67,7 @@ test('HumanoidDualArmAdapter uses cooperative dual-arm WASM APIs when all requir
     const absoluteJacobian = [[1, 0], [0, 1]];
     const relativeJacobian = [[0.5, 0], [0, 0.25]];
     const adapter = new HumanoidDualArmAdapter(buildHumanoidStub({
+        getDimConfigurationSpace: () => 2,
         absolutePoseDualArm: () => absolutePose,
         relativePoseDualArm: () => relativePose,
         absolutePoseJacobianDualArm: () => absoluteJacobian,

@@ -234,3 +234,78 @@ export function computeHumanoidJogManifoldNullspaceStep({
         ...selectedCandidate
     };
 }
+
+export function computeHumanoidJogManifoldTaskCorrection({
+    qCurrent = [],
+    equalityJacobian = [],
+    residual = [],
+    lowerBounds = [],
+    upperBounds = [],
+    stepBounds = [],
+    regularizationWeights = [],
+    damping = 1e-10
+} = {}) {
+    const width = Array.isArray(qCurrent) ? qCurrent.length : 0;
+    const zeroStep = new Array(width).fill(0);
+    const rows = (Array.isArray(equalityJacobian) ? equalityJacobian : [])
+        .filter((row) => Array.isArray(row) && row.length === width);
+    const targetResidual = asStepVector(residual, rows.length);
+    if (width === 0 || rows.length === 0 || vectorNorm(targetResidual) <= 1e-12) {
+        return {
+            accepted: false,
+            reason: width === 0 || rows.length === 0 ? 'invalid_input' : 'no_residual',
+            step: zeroStep,
+            qNext: Array.isArray(qCurrent) ? qCurrent.slice() : []
+        };
+    }
+
+    const inverseWeights = new Array(width).fill(1);
+    if (Array.isArray(regularizationWeights)) {
+        for (let i = 0; i < width; i += 1) {
+            inverseWeights[i] = 1 / Math.max(1e-12, asFinite(regularizationWeights[i], 1));
+        }
+    }
+
+    const gram = rows.map((rowI, i) => rows.map((rowJ, j) => {
+        let value = 0;
+        for (let col = 0; col < width; col += 1) {
+            value += asFinite(rowI?.[col]) * inverseWeights[col] * asFinite(rowJ?.[col]);
+        }
+        return i === j ? value + Math.max(1e-12, asFinite(damping, 1e-10)) : value;
+    }));
+    const alpha = solveLinearSystem(gram, targetResidual);
+    if (!Array.isArray(alpha) || alpha.length !== rows.length) {
+        return {
+            accepted: false,
+            reason: 'singular',
+            step: zeroStep,
+            qNext: qCurrent.slice()
+        };
+    }
+
+    const rawStep = new Array(width).fill(0);
+    for (let col = 0; col < width; col += 1) {
+        for (let row = 0; row < rows.length; row += 1) {
+            rawStep[col] += inverseWeights[col] * asFinite(rows[row]?.[col]) * asFinite(alpha[row]);
+        }
+    }
+    if (vectorNorm(rawStep) <= 1e-12) {
+        return {
+            accepted: false,
+            reason: 'zero_step',
+            step: zeroStep,
+            qNext: qCurrent.slice()
+        };
+    }
+
+    const clamped = clampToBounds(qCurrent, rawStep, lowerBounds, upperBounds, stepBounds);
+    return {
+        accepted: true,
+        reason: clamped.clipped ? 'accepted_clipped' : 'accepted',
+        step: clamped.step,
+        qNext: clamped.qNext,
+        clipped: clamped.clipped,
+        residualNorm: vectorNorm(targetResidual),
+        correctionNorm: vectorNorm(clamped.step)
+    };
+}
