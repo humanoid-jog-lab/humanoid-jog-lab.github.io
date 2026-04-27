@@ -459,7 +459,7 @@ test('setupHumanoidParameterControls restores, applies, and validates humanoid j
     }
 });
 
-test('setupHumanoidJogSolverControls falls back stored mj_restore_pre_w selections to mj_restore_tr and propagates the fallback', () => {
+test('setupHumanoidJogSolverControls falls back stored mj_restore_pre_w selections to the safety-biased TR default', () => {
     const originalWindow = globalThis.window;
     const originalDocument = globalThis.document;
     const originalLocalStorage = globalThis.localStorage;
@@ -536,7 +536,7 @@ test('setupHumanoidJogSolverControls falls back stored mj_restore_pre_w selectio
     try {
         setupHumanoidJogSolverControls();
 
-        assert.equal(humanoidJogSolverSelect.value, 'mj_restore_tr');
+        assert.equal(humanoidJogSolverSelect.value, 'mj_restore_tr_safe');
         assert.equal(humanoidJogMetricSelect.value, 'w_abs_hier_vfi');
         assert.deepEqual(
             humanoidJogMetricSelect.options.map((option) => option.textContent),
@@ -546,18 +546,19 @@ test('setupHumanoidJogSolverControls falls back stored mj_restore_pre_w selectio
         assert.equal(humanoidWaistXCorridorMinInput.value, '-0.12');
         assert.equal(humanoidWaistXCorridorMaxInput.value, '0.12');
         assert.equal(humanoidTestDualArmLockToggle.checked, true);
-        assert.equal(globalThis.window.humanoidJogSolverMode, 'mj_restore_tr');
+        assert.equal(globalThis.window.humanoidJogSolverMode, 'mj_restore_tr_safe');
         assert.equal(globalThis.window.humanoidManifoldJogSecondaryMetric, 'w_abs_hier_vfi');
         assert.equal(globalThis.window.humanoidWaistXCorridorEnabled, true);
         assert.equal(globalThis.window.humanoidWaistXCorridorMin, -0.12);
         assert.equal(globalThis.window.humanoidWaistXCorridorMax, 0.12);
-        assert.deepEqual(visualizerCalls, ['mj_restore_tr']);
+        assert.deepEqual(visualizerCalls, ['mj_restore_tr_safe']);
         assert.deepEqual(metricOptimizationCalls, ['set:w_abs_hier_vfi']);
         assert.deepEqual(waistXCorridorCalls, [true]);
         assert.deepEqual(waistXCorridorMinCalls, [-0.12]);
         assert.deepEqual(waistXCorridorMaxCalls, [0.12]);
         assert.deepEqual(testLockCalls, [true]);
-        assert.equal(globalThis.localStorage.getItem('humanoid-jog-solver-mode'), 'mj_restore_tr');
+        assert.equal(globalThis.localStorage.getItem('humanoid-jog-solver-mode'), 'mj_restore_tr_safe');
+        assert.equal(globalThis.localStorage.getItem('humanoid-jog-default-version'), 'tr-safe-vfi-metric');
         assert.equal(globalThis.localStorage.getItem('humanoid-manifold-jog-metric'), 'w_abs_hier_vfi');
         assert.equal(globalThis.localStorage.getItem('humanoid-waist-x-corridor-enabled'), '1');
         assert.equal(globalThis.localStorage.getItem('humanoid-waist-x-corridor-min'), '-0.12');
@@ -587,7 +588,7 @@ test('setupHumanoidJogSolverControls falls back stored mj_restore_pre_w selectio
         assert.equal(globalThis.window.humanoidWaistXCorridorEnabled, false);
         assert.equal(globalThis.window.humanoidWaistXCorridorMin, -0.08);
         assert.equal(globalThis.window.humanoidWaistXCorridorMax, 0.08);
-        assert.deepEqual(visualizerCalls, ['mj_restore_tr', 'priority']);
+        assert.deepEqual(visualizerCalls, ['mj_restore_tr_safe', 'priority']);
         assert.deepEqual(metricOptimizationCalls, [
             'set:w_abs_hier_vfi',
             'set:w_abs_hier',
@@ -1035,10 +1036,11 @@ test('setupHumanoidJogSolverControls falls back when storage contains a removed 
 
     try {
         setupHumanoidJogSolverControls();
-        assert.equal(humanoidJogSolverSelect.value, 'vfi');
-        assert.equal(globalThis.window.humanoidJogSolverMode, 'vfi');
-        assert.deepEqual(visualizerCalls, ['vfi']);
-        assert.equal(globalThis.localStorage.getItem('humanoid-jog-solver-mode'), 'vfi');
+        assert.equal(humanoidJogSolverSelect.value, 'mj_restore_tr_safe');
+        assert.equal(globalThis.window.humanoidJogSolverMode, 'mj_restore_tr_safe');
+        assert.deepEqual(visualizerCalls, ['mj_restore_tr_safe']);
+        assert.equal(globalThis.localStorage.getItem('humanoid-jog-solver-mode'), 'mj_restore_tr_safe');
+        assert.equal(globalThis.localStorage.getItem('humanoid-jog-default-version'), 'tr-safe-vfi-metric');
     } finally {
         if (originalWindow === undefined) delete globalThis.window;
         else globalThis.window = originalWindow;
@@ -1054,7 +1056,7 @@ test('setupHumanoidJogSolverControls falls back when storage contains a removed 
     }
 });
 
-test('setupHumanoidJogSolverControls auto-switches ruled-surface polishing modes onto mj_restore when the current solver is unsupported', () => {
+test('setupHumanoidJogSolverControls auto-switches ruled-surface polishing modes onto the safety-biased TR solver when the current solver is unsupported', () => {
     const originalWindow = globalThis.window;
     const originalDocument = globalThis.document;
     const originalLocalStorage = globalThis.localStorage;
@@ -1082,7 +1084,9 @@ test('setupHumanoidJogSolverControls auto-switches ruled-surface polishing modes
             return null;
         }
     };
-    globalThis.localStorage = createMockLocalStorage();
+    globalThis.localStorage = createMockLocalStorage([
+        ['humanoid-jog-solver-mode', 'priority']
+    ]);
     globalThis.setInterval = () => 1;
     globalThis.clearInterval = () => {};
     appState.visualizer = {
@@ -1096,15 +1100,15 @@ test('setupHumanoidJogSolverControls auto-switches ruled-surface polishing modes
 
     try {
         setupHumanoidJogSolverControls();
-        assert.equal(humanoidJogSolverSelect.value, 'vfi');
-        assert.equal(globalThis.window.humanoidJogSolverMode, 'vfi');
+        assert.equal(humanoidJogSolverSelect.value, 'priority');
+        assert.equal(globalThis.window.humanoidJogSolverMode, 'priority');
 
         controlModeSelect.trigger('change', 'left-ruled-surface-polishing');
 
-        assert.equal(humanoidJogSolverSelect.value, 'mj_restore');
-        assert.equal(globalThis.window.humanoidJogSolverMode, 'mj_restore');
-        assert.deepEqual(visualizerCalls, ['vfi', 'mj_restore']);
-        assert.equal(globalThis.localStorage.getItem('humanoid-jog-solver-mode'), 'mj_restore');
+        assert.equal(humanoidJogSolverSelect.value, 'mj_restore_tr_safe');
+        assert.equal(globalThis.window.humanoidJogSolverMode, 'mj_restore_tr_safe');
+        assert.deepEqual(visualizerCalls, ['priority', 'mj_restore_tr_safe']);
+        assert.equal(globalThis.localStorage.getItem('humanoid-jog-solver-mode'), 'mj_restore_tr_safe');
     } finally {
         if (originalWindow === undefined) delete globalThis.window;
         else globalThis.window = originalWindow;

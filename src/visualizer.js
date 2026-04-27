@@ -340,8 +340,8 @@ export class RobotVisualizer {
         // 示教器速度百分比（影响“每一步”的平移/旋转增量，不改变按键重复频率）
         this.teachSpeedPercent = 100;
 
-        // 人形点动求解后端：'vfi' | 'priority' | 'mj_restore'
-        this.humanoidJogSolverMode = 'vfi';
+        // 人形点动求解后端：默认使用带安全偏置的 TR 恢复优化
+        this.humanoidJogSolverMode = 'mj_restore_tr_safe';
         this.vfiConfig = {
             maxIter: 240,
             damping: 1e-3,

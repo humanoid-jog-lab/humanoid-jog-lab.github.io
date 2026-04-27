@@ -806,6 +806,10 @@ function setupHumanoidJogSolverControls() {
     const dualArmControlModeSelect = document.getElementById('dual-arm-control-mode-select');
     const HUMANOID_JOG_SOLVER_STORAGE_KEY = 'humanoid-jog-solver-mode';
     const HUMANOID_JOG_METRIC_STORAGE_KEY = 'humanoid-manifold-jog-metric';
+    const HUMANOID_JOG_DEFAULT_VERSION_STORAGE_KEY = 'humanoid-jog-default-version';
+    const HUMANOID_JOG_DEFAULT_VERSION = 'tr-safe-vfi-metric';
+    const DEFAULT_HUMANOID_JOG_SOLVER_MODE = 'mj_restore_tr_safe';
+    const DEFAULT_HUMANOID_JOG_METRIC = 'w_abs_hier_vfi';
     const HUMANOID_WAIST_X_CORRIDOR_STORAGE_KEY = 'humanoid-waist-x-corridor-enabled';
     const HUMANOID_WAIST_X_CORRIDOR_MIN_STORAGE_KEY = 'humanoid-waist-x-corridor-min';
     const HUMANOID_WAIST_X_CORRIDOR_MAX_STORAGE_KEY = 'humanoid-waist-x-corridor-max';
@@ -824,10 +828,32 @@ function setupHumanoidJogSolverControls() {
     );
     const normalizeHumanoidJogSolverModeForUI = (modeRaw) => {
         const mode = normalizeHumanoidJogSolverMode(modeRaw);
-        return mode === 'mj_restore_pre_w' ? 'mj_restore_tr' : mode;
+        return mode === 'mj_restore_pre_w' ? DEFAULT_HUMANOID_JOG_SOLVER_MODE : mode;
     };
     const normalizeHumanoidJogMetric = (metricRaw) => {
         return metricRaw === 'w_abs_hier_vfi' ? 'w_abs_hier_vfi' : 'w_abs_hier';
+    };
+    const resolveInitialHumanoidJogSolverMode = (savedMode, selectMode, defaultVersionSeen = false) => {
+        if (
+            savedMode == null ||
+            savedMode === '' ||
+            savedMode === 'mj_restore_pre_w' ||
+            savedMode === 'torso_seed_upright' ||
+            savedMode === 'torso_seed_upright_vfi' ||
+            (!defaultVersionSeen && savedMode === 'vfi')
+        ) {
+            return DEFAULT_HUMANOID_JOG_SOLVER_MODE;
+        }
+        const normalized = normalizeHumanoidJogSolverModeForUI(savedMode ?? selectMode ?? DEFAULT_HUMANOID_JOG_SOLVER_MODE);
+        return normalized === 'vfi' && savedMode !== 'vfi'
+            ? DEFAULT_HUMANOID_JOG_SOLVER_MODE
+            : normalized;
+    };
+    const resolveInitialHumanoidJogMetric = (savedMetric, selectMetric, defaultVersionSeen = false) => {
+        if (savedMetric == null || savedMetric === '' || (!defaultVersionSeen && savedMetric === 'w_abs_hier')) {
+            return DEFAULT_HUMANOID_JOG_METRIC;
+        }
+        return normalizeHumanoidJogMetric(savedMetric ?? selectMetric ?? DEFAULT_HUMANOID_JOG_METRIC);
     };
     const applyHumanoidJogSolverMode = (modeRaw) => {
         const mode = normalizeHumanoidJogSolverModeForUI(modeRaw);
@@ -847,10 +873,10 @@ function setupHumanoidJogSolverControls() {
         const currentSolverMode = normalizeHumanoidJogSolverModeForUI(
             humanoidJogSolverSelect?.value
             ?? (typeof window !== 'undefined' ? window.humanoidJogSolverMode : null)
-            ?? 'vfi'
+            ?? DEFAULT_HUMANOID_JOG_SOLVER_MODE
         );
         if (!isHumanoidMJRestoreLikeSolverMode(currentSolverMode)) {
-            applyHumanoidJogSolverMode('mj_restore');
+            applyHumanoidJogSolverMode(DEFAULT_HUMANOID_JOG_SOLVER_MODE);
         }
     };
     const applyHumanoidJogMetric = (metricRaw) => {
@@ -1019,6 +1045,10 @@ function setupHumanoidJogSolverControls() {
         const savedMetric = (() => {
             try { return localStorage.getItem(HUMANOID_JOG_METRIC_STORAGE_KEY); } catch (_) { return null; }
         })();
+        const savedDefaultVersion = (() => {
+            try { return localStorage.getItem(HUMANOID_JOG_DEFAULT_VERSION_STORAGE_KEY); } catch (_) { return null; }
+        })();
+        const defaultVersionSeen = savedDefaultVersion === HUMANOID_JOG_DEFAULT_VERSION;
         const savedTestDualArmLock = (() => {
             try { return localStorage.getItem(HUMANOID_TEST_DUAL_ARM_LOCK_STORAGE_KEY); } catch (_) { return null; }
         })();
@@ -1031,8 +1061,11 @@ function setupHumanoidJogSolverControls() {
         const savedWaistXCorridorMax = (() => {
             try { return localStorage.getItem(HUMANOID_WAIST_X_CORRIDOR_MAX_STORAGE_KEY); } catch (_) { return null; }
         })();
-        applyHumanoidJogSolverMode(saved ?? humanoidJogSolverSelect.value ?? 'vfi');
-        applyHumanoidJogMetric(savedMetric ?? humanoidJogMetricSelect?.value ?? 'w_abs_hier');
+        applyHumanoidJogSolverMode(resolveInitialHumanoidJogSolverMode(saved, humanoidJogSolverSelect?.value, defaultVersionSeen));
+        applyHumanoidJogMetric(resolveInitialHumanoidJogMetric(savedMetric, humanoidJogMetricSelect?.value, defaultVersionSeen));
+        try {
+            localStorage.setItem(HUMANOID_JOG_DEFAULT_VERSION_STORAGE_KEY, HUMANOID_JOG_DEFAULT_VERSION);
+        } catch (_) {}
         updateHumanoidJogMetricOptionLabels();
         ensureHumanoidJogSolverSupportsControlMode(
             dualArmControlModeSelect?.value

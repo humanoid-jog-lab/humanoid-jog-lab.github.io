@@ -931,7 +931,6 @@ export async function loadHumanoidSystem(robot, config) {
         appState.humanoidDiffDriveModel = null;
         console.warn('未能初始化 DQ DifferentialDriveRobot，底盘将回退到解析积分:', error);
     }
-    callbacks.startHumanoidBaseControlLoop();
     if (appState.visualizer) {
         const waistLen = chains.waistJointNames.length;
         const leftLen = chains.leftArmJointNames.length;

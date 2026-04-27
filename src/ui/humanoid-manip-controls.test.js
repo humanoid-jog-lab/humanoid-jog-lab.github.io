@@ -12,6 +12,7 @@ test('index.html only exposes the supported humanoid jog solvers', () => {
     assert.match(html, /<option value="priority">零空间投影<\/option>/);
     assert.match(html, /<option value="mj_restore">Restore \(LS\)<\/option>/);
     assert.match(html, /<option value="mj_restore_tr">恢复优化\(TR\)<\/option>/);
+    assert.match(html, /<option value="mj_restore_tr_safe" selected>恢复优化\(TR\+安全偏置\)<\/option>/);
     assert.doesNotMatch(html, /<option value="mj_restore_pre_w">/);
     assert.doesNotMatch(html, /<option value="torso_seed_upright">Torso-Seeded Upright<\/option>/);
     assert.doesNotMatch(html, /<option value="torso_seed_upright_vfi">Torso-Seeded Upright \+ VFI-w<\/option>/);
@@ -26,7 +27,7 @@ test('index.html exposes the humanoid w selector surface with only hierarchical 
     assert.match(html, /id="humanoid-manifold-jog-metric-select"/);
     assert.match(html, /w 指标：/);
     assert.match(html, /<option value="w_abs_hier">w_abs<\/option>/);
-    assert.match(html, /<option value="w_abs_hier_vfi">w_abs_vfi<\/option>/);
+    assert.match(html, /<option value="w_abs_hier_vfi" selected>w_abs_vfi<\/option>/);
     assert.match(html, /id="humanoid-w-metric-increase-btn"/);
     assert.doesNotMatch(html, /id="humanoid-w-metric-decrease-btn"/);
     assert.doesNotMatch(html, />w-</);
@@ -35,6 +36,17 @@ test('index.html exposes the humanoid w selector surface with only hierarchical 
     assert.doesNotMatch(html, /<option value="w_abs_vfi">w_abs_vfi<\/option>/);
     assert.doesNotMatch(html, /w_abs_hier_vfi_iter/);
     assert.match(html, /仅保留普通可操作度与 VFI 可操作度。/);
+});
+
+test('humanoid joint controls no longer expose the differential base control section', () => {
+    const source = readFileSync(resolve(ROOT, 'src/ui/joint-controls.js'), 'utf8');
+
+    assert.doesNotMatch(source, /Differential Base/);
+    assert.doesNotMatch(source, /Point Stabilization/);
+    assert.doesNotMatch(source, /Path Tracking \(RPP\)/);
+    assert.doesNotMatch(source, /humanoid-base-point-controls/);
+    assert.doesNotMatch(source, /humanoid-base-path-controls/);
+    assert.doesNotMatch(source, /rpp-run-btn/);
 });
 
 test('index.html hides the humanoid VFI step backend selector and task-equivalent branching toggle', () => {
