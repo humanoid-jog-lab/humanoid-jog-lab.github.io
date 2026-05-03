@@ -61,6 +61,9 @@ export function getHumanoidTaskMetricDisplayName(metric = '', contextRaw = '') {
     if (metric === 'w_abs_hier_vfi') {
         return `w_${prefix}_vfi`;
     }
+    if (metric === 'w_abs_hier_ext') {
+        return `w_${prefix}_ext`;
+    }
     if (metric === 'w_abs_hier') {
         return `w_${prefix}`;
     }
@@ -70,6 +73,7 @@ export function getHumanoidTaskMetricDisplayName(metric = '', contextRaw = '') {
 export function getHumanoidTaskMetricOptionLabels(contextRaw = '') {
     return {
         w_abs_hier: getHumanoidTaskMetricDisplayName('w_abs_hier', contextRaw),
+        w_abs_hier_ext: getHumanoidTaskMetricDisplayName('w_abs_hier_ext', contextRaw),
         w_abs_hier_vfi: getHumanoidTaskMetricDisplayName('w_abs_hier_vfi', contextRaw)
     };
 }

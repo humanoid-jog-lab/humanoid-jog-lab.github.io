@@ -129,12 +129,51 @@ export function summarizePairedMethodDelta(
 
 function formatValue(value, column = {}) {
     if (!Number.isFinite(value)) return 'n/a';
+    if (column.format === 'sci') {
+        const digits = Number.isInteger(column.digits) ? column.digits : 2;
+        const text = value.toExponential(digits);
+        const [mantissa, exponent] = text.split('e');
+        return `${mantissa}\\times 10^{${Number(exponent)}}`;
+    }
     if (column.format === 'percent') {
         const digits = Number.isInteger(column.digits) ? column.digits : 1;
         return `${(value * 100).toFixed(digits)}%`;
     }
     const digits = Number.isInteger(column.digits) ? column.digits : 3;
     return value.toFixed(digits);
+}
+
+function csvCell(value) {
+    const text = value == null ? '' : String(value);
+    return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+}
+
+function latexCell(value) {
+    return String(value)
+        .replaceAll('\\', '\\textbackslash{}')
+        .replaceAll('&', '\\&')
+        .replaceAll('%', '\\%')
+        .replaceAll('$', '\\$')
+        .replaceAll('#', '\\#')
+        .replaceAll('_', '\\_')
+        .replaceAll('{', '\\{')
+        .replaceAll('}', '\\}');
+}
+
+function formatTableCell(row = {}, column = {}) {
+    const value = row?.[column.key];
+    if (typeof value === 'string') return value;
+    return formatValue(value, column);
+}
+
+function formatLatexTableCell(row = {}, column = {}) {
+    const value = row?.[column.key];
+    if (typeof value === 'number') {
+        const formatted = formatValue(value, column);
+        return column.format === 'sci' && Number.isFinite(value) ? `$${formatted}$` : formatted;
+    }
+    if (typeof value === 'string') return latexCell(value);
+    return latexCell(formatValue(value, column));
 }
 
 export function formatBenchmarkMarkdownTable(
@@ -156,4 +195,43 @@ export function formatBenchmarkMarkdownTable(
         return `| ${cells.join(' | ')} |`;
     });
     return [header, separator, ...body].join('\n');
+}
+
+export function formatBenchmarkCsvTable(
+    rows = [],
+    { columns = [] } = {}
+) {
+    const safeRows = Array.isArray(rows) ? rows : [];
+    const safeColumns = Array.isArray(columns) ? columns : [];
+    if (safeColumns.length === 0) return '';
+
+    const header = safeColumns.map((column) => csvCell(column.label)).join(',');
+    const body = safeRows.map((row) => safeColumns
+        .map((column) => csvCell(formatTableCell(row, column)))
+        .join(','));
+    return `${[header, ...body].join('\n')}\n`;
+}
+
+export function formatBenchmarkLatexTable(
+    rows = [],
+    { columns = [] } = {}
+) {
+    const safeRows = Array.isArray(rows) ? rows : [];
+    const safeColumns = Array.isArray(columns) ? columns : [];
+    if (safeColumns.length === 0) return '';
+
+    const alignment = 'l'.repeat(safeColumns.length);
+    const header = safeColumns.map((column) => latexCell(column.label)).join(' & ');
+    const body = safeRows.map((row) => safeColumns
+        .map((column) => formatLatexTableCell(row, column))
+        .join(' & '));
+    return [
+        `\\begin{tabular}{${alignment}}`,
+        '\\toprule',
+        `${header} \\\\`,
+        '\\midrule',
+        ...body.map((line) => `${line} \\\\`),
+        '\\bottomrule',
+        '\\end{tabular}'
+    ].join('\n');
 }

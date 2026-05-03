@@ -222,6 +222,54 @@ function buildConflictingSafetyBiasProblem(q) {
     };
 }
 
+function buildSecondaryBiasProblem(q, { conflictPrimary = false } = {}) {
+    const primaryResidual = 1 - q[0];
+    const secondaryRow = conflictPrimary ? [-1, 0] : [0, 1];
+    const secondaryTarget = conflictPrimary ? 0.5 : 0.1;
+    const secondaryMotion = secondaryRow.reduce((sum, value, index) => sum + value * (q[index] || 0), 0);
+    const secondaryResidual = Math.max(0, secondaryTarget - secondaryMotion);
+    return {
+        q: q.slice(),
+        equalities: {
+            residual: [primaryResidual],
+            jacobian: [[1, 0]],
+            residualNorm: Math.abs(primaryResidual),
+            activeResidual: [primaryResidual],
+            activeJacobian: [[1, 0]],
+            activeResidualNorm: Math.abs(primaryResidual),
+            weightedResidual: [primaryResidual],
+            weightedJacobian: [[1, 0]],
+            blocks: {
+                absolute: { residual: [primaryResidual] },
+                relative: { residual: [] },
+                bodyZ: null
+            }
+        },
+        inequalities: {
+            wvfiFloor: { enabled: false, violation: 0 },
+            jointLimitVFI: { enabled: false, rows: [], rhs: [], count: 0 },
+            waistXCorridor: { enabled: false, violation: 0, vfiRows: [], rhs: [] }
+        },
+        bounds: {
+            effectiveLower: [-10, -10],
+            effectiveUpper: [10, 10]
+        },
+        secondaryObjective: {
+            enabled: secondaryResidual > 0,
+            name: 'w_vfi',
+            rows: [secondaryRow],
+            targets: [secondaryResidual],
+            residual: [secondaryResidual],
+            residualNorm: secondaryResidual,
+            count: secondaryResidual > 0 ? 1 : 0
+        },
+        referenceModel: {
+            stiffnessRows: [1.0],
+            dampingRows: [0]
+        }
+    };
+}
+
 test('restoreHumanoidJogMJTrustRegion converges a simple restoration problem', () => {
     const result = restoreHumanoidJogMJTrustRegion({
         qInitial: [0],
@@ -234,6 +282,63 @@ test('restoreHumanoidJogMJTrustRegion converges a simple restoration problem', (
     assert.equal(result.reason, 'converged');
     assert.ok(Math.abs(result.qApplied[0] - 1) <= 1e-9);
     assert.ok(Number.isFinite(result.trustRadius));
+});
+
+test('restoreHumanoidJogMJTrustRegion can improve a low-priority secondary objective after primary convergence', () => {
+    const result = restoreHumanoidJogMJTrustRegion({
+        qInitial: [0, 0],
+        evaluateProblem: (q) => buildSecondaryBiasProblem(q),
+        maxIterations: 8,
+        equalityTolerance: 1e-9,
+        secondaryObjectiveEnabled: true,
+        secondaryObjectiveWeight: 1,
+        secondaryObjectiveDuringRestore: false,
+        secondaryObjectivePostConvergenceEnabled: true,
+        initialTrustRadius: 0.2
+    });
+
+    assert.equal(result.converged, true);
+    assert.equal(result.reason, 'converged');
+    assert.ok(Math.abs(result.qApplied[0] - 1) <= 1e-9);
+    assert.ok(result.qApplied[1] > 0.09);
+    assert.equal(result.secondaryStatus, 'active');
+    assert.ok(result.secondaryResidualAfter < result.secondaryResidualBefore);
+});
+
+test('restoreHumanoidJogMJTrustRegion keeps the primary task dominant over a conflicting secondary objective', () => {
+    const result = restoreHumanoidJogMJTrustRegion({
+        qInitial: [0, 0],
+        evaluateProblem: (q) => buildSecondaryBiasProblem(q, { conflictPrimary: true }),
+        maxIterations: 8,
+        equalityTolerance: 1e-6,
+        secondaryObjectiveEnabled: true,
+        secondaryObjectiveWeight: 0.002,
+        secondaryObjectiveDuringRestore: true,
+        secondaryObjectivePostConvergenceEnabled: false,
+        initialTrustRadius: 0.2
+    });
+
+    assert.equal(result.converged, true);
+    assert.equal(result.reason, 'converged');
+    assert.ok(Math.abs(result.qApplied[0] - 1) <= 1e-6);
+});
+
+test('restoreHumanoidJogMJTrustRegion gates secondary bias until the primary task is nearly held', () => {
+    const result = restoreHumanoidJogMJTrustRegion({
+        qInitial: [0, 0],
+        evaluateProblem: (q) => buildSecondaryBiasProblem(q),
+        maxIterations: 1,
+        equalityTolerance: 1e-9,
+        secondaryObjectiveEnabled: true,
+        secondaryObjectiveWeight: 1,
+        secondaryObjectiveActivationResidual: 1e-5,
+        secondaryObjectiveDuringRestore: true,
+        secondaryObjectivePostConvergenceEnabled: false,
+        initialTrustRadius: 0.2
+    });
+
+    assert.ok(result.qApplied[0] > 0.19);
+    assert.ok(Math.abs(result.qApplied[1]) <= 1e-9);
 });
 
 test('restoreHumanoidJogMJTrustRegion accepts a best-effort constraint-improving step that restoreHumanoidJogMJ rejects', () => {

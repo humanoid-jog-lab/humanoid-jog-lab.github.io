@@ -37,6 +37,14 @@ test('runHumanoidJogOfflineSampler produces deterministic samples without browse
         assert.equal(Number.isFinite(sample.err.inv), true);
         assert.equal(Number.isFinite(sample.step), true);
         assert.equal(Number.isFinite(sample.dmin), true);
+        assert.equal(Number.isFinite(sample.jointClearanceMin), true);
+        assert.equal(Number.isFinite(sample.waistClearanceMin), true);
+        assert.equal(Number.isFinite(sample.maxViolation), true);
+        assert.equal(typeof sample.terminalReason, 'string');
+        assert.equal(
+            Number.isFinite(sample.taskScale) || Number.isNaN(sample.taskScale),
+            true
+        );
         assert.equal(Number.isFinite(sample.waist_x.p0x), true);
         assert.equal(typeof sample.safety.tr_safety, 'string');
         assert.equal(Number.isFinite(sample.timingMs.solve), true);
@@ -60,7 +68,7 @@ test('serializeHumanoidJogOfflineSamplesToCsv exports high-signal plotting colum
 
     const csv = serializeHumanoidJogOfflineSamplesToCsv(result);
 
-    assert.match(csv, /^index,status,reason,err_cmd,err_inv,step,iters_total,dmin,waist_x,waist_d_plus,waist_d_minus,tr_safety,timing_solve_ms/);
+    assert.match(csv, /^index,status,reason,err_cmd,err_inv,step,iters_total,dmin,joint_clearance_min,waist_clearance_min,max_violation,task_scale,terminal_reason,waist_x,waist_d_plus,waist_d_minus,tr_safety,timing_solve_ms/);
     assert.equal(csv.trim().split('\n').length, 3);
     assert.doesNotMatch(csv, /Playwright|chromium|document|window/);
 });

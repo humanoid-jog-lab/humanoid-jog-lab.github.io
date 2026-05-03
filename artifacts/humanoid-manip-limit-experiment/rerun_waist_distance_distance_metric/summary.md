@@ -1,0 +1,5 @@
+| Scenario | Controller | Success / ticks | Task-valid ticks | Progress (m) | Avg. task deviation | Avg. invariant deviation | Avg. joint-limit clearance (rad) | Avg. waist-corridor clearance (m) | Mean / P95 solve time (ms) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| waist-distance | Recovery Optimization (TR) | yes / 30 | 30 / 30 | 0.075 | 1.20\times 10^{-10} | 9.26\times 10^{-9} | 0.000 | 0.198 | 53.9 / 59.2 |
+| waist-distance | Recovery Optimization (TR+w) | yes / 30 | 22 / 30 | 0.075 | 6.65\times 10^{-7} | 1.33\times 10^{-7} | 0.000 | 0.244 | 5782.0 / 6690.1 |
+| waist-distance | Recovery Optimization (TR+w_vfi) | yes / 30 | 30 / 30 | 0.075 | 2.46\times 10^{-9} | 2.52\times 10^{-8} | 0.093 | 0.188 | 257.3 / 350.7 |

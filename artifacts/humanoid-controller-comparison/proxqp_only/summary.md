@@ -1,0 +1,5 @@
+| Scenario | Controller | Success / ticks | Task-valid ticks | Progress (m) | Avg. task deviation | Avg. invariant deviation | Avg. joint-limit clearance (rad) | Avg. waist-corridor clearance (m) | Mean / P95 solve time (ms) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| absolute | ProxQP | yes / 30 | 6 / 30 | 0.075 | 2.63\times 10^{-6} | 1.19\times 10^{-6} | 0.000 | n/a | 36.0 / 50.2 |
+| decoupled-upright | ProxQP | no / n/a | 93 / 100 | 0.250 | 7.42\times 10^{-7} | 3.47\times 10^{-6} | 0.000 | 0.094 | 34.4 / 41.5 |
+| waist-distance | ProxQP | yes / 30 | 0 / 100 | 0.250 | 2.43\times 10^{-6} | 3.69\times 10^{-8} | 0.000 | 0.183 | 27.6 / 29.8 |

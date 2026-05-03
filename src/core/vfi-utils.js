@@ -303,8 +303,7 @@ export function solveQPNumericActiveSet(
         const iterations = Number.isFinite(rawIterations?.[0]) ? rawIterations[0] : 0;
         const solverMessageRaw = typeof result?.message === 'string' ? result.message.trim() : '';
         const feasible = finite && maxHalfspaceViolation(A, b, x) <= solutionTolerance;
-        const converged = feasible || (finite && solverMessageRaw.length === 0);
-        if (!feasible) {
+        if (!feasible && options.disableFallback !== true) {
             const fallback = solveQPProjectedGradient(H, f, A, b, xSeed, options);
             const fallbackFeasible = Array.isArray(fallback?.x)
                 && maxHalfspaceViolation(A, b, fallback.x) <= solutionTolerance;
@@ -325,9 +324,9 @@ export function solveQPNumericActiveSet(
         return {
             x,
             iterations,
-            converged,
+            converged: feasible,
             objective: evaluateQuadraticObjective(H, f, x),
-            solverMessage: solverMessageRaw || null,
+            solverMessage: solverMessageRaw || (feasible ? null : 'infeasible_solution'),
             rawIterations
         };
     } catch (error) {

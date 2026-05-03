@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+    buildVFIMarginAscentGradient,
     buildManipulabilityVFIConstraints,
     computeProtectedSecondaryGradient,
     projectSecondaryGradient,
@@ -55,6 +56,77 @@ test('summarizeManipulabilityVFIConstraints counts joint-limit and extra rows se
         totalCount: 3,
         minDistance: 0.02
     });
+});
+
+test('buildVFIMarginAscentGradient points inward for joint limits and extra corridor rows', () => {
+    const gradient = buildVFIMarginAscentGradient({
+        qActive: [0.95, -0.95, 0],
+        activeLimits: [
+            { lower: 0, upper: 1 },
+            { lower: -1, upper: 1 },
+            { lower: -2, upper: 2 }
+        ],
+        activationThreshold: 0.1,
+        extraConstraints: [
+            { row: [0, 0, -1], distance: 0.02, threshold: 0.1 }
+        ]
+    });
+
+    assert.ok(gradient[0] < 0, 'upper-limit margin should push negative');
+    assert.ok(gradient[1] > 0, 'lower-limit margin should push positive');
+    assert.ok(gradient[2] < 0, 'extra corridor row should be included');
+    const norm = Math.sqrt(gradient.reduce((sum, value) => sum + value * value, 0));
+    assert.ok(Math.abs(norm - 1) < 1e-9);
+});
+
+test('buildVFIMarginAscentGradient ignores margins outside the secondary activation distance', () => {
+    const gradient = buildVFIMarginAscentGradient({
+        qActive: [0.85, 0],
+        activeLimits: [
+            { lower: 0, upper: 1 },
+            { lower: -1, upper: 1 }
+        ],
+        activationThreshold: 0.15,
+        activationDistance: 0.08
+    });
+
+    assert.deepEqual(gradient, [0, 0]);
+});
+
+test('buildVFIMarginAscentGradient activates within the w_vfi joint-limit band', () => {
+    const gradient = buildVFIMarginAscentGradient({
+        qActive: [0.88],
+        activeLimits: [
+            { lower: 0, upper: 1 }
+        ],
+        activationThreshold: 0.15,
+        activationDistance: 0.15
+    });
+
+    assert.ok(gradient[0] < 0, '0.12 rad upper-limit margin should still retreat inside the 0.15 rad w_vfi band');
+});
+
+test('buildVFIMarginAscentGradient log_margin prioritizes the closest active margin', () => {
+    const options = {
+        qActive: [0, 0],
+        activeLimits: null,
+        activationThreshold: 0.1,
+        activationDistance: 0.1,
+        extraConstraints: [
+            { row: [1, 0], distance: 0.01, threshold: 0.1 },
+            { row: [0, 1], distance: 0.08, threshold: 0.1 }
+        ]
+    };
+    const marginGradient = buildVFIMarginAscentGradient(options);
+    const logGradient = buildVFIMarginAscentGradient({
+        ...options,
+        objective: 'log_margin',
+        logEpsilon: 1e-4
+    });
+    const marginRatio = Math.abs(marginGradient[0] / marginGradient[1]);
+    const logRatio = Math.abs(logGradient[0] / logGradient[1]);
+
+    assert.ok(logRatio > marginRatio * 2, 'log-margin weighting should favor the smaller clearance more strongly');
 });
 
 test('projectSecondaryGradient removes protected row-space components and normalizes the remainder', () => {

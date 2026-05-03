@@ -1,0 +1,2 @@
+tick,applied,reason,runtime_ms,command_error,invariant_error,body_error,q_step_inf,q_step_l2,joint_clearance_min,waist_x,waist_clearance_min,u_before,u_after,v_center,strip_spacing,normal_offset,tr_safety
+1,false,command_mismatch,185.10000000149012,0.002874787266468114,0.0007549114608252081,0.0007549114608252081,0,0,0.2486299999999999,-0.23372557470881442,0,0.21323796500458786,0.21323796500458786,0.49996996855708764,0.9999283364894275,0.05,skipped

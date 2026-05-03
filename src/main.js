@@ -19,7 +19,6 @@ import { initVisualizer, initDefaultIARobot, registerRobotManagerCallbacks } fro
 // ── UI 模块 ──────────────────────────────────
 import { registerJointControlsCallbacks } from './ui/joint-controls.js';
 import { registerDisplayCallbacks } from './ui/display.js';
-import { registerEnvironmentPanelCallbacks } from './ui/environment-panel.js';
 import { registerPanelManagerCallbacks } from './ui/panel-manager.js';
 import { registerModeSwitcherCallbacks } from './ui/mode-switcher.js';
 import { registerEventHandlersCallbacks } from './ui/event-handlers.js';
@@ -47,7 +46,6 @@ function registerAllCallbacks() {
     // UI
     registerJointControlsCallbacks();
     registerDisplayCallbacks();
-    registerEnvironmentPanelCallbacks();
     registerPanelManagerCallbacks();
     registerModeSwitcherCallbacks();
     registerEventHandlersCallbacks();

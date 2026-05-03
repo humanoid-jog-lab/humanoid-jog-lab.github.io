@@ -459,7 +459,7 @@ test('setupHumanoidParameterControls restores, applies, and validates humanoid j
     }
 });
 
-test('setupHumanoidJogSolverControls falls back stored mj_restore_pre_w selections to the safety-biased TR default', () => {
+test('setupHumanoidJogSolverControls falls back stored mj_restore_pre_w selections to the TR+w_vfi default', () => {
     const originalWindow = globalThis.window;
     const originalDocument = globalThis.document;
     const originalLocalStorage = globalThis.localStorage;
@@ -468,7 +468,7 @@ test('setupHumanoidJogSolverControls falls back stored mj_restore_pre_w selectio
     const originalClearInterval = globalThis.clearInterval;
 
     const humanoidJogSolverSelect = createMockElement('vfi');
-    const humanoidJogMetricSelect = createMockSelect('w_abs_hier', ['w_abs_hier', 'w_abs_hier_vfi']);
+    const humanoidJogMetricSelect = createMockSelect('w_abs_hier', ['w_abs_hier', 'w_abs_hier_ext', 'w_abs_hier_vfi']);
     const humanoidWMetricIncreaseBtn = createMockElement('');
     const humanoidWaistXCorridorToggle = createMockElement('');
     const humanoidWaistXCorridorMinInput = createMockElement('-0.10');
@@ -525,6 +525,9 @@ test('setupHumanoidJogSolverControls falls back stored mj_restore_pre_w selectio
         optimizeHumanoidHierarchicalAbsoluteManipulability(direction) {
             metricOptimizationCalls.push(`w_abs_hier:${direction}`);
         },
+        optimizeHumanoidHierarchicalAbsoluteExtendedManipulability(direction) {
+            metricOptimizationCalls.push(`w_abs_hier_ext:${direction}`);
+        },
         optimizeHumanoidHierarchicalAbsoluteVFIManipulability(direction) {
             metricOptimizationCalls.push(`w_abs_hier_vfi:${direction}`);
         },
@@ -536,36 +539,36 @@ test('setupHumanoidJogSolverControls falls back stored mj_restore_pre_w selectio
     try {
         setupHumanoidJogSolverControls();
 
-        assert.equal(humanoidJogSolverSelect.value, 'mj_restore_tr_safe');
+        assert.equal(humanoidJogSolverSelect.value, 'mj_restore_tr_safe_wvfi');
         assert.equal(humanoidJogMetricSelect.value, 'w_abs_hier_vfi');
         assert.deepEqual(
             humanoidJogMetricSelect.options.map((option) => option.textContent),
-            ['w_abs', 'w_abs_vfi']
+            ['w_abs', 'w_abs_ext', 'w_abs_vfi']
         );
         assert.equal(humanoidWaistXCorridorToggle.checked, true);
         assert.equal(humanoidWaistXCorridorMinInput.value, '-0.12');
         assert.equal(humanoidWaistXCorridorMaxInput.value, '0.12');
         assert.equal(humanoidTestDualArmLockToggle.checked, true);
-        assert.equal(globalThis.window.humanoidJogSolverMode, 'mj_restore_tr_safe');
+        assert.equal(globalThis.window.humanoidJogSolverMode, 'mj_restore_tr_safe_wvfi');
         assert.equal(globalThis.window.humanoidManifoldJogSecondaryMetric, 'w_abs_hier_vfi');
         assert.equal(globalThis.window.humanoidWaistXCorridorEnabled, true);
         assert.equal(globalThis.window.humanoidWaistXCorridorMin, -0.12);
         assert.equal(globalThis.window.humanoidWaistXCorridorMax, 0.12);
-        assert.deepEqual(visualizerCalls, ['mj_restore_tr_safe']);
+        assert.deepEqual(visualizerCalls, ['mj_restore_tr_safe_wvfi']);
         assert.deepEqual(metricOptimizationCalls, ['set:w_abs_hier_vfi']);
         assert.deepEqual(waistXCorridorCalls, [true]);
         assert.deepEqual(waistXCorridorMinCalls, [-0.12]);
         assert.deepEqual(waistXCorridorMaxCalls, [0.12]);
         assert.deepEqual(testLockCalls, [true]);
-        assert.equal(globalThis.localStorage.getItem('humanoid-jog-solver-mode'), 'mj_restore_tr_safe');
-        assert.equal(globalThis.localStorage.getItem('humanoid-jog-default-version'), 'tr-safe-vfi-metric');
+        assert.equal(globalThis.localStorage.getItem('humanoid-jog-solver-mode'), 'mj_restore_tr_safe_wvfi');
+        assert.equal(globalThis.localStorage.getItem('humanoid-jog-default-version'), 'tr-wvfi-three-solver');
         assert.equal(globalThis.localStorage.getItem('humanoid-manifold-jog-metric'), 'w_abs_hier_vfi');
         assert.equal(globalThis.localStorage.getItem('humanoid-waist-x-corridor-enabled'), '1');
         assert.equal(globalThis.localStorage.getItem('humanoid-waist-x-corridor-min'), '-0.12');
         assert.equal(globalThis.localStorage.getItem('humanoid-waist-x-corridor-max'), '0.12');
         assert.equal(globalThis.localStorage.getItem('humanoid-test-dual-arm-lock-enabled'), '1');
 
-        humanoidJogSolverSelect.trigger('change', 'priority');
+        humanoidJogSolverSelect.trigger('change', 'mj_restore_tr_w');
         humanoidJogMetricSelect.trigger('change', 'w_abs_hier');
         controlModeSelect.trigger('change', 'relative');
         humanoidWMetricIncreaseBtn.trigger('pointerdown');
@@ -574,21 +577,21 @@ test('setupHumanoidJogSolverControls falls back stored mj_restore_pre_w selectio
         humanoidWaistXCorridorToggle.trigger('change', false);
         humanoidTestDualArmLockToggle.trigger('change', false);
 
-        assert.equal(humanoidJogSolverSelect.value, 'priority');
+        assert.equal(humanoidJogSolverSelect.value, 'mj_restore_tr_w');
         assert.equal(humanoidJogMetricSelect.value, 'w_abs_hier');
         assert.deepEqual(
             humanoidJogMetricSelect.options.map((option) => option.textContent),
-            ['w_rel', 'w_rel_vfi']
+            ['w_rel', 'w_rel_ext', 'w_rel_vfi']
         );
         assert.equal(humanoidWaistXCorridorToggle.checked, false);
         assert.equal(humanoidWaistXCorridorMinInput.value, '-0.08');
         assert.equal(humanoidTestDualArmLockToggle.checked, false);
-        assert.equal(globalThis.window.humanoidJogSolverMode, 'priority');
+        assert.equal(globalThis.window.humanoidJogSolverMode, 'mj_restore_tr_w');
         assert.equal(globalThis.window.humanoidManifoldJogSecondaryMetric, 'w_abs_hier');
         assert.equal(globalThis.window.humanoidWaistXCorridorEnabled, false);
         assert.equal(globalThis.window.humanoidWaistXCorridorMin, -0.08);
         assert.equal(globalThis.window.humanoidWaistXCorridorMax, 0.08);
-        assert.deepEqual(visualizerCalls, ['mj_restore_tr_safe', 'priority']);
+        assert.deepEqual(visualizerCalls, ['mj_restore_tr_safe_wvfi', 'mj_restore_tr_w']);
         assert.deepEqual(metricOptimizationCalls, [
             'set:w_abs_hier_vfi',
             'set:w_abs_hier',
@@ -598,7 +601,7 @@ test('setupHumanoidJogSolverControls falls back stored mj_restore_pre_w selectio
         assert.deepEqual(waistXCorridorMinCalls, [-0.12, -0.08]);
         assert.deepEqual(waistXCorridorMaxCalls, [0.12, 0.08]);
         assert.deepEqual(testLockCalls, [true, false]);
-        assert.equal(globalThis.localStorage.getItem('humanoid-jog-solver-mode'), 'priority');
+        assert.equal(globalThis.localStorage.getItem('humanoid-jog-solver-mode'), 'mj_restore_tr_w');
         assert.equal(globalThis.localStorage.getItem('humanoid-manifold-jog-metric'), 'w_abs_hier');
         assert.equal(globalThis.localStorage.getItem('humanoid-waist-x-corridor-enabled'), '0');
         assert.equal(globalThis.localStorage.getItem('humanoid-waist-x-corridor-min'), '-0.08');
@@ -630,6 +633,86 @@ test('setupHumanoidJogSolverControls falls back stored mj_restore_pre_w selectio
         } else {
             globalThis.clearInterval = originalClearInterval;
         }
+        appState.visualizer = originalVisualizer;
+    }
+});
+
+test('setupHumanoidJogSolverControls resets legacy JS comparison solvers to TR+w_vfi', () => {
+    const originalWindow = globalThis.window;
+    const originalDocument = globalThis.document;
+    const originalLocalStorage = globalThis.localStorage;
+    const originalVisualizer = appState.visualizer;
+    const originalSetInterval = globalThis.setInterval;
+    const originalClearInterval = globalThis.clearInterval;
+
+    const humanoidJogSolverSelect = createMockElement('vfi');
+    const humanoidJogMetricSelect = createMockSelect('w_abs_hier_ext', ['w_abs_hier', 'w_abs_hier_ext', 'w_abs_hier_vfi']);
+    const humanoidWMetricIncreaseBtn = createMockElement('');
+    const humanoidWaistXCorridorToggle = createMockElement('');
+    const humanoidTestDualArmLockToggle = createMockElement('');
+    const controlModeSelect = createMockElement('absolute');
+    const visualizerCalls = [];
+
+    globalThis.window = {};
+    globalThis.document = {
+        getElementById(id) {
+            if (id === 'humanoid-jog-solver-select') return humanoidJogSolverSelect;
+            if (id === 'humanoid-manifold-jog-metric-select') return humanoidJogMetricSelect;
+            if (id === 'humanoid-w-metric-increase-btn') return humanoidWMetricIncreaseBtn;
+            if (id === 'humanoid-waist-x-corridor-toggle') return humanoidWaistXCorridorToggle;
+            if (id === 'humanoid-test-dual-arm-lock-toggle') return humanoidTestDualArmLockToggle;
+            if (id === 'dual-arm-control-mode-select') return controlModeSelect;
+            return null;
+        }
+    };
+    globalThis.localStorage = createMockLocalStorage([
+        ['humanoid-jog-solver-mode', 'hqp'],
+        ['humanoid-manifold-jog-metric', 'w_abs_hier_vfi'],
+        ['humanoid-jog-default-version', 'tr-wvfi-three-solver']
+    ]);
+    globalThis.setInterval = () => 1;
+    globalThis.clearInterval = () => {};
+    appState.visualizer = {
+        setHumanoidJogSolverMode(mode) {
+            visualizerCalls.push(mode);
+        },
+        setHumanoidManifoldJogSecondaryMetric() {},
+        setHumanoidWaistXCorridorEnabled() {},
+        setHumanoidTestDualArmLockEnabled() {}
+    };
+
+    try {
+        setupHumanoidJogSolverControls();
+        assert.equal(humanoidJogSolverSelect.value, 'mj_restore_tr_safe_wvfi');
+        assert.equal(globalThis.window.humanoidJogSolverMode, 'mj_restore_tr_safe_wvfi');
+        assert.deepEqual(visualizerCalls, ['mj_restore_tr_safe_wvfi']);
+        assert.equal(globalThis.localStorage.getItem('humanoid-jog-solver-mode'), 'mj_restore_tr_safe_wvfi');
+
+        humanoidJogSolverSelect.trigger('change', 'sns');
+        assert.equal(humanoidJogSolverSelect.value, 'mj_restore_tr_safe_wvfi');
+        assert.equal(globalThis.window.humanoidJogSolverMode, 'mj_restore_tr_safe_wvfi');
+        assert.equal(globalThis.localStorage.getItem('humanoid-jog-solver-mode'), 'mj_restore_tr_safe_wvfi');
+
+        humanoidJogSolverSelect.trigger('change', 'predictive_ik');
+        assert.equal(humanoidJogSolverSelect.value, 'mj_restore_tr_safe_wvfi');
+        assert.equal(globalThis.window.humanoidJogSolverMode, 'mj_restore_tr_safe_wvfi');
+        assert.equal(globalThis.localStorage.getItem('humanoid-jog-solver-mode'), 'mj_restore_tr_safe_wvfi');
+
+        humanoidJogSolverSelect.trigger('change', 'proxqp');
+        assert.equal(humanoidJogSolverSelect.value, 'mj_restore_tr_safe_wvfi');
+        assert.equal(globalThis.window.humanoidJogSolverMode, 'mj_restore_tr_safe_wvfi');
+        assert.equal(globalThis.localStorage.getItem('humanoid-jog-solver-mode'), 'mj_restore_tr_safe_wvfi');
+    } finally {
+        if (originalWindow === undefined) delete globalThis.window;
+        else globalThis.window = originalWindow;
+        if (originalDocument === undefined) delete globalThis.document;
+        else globalThis.document = originalDocument;
+        if (originalLocalStorage === undefined) delete globalThis.localStorage;
+        else globalThis.localStorage = originalLocalStorage;
+        if (originalSetInterval === undefined) delete globalThis.setInterval;
+        else globalThis.setInterval = originalSetInterval;
+        if (originalClearInterval === undefined) delete globalThis.clearInterval;
+        else globalThis.clearInterval = originalClearInterval;
         appState.visualizer = originalVisualizer;
     }
 });
@@ -1036,11 +1119,11 @@ test('setupHumanoidJogSolverControls falls back when storage contains a removed 
 
     try {
         setupHumanoidJogSolverControls();
-        assert.equal(humanoidJogSolverSelect.value, 'mj_restore_tr_safe');
-        assert.equal(globalThis.window.humanoidJogSolverMode, 'mj_restore_tr_safe');
-        assert.deepEqual(visualizerCalls, ['mj_restore_tr_safe']);
-        assert.equal(globalThis.localStorage.getItem('humanoid-jog-solver-mode'), 'mj_restore_tr_safe');
-        assert.equal(globalThis.localStorage.getItem('humanoid-jog-default-version'), 'tr-safe-vfi-metric');
+        assert.equal(humanoidJogSolverSelect.value, 'mj_restore_tr_safe_wvfi');
+        assert.equal(globalThis.window.humanoidJogSolverMode, 'mj_restore_tr_safe_wvfi');
+        assert.deepEqual(visualizerCalls, ['mj_restore_tr_safe_wvfi']);
+        assert.equal(globalThis.localStorage.getItem('humanoid-jog-solver-mode'), 'mj_restore_tr_safe_wvfi');
+        assert.equal(globalThis.localStorage.getItem('humanoid-jog-default-version'), 'tr-wvfi-three-solver');
     } finally {
         if (originalWindow === undefined) delete globalThis.window;
         else globalThis.window = originalWindow;
@@ -1056,7 +1139,7 @@ test('setupHumanoidJogSolverControls falls back when storage contains a removed 
     }
 });
 
-test('setupHumanoidJogSolverControls auto-switches ruled-surface polishing modes onto the safety-biased TR solver when the current solver is unsupported', () => {
+test('setupHumanoidJogSolverControls keeps ruled-surface polishing modes on supported TR solvers', () => {
     const originalWindow = globalThis.window;
     const originalDocument = globalThis.document;
     const originalLocalStorage = globalThis.localStorage;
@@ -1100,15 +1183,15 @@ test('setupHumanoidJogSolverControls auto-switches ruled-surface polishing modes
 
     try {
         setupHumanoidJogSolverControls();
-        assert.equal(humanoidJogSolverSelect.value, 'priority');
-        assert.equal(globalThis.window.humanoidJogSolverMode, 'priority');
+        assert.equal(humanoidJogSolverSelect.value, 'mj_restore_tr_safe_wvfi');
+        assert.equal(globalThis.window.humanoidJogSolverMode, 'mj_restore_tr_safe_wvfi');
 
         controlModeSelect.trigger('change', 'left-ruled-surface-polishing');
 
-        assert.equal(humanoidJogSolverSelect.value, 'mj_restore_tr_safe');
-        assert.equal(globalThis.window.humanoidJogSolverMode, 'mj_restore_tr_safe');
-        assert.deepEqual(visualizerCalls, ['priority', 'mj_restore_tr_safe']);
-        assert.equal(globalThis.localStorage.getItem('humanoid-jog-solver-mode'), 'mj_restore_tr_safe');
+        assert.equal(humanoidJogSolverSelect.value, 'mj_restore_tr_safe_wvfi');
+        assert.equal(globalThis.window.humanoidJogSolverMode, 'mj_restore_tr_safe_wvfi');
+        assert.deepEqual(visualizerCalls, ['mj_restore_tr_safe_wvfi']);
+        assert.equal(globalThis.localStorage.getItem('humanoid-jog-solver-mode'), 'mj_restore_tr_safe_wvfi');
     } finally {
         if (originalWindow === undefined) delete globalThis.window;
         else globalThis.window = originalWindow;
@@ -1135,7 +1218,7 @@ test('setupHumanoidJogSolverControls repeats humanoid w+ while the button is hel
     const originalClearInterval = globalThis.clearInterval;
 
     const humanoidJogSolverSelect = createMockElement('mj_restore');
-    const humanoidJogMetricSelect = createMockSelect('w_abs_hier_vfi', ['w_abs_hier', 'w_abs_hier_vfi']);
+    const humanoidJogMetricSelect = createMockSelect('w_abs_hier_ext', ['w_abs_hier', 'w_abs_hier_ext', 'w_abs_hier_vfi']);
     const humanoidWMetricIncreaseBtn = createMockElement('');
     const humanoidWaistXCorridorToggle = createMockElement('');
     const humanoidTestDualArmLockToggle = createMockElement('');
@@ -1162,7 +1245,10 @@ test('setupHumanoidJogSolverControls repeats humanoid w+ while the button is hel
             return null;
         }
     };
-    globalThis.localStorage = createMockLocalStorage();
+    globalThis.localStorage = createMockLocalStorage([
+        ['humanoid-jog-default-version', 'tr-wvfi-three-solver'],
+        ['humanoid-manifold-jog-metric', 'w_abs_hier_ext']
+    ]);
     globalThis.setTimeout = (handler) => {
         const id = nextTimerId++;
         timeoutCallbacks.set(id, handler);
@@ -1191,6 +1277,9 @@ test('setupHumanoidJogSolverControls repeats humanoid w+ while the button is hel
         optimizeHumanoidHierarchicalAbsoluteManipulability(direction) {
             metricOptimizationCalls.push(`w_abs_hier:${direction}`);
         },
+        optimizeHumanoidHierarchicalAbsoluteExtendedManipulability(direction) {
+            metricOptimizationCalls.push(`w_abs_hier_ext:${direction}`);
+        },
         optimizeHumanoidHierarchicalAbsoluteVFIManipulability(direction) {
             metricOptimizationCalls.push(`w_abs_hier_vfi:${direction}`);
         }
@@ -1202,7 +1291,7 @@ test('setupHumanoidJogSolverControls repeats humanoid w+ while the button is hel
 
         humanoidWMetricIncreaseBtn.trigger('pointerdown');
 
-        assert.deepEqual(metricOptimizationCalls, ['w_abs_hier_vfi:increase']);
+        assert.deepEqual(metricOptimizationCalls, ['w_abs_hier_ext:increase']);
         assert.equal(timeoutCallbacks.size, 1);
         assert.equal(intervalCallbacks.size, 0);
 
@@ -1218,9 +1307,9 @@ test('setupHumanoidJogSolverControls repeats humanoid w+ while the button is hel
         repeatIntervalHandler();
 
         assert.deepEqual(metricOptimizationCalls, [
-            'w_abs_hier_vfi:increase',
-            'w_abs_hier_vfi:increase',
-            'w_abs_hier_vfi:increase'
+            'w_abs_hier_ext:increase',
+            'w_abs_hier_ext:increase',
+            'w_abs_hier_ext:increase'
         ]);
 
         humanoidWMetricIncreaseBtn.trigger('pointerup');
@@ -1246,7 +1335,73 @@ test('setupHumanoidJogSolverControls repeats humanoid w+ while the button is hel
     }
 });
 
-test('setupEventListeners stops repeating cooperative ruled-surface polishing commands after a failed step', () => {
+test('setupHumanoidJogSolverControls keeps supported TR solvers for cooperative DQ set-point polishing modes', () => {
+    const originalWindow = globalThis.window;
+    const originalDocument = globalThis.document;
+    const originalLocalStorage = globalThis.localStorage;
+    const originalVisualizer = appState.visualizer;
+    const originalSetInterval = globalThis.setInterval;
+    const originalClearInterval = globalThis.clearInterval;
+
+    const humanoidJogSolverSelect = createMockElement('mj_restore_tr_w');
+    const humanoidJogMetricSelect = createMockSelect('w_abs_hier_vfi', ['w_abs_hier', 'w_abs_hier_vfi']);
+    const humanoidWMetricIncreaseBtn = createMockElement('');
+    const humanoidWaistXCorridorToggle = createMockElement('');
+    const humanoidTestDualArmLockToggle = createMockElement('');
+    const controlModeSelect = createMockElement('absolute');
+    const visualizerCalls = [];
+
+    globalThis.window = {};
+    globalThis.document = {
+        getElementById(id) {
+            if (id === 'humanoid-jog-solver-select') return humanoidJogSolverSelect;
+            if (id === 'humanoid-manifold-jog-metric-select') return humanoidJogMetricSelect;
+            if (id === 'humanoid-w-metric-increase-btn') return humanoidWMetricIncreaseBtn;
+            if (id === 'humanoid-waist-x-corridor-toggle') return humanoidWaistXCorridorToggle;
+            if (id === 'humanoid-test-dual-arm-lock-toggle') return humanoidTestDualArmLockToggle;
+            if (id === 'dual-arm-control-mode-select') return controlModeSelect;
+            return null;
+        }
+    };
+    globalThis.localStorage = createMockLocalStorage([
+        ['humanoid-jog-solver-mode', 'mj_restore_tr_w'],
+        ['humanoid-jog-default-version', 'tr-wvfi-three-solver']
+    ]);
+    globalThis.setInterval = () => 1;
+    globalThis.clearInterval = () => {};
+    appState.visualizer = {
+        setHumanoidJogSolverMode(mode) {
+            visualizerCalls.push(mode);
+        },
+        setHumanoidManifoldJogSecondaryMetric() {},
+        setHumanoidWaistXCorridorEnabled() {},
+        setHumanoidTestDualArmLockEnabled() {}
+    };
+
+    try {
+        setupHumanoidJogSolverControls();
+        controlModeSelect.trigger('change', 'cooperative-ruled-surface-polishing-dq-setpoint');
+
+        assert.equal(humanoidJogSolverSelect.value, 'mj_restore_tr_w');
+        assert.equal(globalThis.window.humanoidJogSolverMode, 'mj_restore_tr_w');
+        assert.deepEqual(visualizerCalls, ['mj_restore_tr_w']);
+        assert.equal(globalThis.localStorage.getItem('humanoid-jog-solver-mode'), 'mj_restore_tr_w');
+    } finally {
+        if (originalWindow === undefined) delete globalThis.window;
+        else globalThis.window = originalWindow;
+        if (originalDocument === undefined) delete globalThis.document;
+        else globalThis.document = originalDocument;
+        if (originalLocalStorage === undefined) delete globalThis.localStorage;
+        else globalThis.localStorage = originalLocalStorage;
+        if (originalSetInterval === undefined) delete globalThis.setInterval;
+        else globalThis.setInterval = originalSetInterval;
+        if (originalClearInterval === undefined) delete globalThis.clearInterval;
+        else globalThis.clearInterval = originalClearInterval;
+        appState.visualizer = originalVisualizer;
+    }
+});
+
+test('setupEventListeners stops repeating cooperative DQ polishing commands after a failed step', () => {
     const originalWindow = globalThis.window;
     const originalDocument = globalThis.document;
     const originalLocalStorage = globalThis.localStorage;
@@ -1262,7 +1417,7 @@ test('setupEventListeners stops repeating cooperative ruled-surface polishing co
         }
     };
 
-    const controlModeSelect = createMockElement('cooperative-ruled-surface-polishing');
+    const controlModeSelect = createMockElement('cooperative-ruled-surface-polishing-dq-setpoint');
     const intervalCallbacks = new Map();
     const clearedIntervals = [];
     let nextTimerId = 1;

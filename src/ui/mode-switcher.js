@@ -17,7 +17,6 @@ function getHumanoidModeDescription(mode) {
     if (mode === 'robot2') return t('Right Arm Mode: control the right end-effector');
     if (mode === 'robot2-waist') return t('Right Arm + Waist Mode: control the right end-effector with waist cooperation while keeping the left end-effector fixed');
     if (mode === 'left-ruled-surface-polishing') return t('Left Ruled-Surface Polishing: control u, v, and n while keeping the right arm and waist fixed');
-    if (mode === 'cooperative-ruled-surface-polishing') return t('Cooperative Surface Polishing: share forward u, center vc, and normal n, while Δv controls the polishing bandwidth');
     if (mode === 'cooperative-ruled-surface-polishing-dq-setpoint') return t('Cooperative Surface Polishing (DQ Set-point, Waist Maintained): use the same shared strip parameters and true dual-quaternion pose targets while keeping waist participation and body-z maintenance');
     if (mode === 'cooperative-ruled-surface-polishing-dq-setpoint-arm-only') return t('Cooperative Surface Polishing (DQ Set-point, Arms Only): use the same shared strip parameters and true dual-quaternion pose targets without waist participation');
     if (mode === 'relative') return t('Relative Pose Mode: control the relative pose while keeping the absolute pose unchanged');
@@ -141,10 +140,6 @@ export function switchToHumanoidUI() {
                 opt.textContent = t('Left Ruled-Surface Polishing');
                 opt.hidden = false;
             }
-            else if (opt.value === 'cooperative-ruled-surface-polishing') {
-                opt.textContent = t('Cooperative Surface Polishing');
-                opt.hidden = false;
-            }
             else if (opt.value === 'cooperative-ruled-surface-polishing-dq-setpoint') {
                 opt.textContent = t('Cooperative Surface Polishing (DQ Set-point, Waist Maintained)');
                 opt.hidden = false;
@@ -174,8 +169,7 @@ export function switchToHumanoidUI() {
             }
             const isLeftRuledSurfacePolishingMode = mode === 'left-ruled-surface-polishing';
             const isCooperativePolishingMode =
-                mode === 'cooperative-ruled-surface-polishing'
-                || mode === 'cooperative-ruled-surface-polishing-dq-setpoint'
+                mode === 'cooperative-ruled-surface-polishing-dq-setpoint'
                 || mode === 'cooperative-ruled-surface-polishing-dq-setpoint-arm-only';
             setTeachPendantSurfaceLabels(
                 isCooperativePolishingMode
@@ -260,9 +254,6 @@ export function switchToDualArmUI() {
     const robot2WaistOption = controlModeSelect
         ? Array.from(controlModeSelect.options).find(opt => opt.value === 'robot2-waist')
         : null;
-    const cooperativePolishingOption = controlModeSelect
-        ? Array.from(controlModeSelect.options).find(opt => opt.value === 'cooperative-ruled-surface-polishing')
-        : null;
     const cooperativePolishingDQSetpointOption = controlModeSelect
         ? Array.from(controlModeSelect.options).find(opt => opt.value === 'cooperative-ruled-surface-polishing-dq-setpoint')
         : null;
@@ -287,12 +278,6 @@ export function switchToDualArmUI() {
     if (robot2WaistOption) {
         robot2WaistOption.hidden = true;
         if (controlModeSelect.value === 'robot2-waist') {
-            controlModeSelect.value = 'absolute';
-        }
-    }
-    if (cooperativePolishingOption) {
-        cooperativePolishingOption.hidden = true;
-        if (controlModeSelect.value === 'cooperative-ruled-surface-polishing') {
             controlModeSelect.value = 'absolute';
         }
     }

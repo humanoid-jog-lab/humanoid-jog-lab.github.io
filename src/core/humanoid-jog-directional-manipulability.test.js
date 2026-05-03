@@ -6,6 +6,7 @@ import {
     evaluateHumanoidJogAbsoluteManipulability,
     evaluateHumanoidJogAbsoluteArmManipulability,
     evaluateHumanoidJogAbsoluteArmVFIManipulability,
+    evaluateHumanoidJogAbsoluteHierarchicalExtendedManipulability,
     evaluateHumanoidJogAbsoluteHierarchicalManipulability,
     evaluateHumanoidJogAbsoluteHierarchicalVFIManipulability,
     evaluateHumanoidJogAbsoluteVFIManipulability,
@@ -13,6 +14,7 @@ import {
     evaluateHumanoidJogProjectedManipulability,
     evaluateHumanoidJogTaskArmManipulability,
     evaluateHumanoidJogTaskArmVFIManipulability,
+    evaluateHumanoidJogTaskHierarchicalExtendedManipulability,
     evaluateHumanoidJogTaskHierarchicalManipulability,
     evaluateHumanoidJogTaskHierarchicalVFIManipulability,
     evaluateHumanoidJogTaskManipulability,
@@ -107,6 +109,15 @@ test('evaluateHumanoidJogAbsoluteHierarchicalManipulability prefers w_abs_hier o
     assert.equal(value, 0.31);
 });
 
+test('evaluateHumanoidJogAbsoluteHierarchicalExtendedManipulability prefers explicit extended score', () => {
+    const value = evaluateHumanoidJogAbsoluteHierarchicalExtendedManipulability({
+        w_abs_hier: 0.31,
+        w_abs_hier_ext: 0.42
+    });
+
+    assert.equal(value, 0.42);
+});
+
 test('evaluateHumanoidJogAbsoluteArmVFIManipulability prefers w_abs_arm_vfi over w_abs_vfi and w_abs_arm', () => {
     const value = evaluateHumanoidJogAbsoluteArmVFIManipulability({
         w: 0.9,
@@ -160,6 +171,15 @@ test('evaluateHumanoidJogTaskManipulability prefers generic current-task w_task 
     });
 
     assert.equal(value, 0.22);
+});
+
+test('evaluateHumanoidJogTaskHierarchicalExtendedManipulability prefers current-task extended score', () => {
+    const value = evaluateHumanoidJogTaskHierarchicalExtendedManipulability({
+        w_abs_hier_ext: 0.42,
+        w_task_hier_ext: 0.24
+    });
+
+    assert.equal(value, 0.24);
 });
 
 test('evaluateHumanoidJogTaskArmManipulability prefers generic current-task w_task_arm over task and absolute-arm fields', () => {

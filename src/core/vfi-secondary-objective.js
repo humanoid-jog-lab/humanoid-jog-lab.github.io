@@ -139,6 +139,73 @@ export function summarizeManipulabilityVFIConstraints(constraints = []) {
     };
 }
 
+export function buildVFIMarginAscentGradient({
+    qActive,
+    activeLimits,
+    extraConstraints = null,
+    activationThreshold = 0.05,
+    activationDistance = activationThreshold,
+    objective = 'margin',
+    logEpsilon = 1e-4,
+    maxLogWeight = 100,
+    normalize = true
+} = {}) {
+    const n = Array.isArray(qActive) ? qActive.length : 0;
+    const gradient = new Array(n).fill(0);
+    if (n === 0) return gradient;
+
+    const addMarginRow = (row, distance, threshold) => {
+        if (!Array.isArray(row) || row.length !== n) return;
+        const d = Math.max(0, asFinite(distance, Number.NaN));
+        const t = Math.max(1e-9, asFinite(threshold, activationThreshold));
+        const activeDistance = Math.max(0, asFinite(activationDistance, t));
+        if (!Number.isFinite(d)) return;
+        if (d > activeDistance) return;
+        const closeness = t / (d + t);
+        let weight = closeness * closeness;
+        if (objective === 'log_margin') {
+            const eps = Math.max(1e-12, asFinite(logEpsilon, 1e-4));
+            const cap = Math.max(1, asFinite(maxLogWeight, 100));
+            weight *= Math.min(cap, 1 / (d + eps));
+        }
+        for (let i = 0; i < n; i++) {
+            gradient[i] += weight * asFinite(row[i]);
+        }
+    };
+
+    const defaultThreshold = Math.max(1e-9, asFinite(activationThreshold, 0.05));
+    if (Array.isArray(activeLimits)) {
+        for (let i = 0; i < n; i++) {
+            const limit = activeLimits[i];
+            if (!limit) continue;
+            const qi = asFinite(qActive[i]);
+            const dUpper = Number.isFinite(limit.upper) ? Math.max(0, limit.upper - qi) : Infinity;
+            const dLower = Number.isFinite(limit.lower) ? Math.max(0, qi - limit.lower) : Infinity;
+            if (!Number.isFinite(dUpper) && !Number.isFinite(dLower)) continue;
+            const row = new Array(n).fill(0);
+            if (dUpper <= dLower) {
+                row[i] = -1;
+                addMarginRow(row, dUpper, defaultThreshold);
+            } else {
+                row[i] = 1;
+                addMarginRow(row, dLower, defaultThreshold);
+            }
+        }
+    }
+
+    if (Array.isArray(extraConstraints)) {
+        for (const constraint of extraConstraints) {
+            addMarginRow(
+                constraint?.row,
+                constraint?.distance,
+                Number.isFinite(constraint?.threshold) ? constraint.threshold : defaultThreshold
+            );
+        }
+    }
+
+    return normalize === false ? gradient : normalizeOrZero(gradient);
+}
+
 export function projectSecondaryGradient(gradient, protectRows = [], options = {}) {
     const grad = Array.isArray(gradient) ? gradient.map((value) => asFinite(value)) : [];
     if (grad.length === 0) return [];

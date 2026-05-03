@@ -1,3 +1,9 @@
+import {
+    buildHumanoidJogMJJointLimitVFIRows,
+    buildHumanoidJogMJSafetyObjective,
+    buildHumanoidJogMJWVFISecondaryObjective
+} from './humanoid-jog-mj-problem.js';
+
 function asFinite(value, fallback = 0) {
     return Number.isFinite(value) ? value : fallback;
 }
@@ -14,6 +20,15 @@ function cloneArray(values) {
 
 function cloneCorridorRows(corridor) {
     return cloneRows(corridor?.rows ?? corridor?.vfiRows);
+}
+
+function cloneCorridorConstraints(corridor) {
+    return Array.isArray(corridor?.vfiConstraints)
+        ? corridor.vfiConstraints.map((constraint) => ({
+            ...constraint,
+            row: Array.isArray(constraint?.row) ? constraint.row.slice() : []
+        }))
+        : [];
 }
 
 function repeatValue(count, value) {
@@ -128,6 +143,21 @@ export function buildHumanoidJogMJDistanceProblem(options = {}) {
             }
         },
         inequalities: {
+            jointLimitVFI: options?.enableJointLimitVFI === false
+                ? {
+                    enabled: false,
+                    rows: [],
+                    rhs: [],
+                    count: 0
+                }
+                : buildHumanoidJogMJJointLimitVFIRows({
+                    q,
+                    lowerBounds,
+                    upperBounds,
+                    stepBounds,
+                    eta: options?.jointLimitEta,
+                    edgeStopDistance: options?.jointLimitEdgeStopDistance
+                }),
             wvfiFloor: {
                 enabled: Number.isFinite(options.wvfiLowerBound) && options.wvfiLowerBound > 0,
                 violation: 0
@@ -135,10 +165,18 @@ export function buildHumanoidJogMJDistanceProblem(options = {}) {
             waistXCorridor: {
                 enabled: options?.waistXCorridor?.enabled === true,
                 violation: 0,
+                value: typeof options?.waistXCorridor?.evaluateX === 'function'
+                    ? Number(options.waistXCorridor.evaluateX(q))
+                    : (Number.isFinite(options?.waistXCorridor?.value) ? options.waistXCorridor.value : Number.NaN),
                 min: Number.isFinite(options?.waistXCorridor?.min) ? options.waistXCorridor.min : Number.NEGATIVE_INFINITY,
                 max: Number.isFinite(options?.waistXCorridor?.max) ? options.waistXCorridor.max : Number.POSITIVE_INFINITY,
                 tolerance: Math.max(0, asFinite(options?.waistXCorridor?.tolerance, 0)),
+                threshold: Number.isFinite(options?.waistXCorridor?.threshold) ? options.waistXCorridor.threshold : Number.NaN,
+                activationThreshold: Number.isFinite(options?.waistXCorridor?.activationThreshold)
+                    ? options.waistXCorridor.activationThreshold
+                    : Number.NaN,
                 vfiRows: cloneCorridorRows(options?.waistXCorridor),
+                vfiConstraints: cloneCorridorConstraints(options?.waistXCorridor),
                 rhs: cloneArray(options?.waistXCorridor?.rhs)
             }
         },
@@ -181,6 +219,34 @@ export function buildHumanoidJogMJDistanceProblem(options = {}) {
         ...repeatValue(relativeRows, problem.referenceModel.relative.damping),
         ...repeatValue(bodyRows, problem.referenceModel.bodyZ.damping)
     ];
+    problem.safetyObjective = options?.mjRestoreSafetyPushEnabled === true
+        ? buildHumanoidJogMJSafetyObjective({
+            problem,
+            lowerBounds,
+            upperBounds,
+            jointLimitActivationThreshold: options?.jointLimitActivationThreshold,
+            safetyPushTargetFraction: options?.safetyPushTargetFraction,
+            safetyPushMaxDistanceStep: options?.safetyPushMaxDistanceStep,
+            safetyPushIncludeWaistCorridor: options?.safetyPushIncludeWaistCorridor,
+            safetyPushWaistCorridorTargetDistance: options?.safetyPushWaistCorridorTargetDistance,
+            safetyPushWaistCorridorMaxDistanceStep: options?.safetyPushWaistCorridorMaxDistanceStep,
+            safetyPushWaistCorridorWeightScale: options?.safetyPushWaistCorridorWeightScale
+        })
+        : {
+            enabled: false,
+            rows: [],
+            targets: [],
+            residual: [],
+            residualNorm: 0,
+            count: 0
+        };
+    problem.secondaryObjective = buildHumanoidJogMJWVFISecondaryObjective({
+        q: problem?.q,
+        wvfiState: options?.wvfiState,
+        enabled: options?.mjRestoreWVFISecondaryEnabled === true,
+        step: options?.mjRestoreWVFISecondaryStep,
+        name: options?.mjRestoreSecondaryObjectiveName
+    });
 
     return problem;
 }

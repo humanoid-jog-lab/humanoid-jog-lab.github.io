@@ -2,9 +2,15 @@ import { t } from '../i18n.js';
 
 export function normalizeHumanoidJogSolverMode(modeRaw) {
     return modeRaw === 'priority'
+        || modeRaw === 'hqp'
+        || modeRaw === 'sns'
+        || modeRaw === 'predictive_ik'
+        || modeRaw === 'proxqp'
         || modeRaw === 'mj_restore'
         || modeRaw === 'mj_restore_tr'
         || modeRaw === 'mj_restore_tr_safe'
+        || modeRaw === 'mj_restore_tr_w'
+        || modeRaw === 'mj_restore_tr_safe_wvfi'
         || modeRaw === 'mj_restore_pre_w'
         ? modeRaw
         : 'vfi';
@@ -12,9 +18,15 @@ export function normalizeHumanoidJogSolverMode(modeRaw) {
 
 export function getHumanoidJogSolverDisplayName(mode) {
     if (mode === 'priority') return t('Null-space Projection');
+    if (mode === 'hqp') return 'HQP';
+    if (mode === 'sns') return 'SNS';
+    if (mode === 'predictive_ik') return 'Predictive IK';
+    if (mode === 'proxqp') return 'ProxQP';
     if (mode === 'mj_restore') return t('Restore (LS)');
     if (mode === 'mj_restore_tr') return t('Recovery Optimization (TR)');
     if (mode === 'mj_restore_tr_safe') return t('Recovery Optimization (TR+Safety Bias)');
+    if (mode === 'mj_restore_tr_w') return t('Recovery Optimization (TR+w)');
+    if (mode === 'mj_restore_tr_safe_wvfi') return t('Recovery Optimization (TR+w_vfi)');
     if (mode === 'mj_restore_pre_w') return t('MuJoCo-style Recovery + w Pre-optimization');
     return 'new qpJ';
 }

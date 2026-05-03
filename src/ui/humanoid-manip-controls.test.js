@@ -8,11 +8,18 @@ const ROOT = resolve(import.meta.dirname, '../..');
 test('index.html only exposes the supported humanoid jog solvers', () => {
     const html = readFileSync(resolve(ROOT, 'index.html'), 'utf8');
 
-    assert.match(html, /<option value="vfi">new qpJ<\/option>/);
-    assert.match(html, /<option value="priority">零空间投影<\/option>/);
-    assert.match(html, /<option value="mj_restore">Restore \(LS\)<\/option>/);
+    assert.doesNotMatch(html, /<option value="vfi">/);
+    assert.doesNotMatch(html, /<option value="priority">/);
+    assert.doesNotMatch(html, /<option value="hqp">/);
+    assert.doesNotMatch(html, /<option value="sns">/);
+    assert.doesNotMatch(html, /<option value="predictive_ik">/);
+    assert.doesNotMatch(html, /<option value="proxqp">/);
+    assert.doesNotMatch(html, /<option value="wbc_qp">/);
+    assert.doesNotMatch(html, /<option value="mj_restore">/);
     assert.match(html, /<option value="mj_restore_tr">恢复优化\(TR\)<\/option>/);
-    assert.match(html, /<option value="mj_restore_tr_safe" selected>恢复优化\(TR\+安全偏置\)<\/option>/);
+    assert.doesNotMatch(html, /<option value="mj_restore_tr_safe">/);
+    assert.match(html, /<option value="mj_restore_tr_w">恢复优化\(TR\+w\)<\/option>/);
+    assert.match(html, /<option value="mj_restore_tr_safe_wvfi" selected>恢复优化\(TR\+w_vfi\)<\/option>/);
     assert.doesNotMatch(html, /<option value="mj_restore_pre_w">/);
     assert.doesNotMatch(html, /<option value="torso_seed_upright">Torso-Seeded Upright<\/option>/);
     assert.doesNotMatch(html, /<option value="torso_seed_upright_vfi">Torso-Seeded Upright \+ VFI-w<\/option>/);
@@ -27,6 +34,7 @@ test('index.html exposes the humanoid w selector surface with only hierarchical 
     assert.match(html, /id="humanoid-manifold-jog-metric-select"/);
     assert.match(html, /w 指标：/);
     assert.match(html, /<option value="w_abs_hier">w_abs<\/option>/);
+    assert.match(html, /<option value="w_abs_hier_ext">w_abs_ext<\/option>/);
     assert.match(html, /<option value="w_abs_hier_vfi" selected>w_abs_vfi<\/option>/);
     assert.match(html, /id="humanoid-w-metric-increase-btn"/);
     assert.doesNotMatch(html, /id="humanoid-w-metric-decrease-btn"/);
@@ -35,7 +43,7 @@ test('index.html exposes the humanoid w selector surface with only hierarchical 
     assert.doesNotMatch(html, /<option value="w_abs_arm">w_abs_arm<\/option>/);
     assert.doesNotMatch(html, /<option value="w_abs_vfi">w_abs_vfi<\/option>/);
     assert.doesNotMatch(html, /w_abs_hier_vfi_iter/);
-    assert.match(html, /仅保留普通可操作度与 VFI 可操作度。/);
+    assert.match(html, /仅保留普通、扩展与 VFI 可操作度。/);
 });
 
 test('humanoid joint controls no longer expose the differential base control section', () => {
@@ -58,6 +66,17 @@ test('index.html hides the humanoid VFI step backend selector and task-equivalen
     assert.doesNotMatch(html, /QP（新）/);
     assert.doesNotMatch(html, /id="humanoid-task-equivalent-branching-toggle"/);
     assert.doesNotMatch(html, /任务等价多分支/);
+});
+
+test('index.html hides the environment management panel and dock entry', () => {
+    const html = readFileSync(resolve(ROOT, 'index.html'), 'utf8');
+
+    assert.doesNotMatch(html, /id="environment-panel"/);
+    assert.doesNotMatch(html, /id="environment-toggle"/);
+    assert.doesNotMatch(html, /data-panel="environment-panel"/);
+    assert.doesNotMatch(html, /id="environment-object-list"/);
+    assert.doesNotMatch(html, /id="add-environment-box-btn"/);
+    assert.doesNotMatch(html, />环境管理</);
 });
 
 test('index.html exposes the humanoid dual-arm test lock toggle', () => {
@@ -108,14 +127,14 @@ test('index.html exposes the humanoid single-arm-plus-waist control modes', () =
     assert.match(html, /<option value="robot2-waist">右臂\+腰部<\/option>/);
 });
 
-test('index.html removes the old humanoid surface-slide control modes while exposing the new ruled-surface polishing modes', () => {
+test('index.html removes the old humanoid surface-slide and cooperative polishing control modes while exposing the DQ polishing modes', () => {
     const html = readFileSync(resolve(ROOT, 'index.html'), 'utf8');
 
     assert.doesNotMatch(html, /<option value="surface-slide">/);
     assert.doesNotMatch(html, /<option value="surface-slide-absolute">/);
     assert.doesNotMatch(html, /<option value="dual-independent-surface-slide">/);
     assert.match(html, /<option value="left-ruled-surface-polishing">左臂擦面<\/option>/);
-    assert.match(html, /<option value="cooperative-ruled-surface-polishing">双臂协同擦面<\/option>/);
+    assert.doesNotMatch(html, /<option value="cooperative-ruled-surface-polishing">/);
     assert.match(html, /<option value="cooperative-ruled-surface-polishing-dq-setpoint">双臂协同擦面（DQ目标，腰部维持）<\/option>/);
     assert.match(html, /<option value="cooperative-ruled-surface-polishing-dq-setpoint-arm-only">双臂协同擦面（DQ目标，无腰部）<\/option>/);
 });

@@ -52,6 +52,13 @@ export function evaluateHumanoidJogCommandOutcome(options = {}) {
     let reason = typeof options.stopReason === 'string' && options.stopReason.length > 0
         ? options.stopReason
         : 'max_iter';
+    const toleranceUpgradeableReasons = new Set([
+        'max_iter',
+        'best_effort',
+        'best_effort_time_budget',
+        'safety_limited',
+        'secondary_limited'
+    ]);
 
     if (reason === 'polish_converged') {
         reason = 'converged';
@@ -84,7 +91,7 @@ export function evaluateHumanoidJogCommandOutcome(options = {}) {
             (Number.isFinite(finalInvariantNorm) && finalInvariantNorm <= hardInvariantTol)
         )
     );
-    if ((reason === 'max_iter' || reason === 'best_effort') && hardSatisfied) {
+    if (toleranceUpgradeableReasons.has(reason) && hardSatisfied) {
         reason = 'converged';
     }
 
@@ -98,7 +105,7 @@ export function evaluateHumanoidJogCommandOutcome(options = {}) {
             (Number.isFinite(finalInvariantNorm) && finalInvariantNorm <= practicalInvariantTol)
         )
     );
-    if ((reason === 'max_iter' || reason === 'best_effort') && practicalSatisfied) {
+    if (toleranceUpgradeableReasons.has(reason) && practicalSatisfied) {
         reason = 'practical_converged';
     }
 

@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { computeTwistJacobian, computeVFIAttenuationMatrix } from './cctsm.js';
+import {
+    computeExtendedConditionManipulability,
+    computeTwistJacobian,
+    computeVFIAttenuationMatrix
+} from './cctsm.js';
 
 function multiplyQuaternions(a, b) {
     const [aw, ax, ay, az] = a;
@@ -69,6 +73,64 @@ test('computeVFIAttenuationMatrix remains weakly active away from the boundary',
 
     assert.ok(farFromLimit[0][0] > 0.8);
     assert.ok(farFromLimit[0][0] < 1);
+});
+
+test('computeVFIAttenuationMatrix stays positive semidefinite for repeated non-orthogonal rows', () => {
+    const W = computeVFIAttenuationMatrix([
+        { row: [1, 0], distance: 0, threshold: 0.15, source: 'joint_limit' },
+        { row: [1, 0], distance: 0, threshold: 0.15, source: 'joint_limit' },
+        { row: [1, 1], distance: 0.02, threshold: 0.15, source: 'joint_limit' }
+    ], 2);
+
+    assert.ok(W[0][0] >= -1e-12);
+    assert.ok(W[1][1] >= -1e-12);
+    assert.ok(W[0][0] * W[1][1] - W[0][1] * W[1][0] >= -1e-12);
+});
+
+test('computeExtendedConditionManipulability reduces to the plain condition score away from constraints', () => {
+    const J = [
+        [2, 0],
+        [0, 1]
+    ];
+
+    const plain = computeExtendedConditionManipulability(J, []);
+    const far = computeExtendedConditionManipulability(J, [
+        { row: [1, 0], distance: 10, threshold: 0.1, source: 'joint_limit' }
+    ]);
+
+    assert.ok(Math.abs(plain.value - 0.5) < 1e-12);
+    assert.ok(Math.abs(far.value - plain.value) < 0.01);
+});
+
+test('computeExtendedConditionManipulability penalizes task directions that reduce a near active margin', () => {
+    const J = [
+        [1, 0],
+        [0, 1]
+    ];
+
+    const free = computeExtendedConditionManipulability(J, []);
+    const nearUpper = computeExtendedConditionManipulability(J, [
+        { row: [-1, 0], distance: 0.001, threshold: 0.1, source: 'joint_limit' }
+    ]);
+
+    assert.ok(nearUpper.value < free.value);
+    assert.ok(nearUpper.worstGamma.some((value) => value > 0));
+});
+
+test('computeExtendedConditionManipulability accepts waist-corridor distance rows as obstacle-like margins', () => {
+    const J = [
+        [1, 0.2],
+        [0.1, 1]
+    ];
+
+    const looseCorridor = computeExtendedConditionManipulability(J, [
+        { row: [0.8, 0.1], distance: 0.5, threshold: 0.025, source: 'waist_corridor' }
+    ]);
+    const tightCorridor = computeExtendedConditionManipulability(J, [
+        { row: [0.8, 0.1], distance: 0.001, threshold: 0.025, source: 'waist_corridor' }
+    ]);
+
+    assert.ok(tightCorridor.value < looseCorridor.value);
 });
 
 test('computeTwistJacobian matches the paper H8- right-product extraction', () => {

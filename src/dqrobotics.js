@@ -16,16 +16,16 @@ export async function initDQRobotics() {
     }
     
     try {
-        // 使用 script 标签加载 WASM 模块
-        // Vite 不允许直接从 /public 导入 JS 文件
-        const scriptUrl = `${import.meta.env.BASE_URL}wasm/dqrobotics.js`;
-        
         // 检查是否已加载
         if (typeof window.createDQRoboticsModule === 'function') {
             DQModule = await window.createDQRoboticsModule();
             console.log('✓ DQ Robotics WASM 模块加载成功');
             return DQModule;
         }
+
+        // 使用 script 标签加载 WASM 模块
+        // Vite 不允许直接从 /public 导入 JS 文件
+        const scriptUrl = `${import.meta.env?.BASE_URL ?? '/'}wasm/dqrobotics.js`;
         
         // 动态添加 script 标签
         const script = document.createElement('script');

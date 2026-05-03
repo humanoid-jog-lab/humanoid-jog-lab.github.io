@@ -8,6 +8,7 @@ import {
 
 test('getHumanoidTaskMetricDisplayName maps hierarchical metrics to relative task labels', () => {
     assert.equal(getHumanoidTaskMetricDisplayName('w_abs_hier', 'relative'), 'w_rel');
+    assert.equal(getHumanoidTaskMetricDisplayName('w_abs_hier_ext', 'relative'), 'w_rel_ext');
     assert.equal(getHumanoidTaskMetricDisplayName('w_abs_hier_vfi', 'relative-fullbody'), 'w_rel_vfi');
 });
 
@@ -21,10 +22,12 @@ test('getHumanoidTaskMetricDisplayName maps hierarchical metrics to robot and di
 test('getHumanoidTaskMetricOptionLabels preserves absolute labels and only changes visible task prefixes', () => {
     assert.deepEqual(getHumanoidTaskMetricOptionLabels('absolute'), {
         w_abs_hier: 'w_abs',
+        w_abs_hier_ext: 'w_abs_ext',
         w_abs_hier_vfi: 'w_abs_vfi'
     });
     assert.deepEqual(getHumanoidTaskMetricOptionLabels('distance'), {
         w_abs_hier: 'w_rel',
+        w_abs_hier_ext: 'w_rel_ext',
         w_abs_hier_vfi: 'w_rel_vfi'
     });
 });

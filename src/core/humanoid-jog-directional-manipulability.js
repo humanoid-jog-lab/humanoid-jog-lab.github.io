@@ -56,10 +56,22 @@ export function evaluateHumanoidJogAbsoluteHierarchicalManipulability(cctsmResul
     return evaluateHumanoidJogAbsoluteManipulability(cctsmResult);
 }
 
+export function evaluateHumanoidJogAbsoluteHierarchicalExtendedManipulability(cctsmResult = null) {
+    const extended = Number.isFinite(cctsmResult?.w_abs_hier_ext) ? cctsmResult.w_abs_hier_ext : Number.NaN;
+    if (Number.isFinite(extended)) return extended;
+    return evaluateHumanoidJogAbsoluteHierarchicalManipulability(cctsmResult);
+}
+
 export function evaluateHumanoidJogTaskHierarchicalManipulability(cctsmResult = null) {
     const hierarchical = Number.isFinite(cctsmResult?.w_task_hier) ? cctsmResult.w_task_hier : Number.NaN;
     if (Number.isFinite(hierarchical)) return hierarchical;
     return evaluateHumanoidJogAbsoluteHierarchicalManipulability(cctsmResult);
+}
+
+export function evaluateHumanoidJogTaskHierarchicalExtendedManipulability(cctsmResult = null) {
+    const extended = Number.isFinite(cctsmResult?.w_task_hier_ext) ? cctsmResult.w_task_hier_ext : Number.NaN;
+    if (Number.isFinite(extended)) return extended;
+    return evaluateHumanoidJogAbsoluteHierarchicalExtendedManipulability(cctsmResult);
 }
 
 export function evaluateHumanoidJogAbsoluteArmManipulability(cctsmResult = null) {

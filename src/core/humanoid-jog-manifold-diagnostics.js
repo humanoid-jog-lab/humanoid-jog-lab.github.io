@@ -28,11 +28,13 @@ export function buildHumanoidJogManifoldOptimizationLabel({
                 ? 'w_abs_arm_opt'
                 : (metric === 'w_abs_hier'
                     ? 'w_abs_hier_opt'
+                : (metric === 'w_abs_hier_ext'
+                    ? 'w_abs_hier_ext_opt'
                 : (metric === 'w_abs_hier_vfi'
                     ? 'w_abs_hier_vfi_opt'
                 : (metric === 'w_abs_vfi'
                 ? 'w_abs_vfi_opt'
-                : (metric === 'sigma' ? 'sigma_opt' : 'wvfi_opt'))))));
+                : (metric === 'sigma' ? 'sigma_opt' : 'wvfi_opt')))))));
     const axisPart = typeof axisLabel === 'string' && axisLabel.trim().length > 0
         ? `  axis=${axisLabel.trim()}`
         : '';

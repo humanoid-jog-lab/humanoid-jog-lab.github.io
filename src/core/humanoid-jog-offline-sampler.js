@@ -76,6 +76,20 @@ function computeDmin(qActive = [], lowerBounds = [], upperBounds = []) {
     return Number.isFinite(best) ? Math.max(0, best) : Number.NaN;
 }
 
+function computeJointLimitViolation(qActive = [], lowerBounds = [], upperBounds = []) {
+    let violation = 0;
+    for (let index = 0; index < qActive.length; index += 1) {
+        const q = asFinite(qActive[index], 0);
+        if (Number.isFinite(lowerBounds[index])) {
+            violation = Math.max(violation, lowerBounds[index] - q);
+        }
+        if (Number.isFinite(upperBounds[index])) {
+            violation = Math.max(violation, q - upperBounds[index]);
+        }
+    }
+    return Math.max(0, violation);
+}
+
 function buildWaistXCorridor(activeCount, {
     includeWaist = false,
     min = -0.5,
@@ -159,6 +173,14 @@ function waistDiagnostics(corridor, qActive) {
         ),
         limit: corridor.max
     };
+}
+
+function waistClearanceMin(waistState = {}) {
+    const distances = [waistState.dPlus, waistState.dMinus]
+        .map((value) => asFinite(value, Number.NaN))
+        .filter(Number.isFinite);
+    if (distances.length === 0) return Number.NaN;
+    return Math.max(0, Math.min(...distances));
 }
 
 function blockResidualNorm(problem, blockName) {
@@ -288,7 +310,7 @@ export function runHumanoidJogOfflineSampler(options = {}) {
     const steps = Math.max(1, Math.floor(asFinite(options.steps, 10)));
     const speedPercent = Math.max(0, asFinite(options.speedPercent, 50));
     const includeWaist = options.includeWaist !== false;
-    const solverMode = String(options.solverMode || 'mj_restore_tr_safe');
+    const solverMode = String(options.solverMode || 'mj_restore_tr_safe_wvfi');
     const direction = String(options.direction || 'positive');
     const axis = String(options.axis || 'x');
     const sign = directionSign(direction);
@@ -372,6 +394,14 @@ export function runHumanoidJogOfflineSampler(options = {}) {
         const result = solved?.result || {};
         const activeStep = qAppliedActive.map((value, index) => asFinite(value, 0) - asFinite(qActive[index], 0));
         const waistState = waistDiagnostics(withWaistDistances(waistXCorridor, qAppliedActive), qAppliedActive);
+        const jointClearanceMin = computeDmin(qAppliedActive, lower, upper);
+        const jointLimitViolation = computeJointLimitViolation(qAppliedActive, lower, upper);
+        const waistViolation = asFinite(waistState.violation, 0);
+        const maxViolation = Math.max(
+            jointLimitViolation,
+            waistViolation,
+            asFinite(result.bestConstraintViolation, 0)
+        );
         samples.push({
             index: stepIndex,
             status: result.converged === true ? 'ok' : 'failed',
@@ -391,7 +421,12 @@ export function runHumanoidJogOfflineSampler(options = {}) {
                 restore: Math.max(0, asFinite(result.iterations, 0)),
                 polish: null
             },
-            dmin: computeDmin(qAppliedActive, lower, upper),
+            dmin: jointClearanceMin,
+            jointClearanceMin,
+            waistClearanceMin: waistClearanceMin(waistState),
+            maxViolation,
+            taskScale: asFinite(result.taskScale, Number.NaN),
+            terminalReason: String(result.reason || 'unknown'),
             waist_x: waistState,
             safety: {
                 tr_safety: String(result.safetyStatus || 'skipped'),
@@ -461,6 +496,11 @@ export function serializeHumanoidJogOfflineSamplesToCsv(result = {}) {
         'step',
         'iters_total',
         'dmin',
+        'joint_clearance_min',
+        'waist_clearance_min',
+        'max_violation',
+        'task_scale',
+        'terminal_reason',
         'waist_x',
         'waist_d_plus',
         'waist_d_minus',
@@ -478,6 +518,11 @@ export function serializeHumanoidJogOfflineSamplesToCsv(result = {}) {
             sample.step,
             sample.iters?.total,
             sample.dmin,
+            sample.jointClearanceMin,
+            sample.waistClearanceMin,
+            sample.maxViolation,
+            sample.taskScale,
+            sample.terminalReason,
             sample.waist_x?.p0x,
             sample.waist_x?.dPlus,
             sample.waist_x?.dMinus,

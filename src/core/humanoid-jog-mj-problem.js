@@ -8,13 +8,82 @@ function repeatValue(count, value) {
     return Array.from({ length: Math.max(0, count) }, () => value);
 }
 
+function vectorNorm(values) {
+    return Math.sqrt((Array.isArray(values) ? values : []).reduce((sum, value) => {
+        const numericValue = asFinite(value, 0);
+        return sum + numericValue * numericValue;
+    }, 0));
+}
+
 function stopInsideEdgeBand(slack, edgeStopDistance = 0) {
     const distance = Math.max(0, asFinite(edgeStopDistance, 0));
     if (!Number.isFinite(slack) || distance <= 0) return Math.max(0, slack);
     return slack > 0 && slack <= distance ? 0 : Math.max(0, slack);
 }
 
-function buildJointLimitVFIRows({
+export function buildHumanoidJogMJWVFISecondaryObjective({
+    q = [],
+    wvfiState = null,
+    enabled = false,
+    step = 0.002,
+    name = 'w_vfi'
+} = {}) {
+    const width = Array.isArray(q) ? q.length : 0;
+    const requestedStep = Math.max(0, asFinite(step, 0.002));
+    if (enabled !== true || width <= 0 || requestedStep <= 0 || typeof wvfiState !== 'function') {
+        return {
+            enabled: false,
+            name,
+            rows: [],
+            targets: [],
+            residual: [],
+            residualNorm: 0,
+            count: 0,
+            value: Number.NaN
+        };
+    }
+    const state = wvfiState(q);
+    const value = asFinite(state?.value, Number.NaN);
+    const gradient = Array.isArray(state?.gradient) ? state.gradient.slice(0, width).map((item) => asFinite(item, 0)) : [];
+    if (gradient.length !== width) {
+        return {
+            enabled: false,
+            name,
+            rows: [],
+            targets: [],
+            residual: [],
+            residualNorm: 0,
+            count: 0,
+            value
+        };
+    }
+    const norm = vectorNorm(gradient);
+    if (!(norm > 1e-10)) {
+        return {
+            enabled: false,
+            name,
+            rows: [],
+            targets: [],
+            residual: [],
+            residualNorm: 0,
+            count: 0,
+            value
+        };
+    }
+    const row = gradient.map((item) => item / norm);
+    return {
+        enabled: true,
+        name,
+        rows: [row],
+        targets: [requestedStep],
+        residual: [requestedStep],
+        residualNorm: requestedStep,
+        count: 1,
+        value
+    };
+}
+
+export function buildHumanoidJogMJJointLimitVFIRows({
     q = [],
     lowerBounds = [],
     upperBounds = [],
@@ -63,7 +132,7 @@ function buildJointLimitVFIRows({
     };
 }
 
-function buildHumanoidJogMJSafetyObjective({
+export function buildHumanoidJogMJSafetyObjective({
     problem,
     lowerBounds = [],
     upperBounds = [],
@@ -222,7 +291,7 @@ export function buildHumanoidJogMJProblem(options = {}) {
             rhs: [],
             count: 0
         }
-        : buildJointLimitVFIRows({
+        : buildHumanoidJogMJJointLimitVFIRows({
             q: problem?.q,
             lowerBounds: options?.lowerBounds,
             upperBounds: options?.upperBounds,
@@ -251,6 +320,13 @@ export function buildHumanoidJogMJProblem(options = {}) {
             residualNorm: 0,
             count: 0
         };
+    problem.secondaryObjective = buildHumanoidJogMJWVFISecondaryObjective({
+        q: problem?.q,
+        wvfiState: options?.wvfiState,
+        enabled: options?.mjRestoreWVFISecondaryEnabled === true,
+        step: options?.mjRestoreWVFISecondaryStep,
+        name: options?.mjRestoreSecondaryObjectiveName
+    });
 
     return problem;
 }

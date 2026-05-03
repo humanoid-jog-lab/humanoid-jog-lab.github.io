@@ -1,0 +1,2 @@
+Controller,Success / ticks,Task-valid ticks,Progress (u),Avg. task deviation,Avg. invariant deviation,Avg. joint clearance,Avg. waist clearance,Min joint clearance,Min waist clearance,Max violation,Mean solve ms,P95 solve ms,Terminal reason,Last reason
+ProxQP,no / 7,2 / 8,0.06996946424758316,0.000016382898086219426,0.0011639709866643239,0.24514078933892877,0.25799178861912403,0.2430367566108791,0.25346626689810775,0,106.33750000037253,138.19999999552965,max_iter,max_iter

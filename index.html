@@ -101,7 +101,6 @@
                                     <option value="distance">相对距离</option>
                                     <option value="distance-fullbody">全身相对距离</option>
                                     <option value="left-ruled-surface-polishing">左臂擦面</option>
-                                    <option value="cooperative-ruled-surface-polishing">双臂协同擦面</option>
                                     <option value="cooperative-ruled-surface-polishing-dq-setpoint">双臂协同擦面（DQ目标，腰部维持）</option>
                                     <option value="cooperative-ruled-surface-polishing-dq-setpoint-arm-only">双臂协同擦面（DQ目标，无腰部）</option>
                                     <option value="robot1">机器人1</option>
@@ -126,11 +125,9 @@
                             <div style="margin-top: 0.6rem;">
                                 <label style="font-size: 0.85rem; color: #cbd5e1; display: block; margin-bottom: 0.25rem;">点动求解器：</label>
                                 <select id="humanoid-jog-solver-select" style="width: 100%; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;">
-                                    <option value="vfi">new qpJ</option>
-                                    <option value="priority">零空间投影</option>
-                                    <option value="mj_restore">Restore (LS)</option>
                                     <option value="mj_restore_tr">恢复优化(TR)</option>
-                                    <option value="mj_restore_tr_safe" selected>恢复优化(TR+安全偏置)</option>
+                                    <option value="mj_restore_tr_w">恢复优化(TR+w)</option>
+                                    <option value="mj_restore_tr_safe_wvfi" selected>恢复优化(TR+w_vfi)</option>
                                 </select>
                                 <div style="font-size: 0.7rem; color: #64748b; margin-top: 0.2rem;">
                                     对人形协同点动模式生效，可随时切换。
@@ -140,13 +137,14 @@
                                 <label style="font-size: 0.85rem; color: #cbd5e1; display: block; margin-bottom: 0.25rem;">w 指标：</label>
                                 <select id="humanoid-manifold-jog-metric-select" style="width: 100%; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;">
                                     <option value="w_abs_hier">w_abs</option>
+                                    <option value="w_abs_hier_ext">w_abs_ext</option>
                                     <option value="w_abs_hier_vfi" selected>w_abs_vfi</option>
                                 </select>
                                 <div style="margin-top: 0.45rem;">
                                     <button id="humanoid-w-metric-increase-btn" class="demo-btn" style="width: 100%;">w+</button>
                                 </div>
                                 <div style="font-size: 0.7rem; color: #64748b; margin-top: 0.2rem;">
-                                    仅保留普通可操作度与 VFI 可操作度。
+                                    仅保留普通、扩展与 VFI 可操作度。
                                 </div>
                             </div>
                             <div style="margin-top: 0.6rem;">
@@ -206,7 +204,7 @@
                                     <button id="humanoid-cooperative-polishing-surface-source-cylinder-btn" class="demo-btn" style="width: 100%;">圆筒 Mesh</button>
                                 </div>
                                 <div style="font-size: 0.7rem; color: #64748b; margin-top: 0.2rem;">
-                                    仅影响“双臂协同擦面”模式，可在解析 ruled surface 与圆筒之间切换
+                                    仅影响擦面模式，可在解析 ruled surface 与圆筒之间切换
                                 </div>
                             </div>
                             <div style="margin-top: 0.6rem;">
@@ -632,43 +630,6 @@
         </div>
     </div>
 
-    <!-- 右上角环境管理面板（默认隐藏） -->
-    <div class="floating-panel environment-panel hidden" id="environment-panel">
-        <div class="panel-header">
-            <h2>环境管理</h2>
-            <button class="panel-toggle" id="environment-toggle">+</button>
-        </div>
-        <div class="panel-body">
-            <div class="panel-section">
-                <h2>场景预设</h2>
-                <p class="panel-subtitle env-panel-description">
-                    选择预设环境场景，为机器人提供仿真工作空间。
-                </p>
-                <div class="env-actions" style="display: flex; align-items: center; gap: 0.5rem;">
-                    <select id="scene-preset-select" style="flex: 1; padding: 0.4rem; font-size: 0.85rem; background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 4px;">
-                        <option value="none">无场景</option>
-                        <option value="warehouse">仓储机器人环境</option>
-                    </select>
-                </div>
-                <div id="scene-preset-info" class="scene-preset-info" style="display: none;"></div>
-            </div>
-            <div class="panel-section">
-                <h2>环境物体</h2>
-                <p class="panel-subtitle env-panel-description">
-                    管理场景中的附加物体，可添加箱子并附着到末端小球或双臂绝对姿态小球。
-                </p>
-                <div class="env-actions">
-                    <button id="add-environment-box-btn" class="demo-btn env-action-btn">
-                        添加箱子（41.5 × 30.5 × 14 cm）
-                    </button>
-                </div>
-                <div id="environment-object-list" class="environment-object-list">
-                    <div class="env-empty-message">当前场景没有环境物体</div>
-                </div>
-            </div>
-        </div>
-    </div>
-
     <!-- DQ 计算器面板（默认隐藏） -->
     <div class="floating-panel dq-calculator-panel hidden" id="dq-calculator-panel">
         <div class="panel-header">
@@ -959,10 +920,6 @@
         <button class="dock-item" data-panel="parameter-panel">
             <span class="dock-icon">⚙️</span>
             <span class="dock-label">参数面板</span>
-        </button>
-        <button class="dock-item" data-panel="environment-panel">
-            <span class="dock-icon">🌿</span>
-            <span class="dock-label">环境管理</span>
         </button>
         <button class="dock-item" data-panel="dq-calculator-panel">
             <span class="dock-icon">🧮</span>

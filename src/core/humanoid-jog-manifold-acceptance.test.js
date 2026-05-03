@@ -109,3 +109,45 @@ test('evaluateHumanoidJogManifoldAcceptance can accept practical convergence for
     assert.equal(result.hardSatisfied, false);
     assert.equal(result.practicalSatisfied, true);
 });
+
+test('evaluateHumanoidJogManifoldAcceptance accepts time-budget TR+w full-body residuals under invariant tolerance', () => {
+    const result = evaluateHumanoidJogManifoldAcceptance({
+        restorationConverged: false,
+        restorationAccepted: true,
+        absoluteResidual: [5.9e-8],
+        relativeResidual: [1.36e-6],
+        bodyResidual: [7.69e-7],
+        inequalityViolation: 0,
+        commandTolerance: 1e-8,
+        relativeTolerance: 1e-8,
+        practicalCommandTolerance: 1e-6,
+        practicalRelativeTolerance: 5e-5,
+        bodyTolerance: 5e-5,
+        inequalityTolerance: 1e-8
+    });
+
+    assert.equal(result.converged, true);
+    assert.equal(result.reason, 'practical_converged');
+    assert.equal(result.practicalSatisfied, true);
+});
+
+test('evaluateHumanoidJogManifoldAcceptance accepts practical TR+w command residuals above the MJ hard floor', () => {
+    const result = evaluateHumanoidJogManifoldAcceptance({
+        restorationConverged: false,
+        restorationAccepted: true,
+        absoluteResidual: [1.113e-6],
+        relativeResidual: [1.08e-7],
+        bodyResidual: [2.835e-6],
+        inequalityViolation: 0,
+        commandTolerance: 1e-8,
+        relativeTolerance: 1e-8,
+        practicalCommandTolerance: 1e-4,
+        practicalRelativeTolerance: 5e-5,
+        bodyTolerance: 5e-5,
+        inequalityTolerance: 1e-8
+    });
+
+    assert.equal(result.converged, true);
+    assert.equal(result.reason, 'practical_converged');
+    assert.equal(result.practicalSatisfied, true);
+});

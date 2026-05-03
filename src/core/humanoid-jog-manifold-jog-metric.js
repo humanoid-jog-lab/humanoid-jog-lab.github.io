@@ -7,6 +7,7 @@ const SUPPORTED_MANIFOLD_JOG_METRICS = new Set([
     'w_abs_arm_vfi',
     'w_abs_vfi',
     'w_abs_hier',
+    'w_abs_hier_ext',
     'w_abs_hier_vfi',
     'safety_margin',
     'sigma'
@@ -41,7 +42,7 @@ export function resolveHumanoidJogManifoldJogMetric(metric, options = {}) {
             diagnosticMetric: 'sigma'
         };
     }
-    if (normalized === 'w_abs_hier_vfi') {
+    if (normalized === 'w_abs_hier_vfi' || normalized === 'w_abs_hier_ext') {
         return {
             requestedMetric,
             metric: normalized,

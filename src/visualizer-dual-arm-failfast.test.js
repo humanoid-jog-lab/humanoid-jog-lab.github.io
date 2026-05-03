@@ -111,6 +111,69 @@ test('RobotVisualizer skips humanoid DQ effector markers when FK throws', () => 
     }
 });
 
+test('RobotVisualizer base-pose updates do not call cooperative WASM FK', () => {
+    let cooperativeCalls = 0;
+    let effectorFkCalls = 0;
+    withWindow({
+        humanoidMode: true,
+        humanoidQ: new Array(20).fill(0),
+        humanoidBasePose: { x: 0, y: 0, yaw: 0 },
+        DQModule: {
+            DQWrapper: {
+                createFromArray: () => ({}),
+                getTranslation: () => [0, 0, 0, 0],
+                getRotation: () => [1, 0, 0, 0]
+            }
+        },
+        dualArmSystem: {
+            getAbsolutePose: () => {
+                cooperativeCalls += 1;
+                throw new Error('base pose update should not call cooperative FK');
+            },
+            getRelativePose: () => [1, 0, 0, 0, 0, 0, 0, 0],
+            getAbsolutePoseJacobian: () => [],
+            getRelativePoseJacobian: () => []
+        }
+    }, () => {
+        const visualizer = new RobotVisualizer(null);
+        const makeLink = () => ({
+            getWorldPosition: (target) => target.set(0, 0, 0)
+        });
+        visualizer.humanoidURDF = {
+            position: { set: () => {} },
+            quaternion: { set: () => {} },
+            updateMatrixWorld: () => {},
+            links: {
+                waist: makeLink(),
+                left: makeLink(),
+                right: makeLink(),
+                head: makeLink()
+            }
+        };
+        visualizer.humanoidEffectorLinkNames = ['waist', 'left', 'right', 'head'];
+        visualizer.humanoidEffectorSpheres = {
+            children: Array.from({ length: 4 }, () => ({
+                position: { copy: () => {}, set: () => {} }
+            }))
+        };
+        visualizer.humanoidAbsoluteMarker = {
+            position: { set: () => {} },
+            quaternion: { set: () => {} }
+        };
+        visualizer.humanoidModel = {
+            fkmEffector: () => {
+                effectorFkCalls += 1;
+                throw new Error('base pose update should not call effector FK');
+            }
+        };
+        visualizer._updateHumanoidSurfaceSlideVisualization = () => {};
+
+        assert.doesNotThrow(() => visualizer.setHumanoidBasePose({ x: 0.1, y: 0.2, yaw: 0.3 }));
+        assert.equal(cooperativeCalls, 0);
+        assert.equal(effectorFkCalls, 0);
+    });
+});
+
 test('getHumanoidJogTranslationAxisGuard extracts the guard from internal options', () => {
     const guard = { commandDelta: [0.01, 0, 0] };
     assert.equal(getHumanoidJogTranslationAxisGuard({ translationAxisGuard: guard }), guard);

@@ -20,6 +20,32 @@ function vectorNorm(values) {
     return Math.sqrt(dot(values, values));
 }
 
+function subtractRowspaceComponent(row = [], protectRows = []) {
+    const validRows = (Array.isArray(protectRows) ? protectRows : [])
+        .filter((item) => Array.isArray(item) && item.length === row.length);
+    if (validRows.length === 0 || row.length === 0) return row.slice();
+    const gram = validRows.map((rowI) => validRows.map((rowJ) => dot(rowI, rowJ)));
+    const rhs = validRows.map((item) => dot(item, row));
+    let alpha = solveLinearSystem(gram, rhs);
+    if (!Array.isArray(alpha) || alpha.length !== validRows.length) {
+        const dampedGram = gram.map((gramRow, i) => gramRow.map((value, j) => (
+            i === j ? value + 1e-8 : value
+        )));
+        alpha = solveLinearSystem(dampedGram, rhs);
+    }
+    if (!Array.isArray(alpha) || alpha.length !== validRows.length) {
+        return new Array(row.length).fill(0);
+    }
+    const projected = row.slice();
+    for (let i = 0; i < validRows.length; i++) {
+        const scale = asFinite(alpha[i], 0);
+        for (let j = 0; j < row.length; j++) {
+            projected[j] -= scale * asFinite(validRows[i][j], 0);
+        }
+    }
+    return vectorNorm(projected) > 1e-10 ? projected : new Array(row.length).fill(0);
+}
+
 function solveLinearSystem(A, b) {
     const n = Array.isArray(A) ? A.length : 0;
     if (n === 0) return [];
@@ -99,8 +125,24 @@ function getSafetyResidualNorm(problem = {}) {
     return asFinite(problem?.safetyObjective?.residualNorm, 0);
 }
 
+function getSecondaryResidualNorm(problem = {}) {
+    return asFinite(problem?.secondaryObjective?.residualNorm, 0);
+}
+
 function buildSafetyLeastSquaresRows(problem = {}, weight = 0) {
     const objective = problem?.safetyObjective;
+    return buildObjectiveLeastSquaresRows(problem, objective, weight);
+}
+
+function buildSecondaryLeastSquaresRows(problem = {}, weight = 0) {
+    const objective = problem?.secondaryObjective;
+    return buildObjectiveLeastSquaresRows(problem, objective, weight, {
+        projectRows: problem?.equalities?.weightedJacobian,
+        normalizeRows: true
+    });
+}
+
+function buildObjectiveLeastSquaresRows(problem = {}, objective = null, weight = 0, options = {}) {
     const rows = Array.isArray(objective?.rows) ? objective.rows : [];
     const targets = Array.isArray(objective?.targets) ? objective.targets : [];
     const scale = Math.sqrt(Math.max(0, asFinite(weight, 0)));
@@ -113,7 +155,15 @@ function buildSafetyLeastSquaresRows(problem = {}, weight = 0) {
     for (let i = 0; i < rows.length; i++) {
         const row = Array.isArray(rows[i]) ? rows[i] : null;
         if (!row || row.length !== width) continue;
-        modelRows.push(row.map((value) => scale * asFinite(value, 0)));
+        const projectedRow = Array.isArray(options?.projectRows)
+            ? subtractRowspaceComponent(row.map((value) => asFinite(value, 0)), options.projectRows)
+            : row.map((value) => asFinite(value, 0));
+        const projectedNorm = vectorNorm(projectedRow);
+        if (projectedNorm <= 1e-10) continue;
+        const normalizedRow = options?.normalizeRows === true
+            ? projectedRow.map((value) => value / projectedNorm)
+            : projectedRow;
+        modelRows.push(normalizedRow.map((value) => scale * asFinite(value, 0)));
         modelTargets.push(scale * Math.max(0, asFinite(targets[i], 0)));
     }
     return { rows: modelRows, targets: modelTargets };
@@ -279,7 +329,8 @@ function buildRestorationStep(
     previousStep = [],
     damping = 1e-6,
     regularizationWeights = null,
-    safetyOptions = {}
+    safetyOptions = {},
+    secondaryOptions = {}
 ) {
     const jacobian = Array.isArray(problem?.equalities?.weightedJacobian)
         ? problem.equalities.weightedJacobian
@@ -298,12 +349,19 @@ function buildRestorationStep(
     const safetyRows = safetyOptions?.enabled === true
         ? buildSafetyLeastSquaresRows(problem, safetyOptions.weight)
         : { rows: [], targets: [] };
-    const modelJacobian = safetyRows.rows.length > 0
-        ? [...jacobian, ...safetyRows.rows]
-        : jacobian;
-    const modelReferenceResidual = safetyRows.targets.length > 0
-        ? [...referenceResidual, ...safetyRows.targets]
-        : referenceResidual;
+    const secondaryRows = secondaryOptions?.enabled === true
+        ? buildSecondaryLeastSquaresRows(problem, secondaryOptions.weight)
+        : { rows: [], targets: [] };
+    const modelJacobian = [
+        ...jacobian,
+        ...safetyRows.rows,
+        ...secondaryRows.rows
+    ];
+    const modelReferenceResidual = [
+        ...referenceResidual,
+        ...safetyRows.targets,
+        ...secondaryRows.targets
+    ];
     const linearStepRows = collectLinearStepInequalities(problem, width);
     const unconstrainedDQ = solveUnconstrainedLeastSquares(
         modelJacobian,
@@ -499,7 +557,13 @@ export function restoreHumanoidJogMJTrustRegion({
     safetyPushPoseHoldTolerance = 2e-6,
     safetyBiasReleaseResidual = null,
     safetyBiasDuringRestore = false,
-    safetyPushPostConvergenceEnabled = true
+    safetyPushPostConvergenceEnabled = true,
+    secondaryObjectiveEnabled = false,
+    secondaryObjectiveWeight = 0.002,
+    secondaryObjectiveActivationResidual = 1e-5,
+    secondaryObjectivePoseHoldTolerance = 2e-6,
+    secondaryObjectiveDuringRestore = false,
+    secondaryObjectivePostConvergenceEnabled = true
 } = {}) {
     const qStart = Array.isArray(qInitial) ? qInitial.slice() : [];
     const normalizedRegularizationWeights = normalizeRegularizationWeights(regularizationWeights, qStart.length);
@@ -530,7 +594,11 @@ export function restoreHumanoidJogMJTrustRegion({
         safetyStatus: 'skipped',
         safetyResidualBefore: Number.NaN,
         safetyResidualAfter: Number.NaN,
-        safetyAcceptedIterations: 0
+        safetyAcceptedIterations: 0,
+        secondaryStatus: 'skipped',
+        secondaryResidualBefore: Number.NaN,
+        secondaryResidualAfter: Number.NaN,
+        secondaryAcceptedIterations: 0
     };
     if (typeof evaluateProblem !== 'function') return result;
 
@@ -564,6 +632,13 @@ export function restoreHumanoidJogMJTrustRegion({
         Math.max(0, asFinite(safetyBiasReleaseResidual, 0))
     );
     const safetyResidualTolerance = 1e-12;
+    const secondaryWeight = Math.max(0, asFinite(secondaryObjectiveWeight, 0.002));
+    const secondaryActivationResidual = Math.max(0, asFinite(secondaryObjectiveActivationResidual, 1e-5));
+    const secondaryHoldTolerance = Math.max(
+        Math.max(0, equalityTolerance),
+        Math.max(0, asFinite(secondaryObjectivePoseHoldTolerance, 2e-6))
+    );
+    const secondaryResidualTolerance = 1e-12;
     const getSafetyBiasWeight = (problem, phi) => {
         if (
             safetyPushEnabled === false ||
@@ -580,8 +655,29 @@ export function restoreHumanoidJogMJTrustRegion({
         }
         return safetyWeight;
     };
+    const getSecondaryBiasWeight = (problem, phi, theta) => {
+        if (
+            secondaryObjectiveEnabled !== true ||
+            secondaryObjectiveDuringRestore !== true ||
+            secondaryWeight <= 0 ||
+            getSecondaryResidualNorm(problem) <= secondaryResidualTolerance
+        ) {
+            return 0;
+        }
+        if (
+            asFinite(phi, Number.POSITIVE_INFINITY) > secondaryActivationResidual ||
+            asFinite(theta, Number.POSITIVE_INFINITY) > Math.max(0, inequalityTolerance) + thetaTolerance
+        ) {
+            return 0;
+        }
+        return secondaryWeight;
+    };
     const isPrimaryHeldForSafety = (phi, theta) => (
         asFinite(phi, Number.POSITIVE_INFINITY) <= safetyHoldTolerance &&
+        asFinite(theta, Number.POSITIVE_INFINITY) <= Math.max(0, inequalityTolerance) + thetaTolerance
+    );
+    const isPrimaryHeldForSecondary = (phi, theta) => (
+        asFinite(phi, Number.POSITIVE_INFINITY) <= secondaryHoldTolerance &&
         asFinite(theta, Number.POSITIVE_INFINITY) <= Math.max(0, inequalityTolerance) + thetaTolerance
     );
     const isSafetyActive = (problem, phi, theta) => (
@@ -591,6 +687,14 @@ export function restoreHumanoidJogMJTrustRegion({
         asFinite(phi, Number.POSITIVE_INFINITY) <= safetyActivationResidual &&
         asFinite(theta, Number.POSITIVE_INFINITY) <= Math.max(0, inequalityTolerance) + thetaTolerance &&
         getSafetyResidualNorm(problem) > safetyResidualTolerance
+    );
+    const isSecondaryActive = (problem, phi, theta) => (
+        secondaryObjectiveEnabled === true &&
+        secondaryObjectivePostConvergenceEnabled !== false &&
+        secondaryWeight > 0 &&
+        asFinite(phi, Number.POSITIVE_INFINITY) <= secondaryActivationResidual &&
+        asFinite(theta, Number.POSITIVE_INFINITY) <= Math.max(0, inequalityTolerance) + thetaTolerance &&
+        getSecondaryResidualNorm(problem) > secondaryResidualTolerance
     );
     const isSolveBudgetExceeded = () => (
         hasSolveBudget &&
@@ -606,6 +710,7 @@ export function restoreHumanoidJogMJTrustRegion({
     let currentPhi = getActiveResidualNorm(currentProblem);
     let currentTheta = computeConstraintViolation(currentProblem);
     let currentSafety = getSafetyResidualNorm(currentProblem);
+    let currentSecondary = getSecondaryResidualNorm(currentProblem);
     let currentPenalty = Math.max(1, currentPhi + 1);
     let currentMerit = computeRestorationMerit(currentPhi, currentTheta, currentPenalty);
     result.currentProblem = currentProblem;
@@ -613,10 +718,20 @@ export function restoreHumanoidJogMJTrustRegion({
     result.bestConstraintViolation = currentTheta;
     result.safetyResidualBefore = currentSafety;
     result.safetyResidualAfter = currentSafety;
+    result.secondaryResidualBefore = currentSecondary;
+    result.secondaryResidualAfter = currentSecondary;
     if (isSafetyActive(currentProblem, currentPhi, currentTheta)) {
         result.safetyStatus = 'active';
     }
-    if (currentPhi <= equalityTolerance && currentTheta <= inequalityTolerance && !isSafetyActive(currentProblem, currentPhi, currentTheta)) {
+    if (isSecondaryActive(currentProblem, currentPhi, currentTheta)) {
+        result.secondaryStatus = 'active';
+    }
+    if (
+        currentPhi <= equalityTolerance &&
+        currentTheta <= inequalityTolerance &&
+        !isSafetyActive(currentProblem, currentPhi, currentTheta) &&
+        !isSecondaryActive(currentProblem, currentPhi, currentTheta)
+    ) {
         result.converged = true;
         result.reason = 'converged';
         return result;
@@ -656,6 +771,19 @@ export function restoreHumanoidJogMJTrustRegion({
         result.safetyResidualAfter = currentSafety;
         return result;
     };
+    const finishSecondaryLimited = () => {
+        result.converged = true;
+        result.reason = 'secondary_limited';
+        result.qApplied = qCurrent.slice();
+        result.currentProblem = currentProblem;
+        result.currentResidualNorm = currentPhi;
+        result.bestConstraintViolation = Math.min(result.bestConstraintViolation, currentTheta);
+        result.trustRadius = trustRadius;
+        result.filterSize = filter.length;
+        result.secondaryStatus = 'limited';
+        result.secondaryResidualAfter = currentSecondary;
+        return result;
+    };
 
     for (let iter = 0; iter < maxIters; iter++) {
         result.iterations = iter + 1;
@@ -669,10 +797,18 @@ export function restoreHumanoidJogMJTrustRegion({
         const safetyActiveThisIteration = isSafetyActive(currentProblem, currentPhi, currentTheta);
         const safetyBiasWeightThisIteration = getSafetyBiasWeight(currentProblem, currentPhi);
         const safetyBiasThisIteration = safetyBiasWeightThisIteration > 0;
+        const secondaryActiveThisIteration = isSecondaryActive(currentProblem, currentPhi, currentTheta);
+        const secondaryBiasWeightThisIteration = getSecondaryBiasWeight(currentProblem, currentPhi, currentTheta);
+        const secondaryBiasThisIteration = secondaryBiasWeightThisIteration > 0;
         if (safetyActiveThisIteration) {
             result.safetyStatus = 'active';
         } else if (safetyBiasThisIteration) {
             result.safetyStatus = 'bias';
+        }
+        if (secondaryActiveThisIteration) {
+            result.secondaryStatus = 'active';
+        } else if (secondaryBiasThisIteration) {
+            result.secondaryStatus = 'bias';
         }
 
         for (let dampingAttempt = 0; dampingAttempt <= retryCount && !acceptedTrial; dampingAttempt++) {
@@ -685,6 +821,10 @@ export function restoreHumanoidJogMJTrustRegion({
                 {
                     enabled: safetyActiveThisIteration || safetyBiasThisIteration,
                     weight: safetyActiveThisIteration ? safetyWeight : safetyBiasWeightThisIteration
+                },
+                {
+                    enabled: secondaryActiveThisIteration || secondaryBiasThisIteration,
+                    weight: secondaryActiveThisIteration ? secondaryWeight : secondaryBiasWeightThisIteration
                 }
             );
             lastReferenceResidual = Array.isArray(referenceResidual) ? referenceResidual.slice() : [];
@@ -706,6 +846,7 @@ export function restoreHumanoidJogMJTrustRegion({
                 const trialPhi = getActiveResidualNorm(trialProblem);
                 const trialTheta = computeConstraintViolation(trialProblem);
                 const trialSafety = getSafetyResidualNorm(trialProblem);
+                const trialSecondary = getSecondaryResidualNorm(trialProblem);
                 const trialPenalty = Math.max(currentPenalty, trialPhi + 1);
                 const trialMerit = computeRestorationMerit(trialPhi, trialTheta, trialPenalty);
                 const predictedReduction = computeModelObjective(
@@ -739,16 +880,34 @@ export function restoreHumanoidJogMJTrustRegion({
                     thetaTolerance
                 });
                 const safetyImproved = trialSafety + safetyResidualTolerance < currentSafety;
+                const secondaryImproved = trialSecondary + secondaryResidualTolerance < currentSecondary;
                 const safetyAccepted = (
                     safetyActiveThisIteration &&
                     isPrimaryHeldForSafety(currentPhi, currentTheta) &&
                     isPrimaryHeldForSafety(trialPhi, trialTheta) &&
                     safetyImproved
                 );
+                const secondaryAccepted = (
+                    secondaryActiveThisIteration &&
+                    isPrimaryHeldForSecondary(currentPhi, currentTheta) &&
+                    isPrimaryHeldForSecondary(trialPhi, trialTheta) &&
+                    secondaryImproved
+                );
                 if (!acceptance.accepted && safetyAccepted) {
                     acceptance = {
                         accepted: true,
                         reason: 'safety',
+                        nextFilter: filter,
+                        phiImproved: false,
+                        thetaImproved: false,
+                        predictedReduction: Math.max(0, predictedReduction),
+                        actualReduction
+                    };
+                }
+                if (!acceptance.accepted && secondaryAccepted) {
+                    acceptance = {
+                        accepted: true,
+                        reason: 'secondary',
                         nextFilter: filter,
                         phiImproved: false,
                         thetaImproved: false,
@@ -778,8 +937,9 @@ export function restoreHumanoidJogMJTrustRegion({
                         actualReduction,
                         acceptedBy: acceptance.reason,
                         trialSafety,
+                        trialSecondary,
                         nextFilter: acceptance.nextFilter,
-                        nextRadius: acceptance.reason === 'safety' ? candidateRadius : nextRadius
+                        nextRadius: (acceptance.reason === 'safety' || acceptance.reason === 'secondary') ? candidateRadius : nextRadius
                     };
                     break;
                 }
@@ -798,6 +958,9 @@ export function restoreHumanoidJogMJTrustRegion({
             if (safetyActiveThisIteration && isPrimaryHeldForSafety(currentPhi, currentTheta)) {
                 return finishSafetyLimited();
             }
+            if (secondaryActiveThisIteration && isPrimaryHeldForSecondary(currentPhi, currentTheta)) {
+                return finishSecondaryLimited();
+            }
             result.reason = hasAccepted ? 'best_effort' : 'line_search_failed';
             result.qApplied = hasAccepted ? qAccepted.slice() : qStart.slice();
             result.currentProblem = hasAccepted ? acceptedProblem : currentProblem;
@@ -813,6 +976,7 @@ export function restoreHumanoidJogMJTrustRegion({
         currentPhi = acceptedTrial.trialPhi;
         currentTheta = acceptedTrial.trialTheta;
         currentSafety = acceptedTrial.trialSafety;
+        currentSecondary = acceptedTrial.trialSecondary;
         currentPenalty = Math.max(currentPenalty, currentPhi + 1);
         currentMerit = acceptedTrial.trialMerit;
         qAccepted = qCurrent.slice();
@@ -837,11 +1001,20 @@ export function restoreHumanoidJogMJTrustRegion({
         if (acceptedTrial.acceptedBy === 'safety') {
             result.safetyAcceptedIterations += 1;
         }
+        if (acceptedTrial.acceptedBy === 'secondary') {
+            result.secondaryAcceptedIterations += 1;
+        }
         result.safetyResidualAfter = currentSafety;
+        result.secondaryResidualAfter = currentSecondary;
         result.bestConstraintViolation = Math.min(result.bestConstraintViolation, currentTheta);
         result.filterSize = filter.length;
 
-        if (currentPhi <= equalityTolerance && currentTheta <= inequalityTolerance && !isSafetyActive(currentProblem, currentPhi, currentTheta)) {
+        if (
+            currentPhi <= equalityTolerance &&
+            currentTheta <= inequalityTolerance &&
+            !isSafetyActive(currentProblem, currentPhi, currentTheta) &&
+            !isSecondaryActive(currentProblem, currentPhi, currentTheta)
+        ) {
             result.converged = true;
             result.reason = 'converged';
             result.qApplied = qAccepted.slice();
@@ -851,6 +1024,9 @@ export function restoreHumanoidJogMJTrustRegion({
 
     if (isPrimaryHeldForSafety(currentPhi, currentTheta) && isSafetyActive(currentProblem, currentPhi, currentTheta)) {
         return finishSafetyLimited();
+    }
+    if (isPrimaryHeldForSecondary(currentPhi, currentTheta) && isSecondaryActive(currentProblem, currentPhi, currentTheta)) {
+        return finishSecondaryLimited();
     }
     result.reason = (
         hasAccepted &&

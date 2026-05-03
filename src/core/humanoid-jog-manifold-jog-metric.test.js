@@ -16,6 +16,7 @@ test('normalizeHumanoidJogManifoldJogMetric recognizes every supported selector 
     assert.equal(normalizeHumanoidJogManifoldJogMetric('w_abs_arm_vfi'), 'w_abs_arm_vfi');
     assert.equal(normalizeHumanoidJogManifoldJogMetric('w_abs_vfi'), 'w_abs_vfi');
     assert.equal(normalizeHumanoidJogManifoldJogMetric('w_abs_hier'), 'w_abs_hier');
+    assert.equal(normalizeHumanoidJogManifoldJogMetric('w_abs_hier_ext'), 'w_abs_hier_ext');
     assert.equal(normalizeHumanoidJogManifoldJogMetric('w_abs_hier_vfi'), 'w_abs_hier_vfi');
     assert.equal(normalizeHumanoidJogManifoldJogMetric('sigma'), 'sigma');
 });
@@ -39,14 +40,14 @@ test('resolveHumanoidJogManifoldJogMetric classifies direct metrics', () => {
 });
 
 test('resolveHumanoidJogManifoldJogMetric classifies hierarchical metrics', () => {
-    const resolved = resolveHumanoidJogManifoldJogMetric('w_abs_hier_vfi');
+    const resolved = resolveHumanoidJogManifoldJogMetric('w_abs_hier_ext');
 
     assert.deepEqual(resolved, {
-        requestedMetric: 'w_abs_hier_vfi',
-        metric: 'w_abs_hier_vfi',
+        requestedMetric: 'w_abs_hier_ext',
+        metric: 'w_abs_hier_ext',
         family: 'hierarchical',
         shouldSkip: false,
-        diagnosticMetric: 'w_abs_hier_vfi'
+        diagnosticMetric: 'w_abs_hier_ext'
     });
 });
 

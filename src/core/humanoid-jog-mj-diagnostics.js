@@ -60,9 +60,13 @@ export function buildHumanoidJogMJDiagnostics({
 } = {}) {
     const normalizedSolverMode = solverMode === 'mj_restore_pre_w'
         ? 'mj_restore_pre_w'
-        : (solverMode === 'mj_restore_tr_safe'
+        : (solverMode === 'mj_restore_tr_safe_wvfi'
+            ? 'mj_restore_tr_safe_wvfi'
+            : (solverMode === 'mj_restore_tr_w'
+            ? 'mj_restore_tr_w'
+            : (solverMode === 'mj_restore_tr_safe'
             ? 'mj_restore_tr_safe'
-            : (solverMode === 'mj_restore_tr' ? 'mj_restore_tr' : 'mj_restore'));
+            : (solverMode === 'mj_restore_tr' ? 'mj_restore_tr' : 'mj_restore'))));
     return {
         solverMode: normalizedSolverMode,
         modeTag,
@@ -93,6 +97,17 @@ export function buildHumanoidJogMJDiagnostics({
         safetyResidualAfter: asFinite(restorationResult?.safetyResidualAfter),
         safetyAcceptedIterations: Number.isFinite(restorationResult?.safetyAcceptedIterations)
             ? restorationResult.safetyAcceptedIterations
+            : 0,
+        secondaryStatus: typeof restorationResult?.secondaryStatus === 'string'
+            ? restorationResult.secondaryStatus
+            : 'skipped',
+        secondaryName: typeof restorationResult?.currentProblem?.secondaryObjective?.name === 'string'
+            ? restorationResult.currentProblem.secondaryObjective.name
+            : (typeof restorationResult?.secondaryObjectiveName === 'string' ? restorationResult.secondaryObjectiveName : 'w_vfi'),
+        secondaryResidualBefore: asFinite(restorationResult?.secondaryResidualBefore),
+        secondaryResidualAfter: asFinite(restorationResult?.secondaryResidualAfter),
+        secondaryAcceptedIterations: Number.isFinite(restorationResult?.secondaryAcceptedIterations)
+            ? restorationResult.secondaryAcceptedIterations
             : 0,
         safetyRefineState: typeof safetyRefineResult?.state === 'string'
             ? safetyRefineResult.state

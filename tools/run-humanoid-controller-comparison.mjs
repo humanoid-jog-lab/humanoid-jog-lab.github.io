@@ -7,38 +7,72 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 import { chromium } from 'playwright';
 
-import { formatBenchmarkMarkdownTable } from '../src/core/humanoid-jog-benchmark-metrics.js';
+import {
+    formatBenchmarkCsvTable,
+    formatBenchmarkLatexTable,
+    formatBenchmarkMarkdownTable
+} from '../src/core/humanoid-jog-benchmark-metrics.js';
 import {
     buildHumanoidControllerComparisonTasks,
     getHumanoidControllerComparisonColumns,
     resolveHumanoidControllerComparisonControllerOptions,
+    resolveHumanoidControllerComparisonDefaultMaxTicks,
+    resolveHumanoidControllerComparisonSpeedPercent,
+    resolveHumanoidControllerComparisonTaskValidTolerance,
     summarizeHumanoidControllerComparisonRows
 } from '../src/core/humanoid-jog-controller-comparison.js';
 
-const REPO_ROOT = '/home/echoz/dq_vizlab';
+const REPO_ROOT = process.env.COMPARISON_REPO_ROOT || process.cwd();
+const OUTPUT_DIR = process.env.COMPARISON_OUTPUT_DIR
+    || path.join(REPO_ROOT, 'artifacts', 'humanoid-controller-comparison');
 const BASE_URL = process.env.BASE_URL || 'http://127.0.0.1:4173';
 const OUTPUT_JSON = process.env.COMPARISON_JSON
-    || path.join(REPO_ROOT, '2026_humanoid_robot', 'figure', 'sim', 'controller_comparison_x30cm.json');
+    || path.join(OUTPUT_DIR, 'controller_comparison_x30cm.json');
 const OUTPUT_MD = process.env.COMPARISON_MD
-    || path.join(REPO_ROOT, '2026_humanoid_robot', 'figure', 'sim', 'controller_comparison_x30cm.md');
+    || path.join(OUTPUT_DIR, 'summary.md');
+const OUTPUT_CSV = process.env.COMPARISON_CSV
+    || path.join(OUTPUT_DIR, 'summary.csv');
+const OUTPUT_LATEX = process.env.COMPARISON_LATEX
+    || path.join(OUTPUT_DIR, 'summary_latex.tex');
 const TARGET_X_METERS = Number.isFinite(Number(process.env.COMPARISON_TARGET_X_METERS))
     ? Math.max(0.01, Number(process.env.COMPARISON_TARGET_X_METERS))
     : 0.30;
+const TEACH_SPEED_PERCENT = resolveHumanoidControllerComparisonSpeedPercent(
+    process.env.COMPARISON_SPEED_PERCENT
+);
 const MAX_TICKS = Number.isFinite(Number(process.env.COMPARISON_MAX_TICKS))
     ? Math.max(1, Math.floor(Number(process.env.COMPARISON_MAX_TICKS)))
-    : 60;
+    : resolveHumanoidControllerComparisonDefaultMaxTicks(TEACH_SPEED_PERCENT);
 const MIN_EFFECTIVE_PROGRESS = Number.isFinite(Number(process.env.COMPARISON_MIN_PROGRESS))
     ? Math.max(1e-8, Number(process.env.COMPARISON_MIN_PROGRESS))
     : 1e-5;
 const MAX_STALL_TICKS = Number.isFinite(Number(process.env.COMPARISON_MAX_STALL_TICKS))
     ? Math.max(1, Math.floor(Number(process.env.COMPARISON_MAX_STALL_TICKS)))
     : 3;
+const FIXED_TICKS = String(process.env.COMPARISON_FIXED_TICKS || '').trim() === '1'
+    || String(process.env.COMPARISON_FIXED_TICKS || '').trim().toLowerCase() === 'true';
+const scenarioTickOverride = (name) => {
+    const value = Number(process.env[name]);
+    return Number.isFinite(value) ? Math.max(1, Math.floor(value)) : Number.NaN;
+};
+const ARM_ONLY_ABSOLUTE_TICKS = scenarioTickOverride('COMPARISON_ARM_ONLY_ABSOLUTE_TICKS');
+const WAIST_UPRIGHT_ABSOLUTE_TICKS = scenarioTickOverride('COMPARISON_WAIST_UPRIGHT_ABSOLUTE_TICKS');
+const WAIST_DISTANCE_TICKS = scenarioTickOverride('COMPARISON_WAIST_DISTANCE_TICKS');
 const COMMAND_TOLERANCE = Number.isFinite(Number(process.env.COMPARISON_COMMAND_TOLERANCE))
     ? Math.max(0, Number(process.env.COMPARISON_COMMAND_TOLERANCE))
     : 5e-4;
 const BODY_TOLERANCE = Number.isFinite(Number(process.env.COMPARISON_BODY_TOLERANCE))
     ? Math.max(0, Number(process.env.COMPARISON_BODY_TOLERANCE))
     : 5e-5;
+const TASK_VALID_TOLERANCE = resolveHumanoidControllerComparisonTaskValidTolerance(
+    process.env.COMPARISON_TASK_VALID_TOLERANCE
+);
+const WAIST_CORRIDOR_BACKWARD_MARGIN = Number.isFinite(Number(process.env.COMPARISON_WAIST_CORRIDOR_BACKWARD_MARGIN))
+    ? Math.max(0.01, Number(process.env.COMPARISON_WAIST_CORRIDOR_BACKWARD_MARGIN))
+    : 0.40;
+const WAIST_CORRIDOR_FORWARD_MARGIN = Number.isFinite(Number(process.env.COMPARISON_WAIST_CORRIDOR_FORWARD_MARGIN))
+    ? Math.max(0.01, Number(process.env.COMPARISON_WAIST_CORRIDOR_FORWARD_MARGIN))
+    : 0.20;
 const NEAR_LIMIT_SEED = Number.isFinite(Number(process.env.COMPARISON_NEAR_LIMIT_SEED))
     ? Math.floor(Number(process.env.COMPARISON_NEAR_LIMIT_SEED))
     : 7;
@@ -60,6 +94,27 @@ const SOLVER_FILTER = new Set(
         .map((value) => value.trim())
         .filter(Boolean)
 );
+const FORCE_JOINT_LIMIT_AVOIDANCE = String(process.env.COMPARISON_FORCE_JOINT_LIMIT_AVOIDANCE || '').trim() === '1'
+    || String(process.env.COMPARISON_FORCE_JOINT_LIMIT_AVOIDANCE || '').trim().toLowerCase() === 'true';
+
+function parseNumberArrayEnv(valueRaw = '') {
+    const text = String(valueRaw || '').trim();
+    if (!text) return null;
+    try {
+        const parsed = JSON.parse(text);
+        if (Array.isArray(parsed) && parsed.every((value) => Number.isFinite(Number(value)))) {
+            return parsed.map(Number);
+        }
+    } catch (_) {}
+    const values = text
+        .replace(/^\[/, '')
+        .replace(/\]$/, '')
+        .split(',')
+        .map((value) => Number(value.trim()));
+    return values.length > 0 && values.every(Number.isFinite) ? values : null;
+}
+
+const WAIST_DISTANCE_INITIAL_Q = parseNumberArrayEnv(process.env.COMPARISON_WAIST_DISTANCE_INITIAL_Q);
 
 async function waitForHttp(url, timeoutMs = 120000) {
     const start = Date.now();
@@ -138,22 +193,51 @@ function buildMarkdownRows(summaryRows = []) {
     });
 }
 
+function buildCsvRows(summaryRows = []) {
+    return formatBenchmarkCsvTable(summaryRows, {
+        columns: getHumanoidControllerComparisonColumns()
+    });
+}
+
+function buildLatexRows(summaryRows = []) {
+    return formatBenchmarkLatexTable(summaryRows, {
+        columns: getHumanoidControllerComparisonColumns()
+    });
+}
+
 async function writeBenchmarkOutputs(resultRuns) {
-    const summaryRows = summarizeHumanoidControllerComparisonRows(resultRuns);
+    const summaryRows = summarizeHumanoidControllerComparisonRows(resultRuns, {
+        taskValidTolerance: TASK_VALID_TOLERANCE
+    });
     const markdown = buildMarkdownRows(summaryRows);
+    const csv = buildCsvRows(summaryRows);
+    const latex = buildLatexRows(summaryRows);
     await fs.mkdir(path.dirname(OUTPUT_JSON), { recursive: true });
     await fs.writeFile(OUTPUT_JSON, JSON.stringify({
         meta: {
             targetXMeters: TARGET_X_METERS,
             maxTicks: MAX_TICKS,
+            fixedTicks: FIXED_TICKS,
+            teachSpeedPercent: TEACH_SPEED_PERCENT,
             minEffectiveProgress: MIN_EFFECTIVE_PROGRESS,
             maxStallTicks: MAX_STALL_TICKS,
             commandTolerance: COMMAND_TOLERANCE,
             bodyTolerance: BODY_TOLERANCE,
+            taskValidTolerance: TASK_VALID_TOLERANCE,
+            waistCorridorBackwardMargin: WAIST_CORRIDOR_BACKWARD_MARGIN,
+            waistCorridorForwardMargin: WAIST_CORRIDOR_FORWARD_MARGIN,
             nearLimitSeed: NEAR_LIMIT_SEED,
+            forceJointLimitAvoidance: FORCE_JOINT_LIMIT_AVOIDANCE,
+            waistDistanceInitialQ: WAIST_DISTANCE_INITIAL_Q,
             scenarioTargets: {
                 absolute: 0.075,
-                'decoupled-upright': TARGET_X_METERS
+                'decoupled-upright': TARGET_X_METERS,
+                'waist-distance': 0.075
+            },
+            scenarioTicks: {
+                absolute: Number.isFinite(ARM_ONLY_ABSOLUTE_TICKS) ? ARM_ONLY_ABSOLUTE_TICKS : null,
+                'decoupled-upright': Number.isFinite(WAIST_UPRIGHT_ABSOLUTE_TICKS) ? WAIST_UPRIGHT_ABSOLUTE_TICKS : null,
+                'waist-distance': Number.isFinite(WAIST_DISTANCE_TICKS) ? WAIST_DISTANCE_TICKS : null
             }
         },
         rows: summaryRows,
@@ -161,7 +245,11 @@ async function writeBenchmarkOutputs(resultRuns) {
     }, null, 2));
     await fs.mkdir(path.dirname(OUTPUT_MD), { recursive: true });
     await fs.writeFile(OUTPUT_MD, `${markdown}\n`);
-    return { summaryRows, markdown };
+    await fs.mkdir(path.dirname(OUTPUT_CSV), { recursive: true });
+    await fs.writeFile(OUTPUT_CSV, csv);
+    await fs.mkdir(path.dirname(OUTPUT_LATEX), { recursive: true });
+    await fs.writeFile(OUTPUT_LATEX, `${latex}\n`);
+    return { summaryRows, markdown, csv, latex };
 }
 
 const browser = await chromium.launch({
@@ -185,17 +273,40 @@ try {
         if (PROFILE_FILTER.size > 0 && !PROFILE_FILTER.has(task.profile)) return false;
         if (SOLVER_FILTER.size > 0 && !SOLVER_FILTER.has(task.solverMode)) return false;
         return true;
-    }).map((task) => ({
-        ...task,
-        comparisonOptions: resolveHumanoidControllerComparisonControllerOptions({
+    }).map((task) => {
+        const comparisonOptions = resolveHumanoidControllerComparisonControllerOptions({
             controllerKey: task.key,
             mode: task.mode,
             includeWaist: task.includeWaist,
-            maxTicks: MAX_TICKS,
+            maxTicks: (() => {
+                if (task.mode === 'absolute' && task.includeWaist !== true && Number.isFinite(ARM_ONLY_ABSOLUTE_TICKS)) {
+                    return ARM_ONLY_ABSOLUTE_TICKS;
+                }
+                if (task.mode === 'decoupled-upright' && Number.isFinite(WAIST_UPRIGHT_ABSOLUTE_TICKS)) {
+                    return WAIST_UPRIGHT_ABSOLUTE_TICKS;
+                }
+                if (task.mode === 'waist-distance' && Number.isFinite(WAIST_DISTANCE_TICKS)) {
+                    return WAIST_DISTANCE_TICKS;
+                }
+                return MAX_TICKS;
+            })(),
+            teachSpeedPercent: TEACH_SPEED_PERCENT,
+            targetXMeters: TARGET_X_METERS,
             commandTolerance: COMMAND_TOLERANCE,
-            maxStallTicks: MAX_STALL_TICKS
-        })
-    }));
+            maxStallTicks: MAX_STALL_TICKS,
+            fixedTicks: FIXED_TICKS
+        });
+        if (FORCE_JOINT_LIMIT_AVOIDANCE) {
+            comparisonOptions.jointLimitAvoidanceEnabled = true;
+        }
+        return {
+            ...task,
+            initialQOverride: task.mode === 'waist-distance' && Array.isArray(WAIST_DISTANCE_INITIAL_Q)
+                ? WAIST_DISTANCE_INITIAL_Q
+                : null,
+            comparisonOptions
+        };
+    });
     if (tasks.length === 0) {
         throw new Error('No controller-comparison tasks matched the provided filters.');
     }
@@ -204,10 +315,14 @@ try {
             tasks: tasksInput,
             targetXMeters,
             maxTicks,
+            teachSpeedPercent,
             minEffectiveProgress,
             maxStallTicks,
             commandTolerance,
             bodyTolerance,
+            fixedTicks,
+            waistCorridorBackwardMargin,
+            waistCorridorForwardMargin,
             nearLimitSeed
         }) => {
             const viz = window.visualizer;
@@ -228,11 +343,34 @@ try {
                 element.dispatchEvent(new Event('change', { bubbles: true }));
             };
 
+            const dispatchInputValue = (id, value) => {
+                const element = document.getElementById(id);
+                if (!element) return;
+                element.value = String(value);
+                element.dispatchEvent(new Event('input', { bubbles: true }));
+                element.dispatchEvent(new Event('change', { bubbles: true }));
+            };
+
             const setCheckbox = (id, checked) => {
                 const element = document.getElementById(id);
                 if (!element) return;
                 element.checked = checked;
                 element.dispatchEvent(new Event('change', { bubbles: true }));
+            };
+
+            const applyTeachSpeedPercent = (percent) => {
+                const p = Math.max(1, Math.min(100, Math.round(Number(percent) || 100)));
+                const slider = document.getElementById('teach-speed-percent');
+                const valueLabel = document.getElementById('teach-speed-value');
+                if (slider) {
+                    slider.value = String(p);
+                    slider.dispatchEvent(new Event('input', { bubbles: true }));
+                    slider.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+                if (valueLabel) valueLabel.textContent = String(p);
+                viz.setTeachSpeedPercent?.(p);
+                if (viz) viz.teachSpeedPercent = p;
+                return p;
             };
 
             const evaluateStep = (options = {}) => {
@@ -338,10 +476,12 @@ try {
 
             const getJointLimits = () => viz._getHumanoidJointLimits?.() || [];
 
-            const resetHumanoidState = async (profile = 'near-limit') => {
-                const initial = Array.isArray(window.customRobotConfig?.initial_q)
+            const resetHumanoidState = async (profile = 'near-limit', initialQOverride = null) => {
+                const initial = Array.isArray(initialQOverride) && initialQOverride.length > 0
+                    ? initialQOverride.slice()
+                    : (Array.isArray(window.customRobotConfig?.initial_q)
                     ? window.customRobotConfig.initial_q.slice()
-                    : window.humanoidQ.slice();
+                    : window.humanoidQ.slice());
                 if (profile === 'near-limit') {
                     const limits = getJointLimits();
                     const rng = createRng(nearLimitSeed + 1);
@@ -383,6 +523,47 @@ try {
 
             const getAbsoluteTranslation = () => dqTranslation(viz._getHumanoidAbsolutePose(window.humanoidQ));
 
+            const getRelativeDistance = () => {
+                const translation = dqTranslation(viz._getHumanoidRelativePose(window.humanoidQ.slice()));
+                if (!Array.isArray(translation) || translation.length < 3) return Number.NaN;
+                const squared = translation.reduce((sum, value) => {
+                    const numericValue = Number(value);
+                    return Number.isFinite(numericValue) ? sum + numericValue * numericValue : sum;
+                }, 0);
+                return Number.isFinite(squared) ? Math.sqrt(squared) : Number.NaN;
+            };
+
+            const getWaistXPosition = () => {
+                const value = Number(viz._evaluateHumanoidWaistXPosition?.(window.humanoidQ.slice()));
+                return Number.isFinite(value) ? value : Number.NaN;
+            };
+
+            const taskUsesWaistCorridor = (task = {}) => (
+                task.includeWaist === true &&
+                (task.keepBodyZVertical === true || task.useWaistCorridor === true)
+            );
+
+            const configureBenchmarkWaistCorridor = (task = {}) => {
+                const enabled = taskUsesWaistCorridor(task);
+                if (!enabled) {
+                    setCheckbox('humanoid-waist-x-corridor-toggle', false);
+                    viz.setHumanoidWaistXCorridorEnabled?.(false);
+                    return { enabled: false };
+                }
+
+                const waistX = getWaistXPosition();
+                const center = Number.isFinite(waistX) ? waistX : 0;
+                const min = center - waistCorridorBackwardMargin;
+                const max = center + waistCorridorForwardMargin;
+                dispatchInputValue('humanoid-waist-x-corridor-min-input', min.toFixed(4));
+                dispatchInputValue('humanoid-waist-x-corridor-max-input', max.toFixed(4));
+                viz.setHumanoidWaistXCorridorMin?.(min);
+                viz.setHumanoidWaistXCorridorMax?.(max);
+                setCheckbox('humanoid-waist-x-corridor-toggle', true);
+                viz.setHumanoidWaistXCorridorEnabled?.(true);
+                return { enabled: true, min, max, waistX };
+            };
+
             const computeDmin = (includeWaist = false) => {
                 const qFull = window.humanoidQ.slice();
                 const { armStart, activeCount } = viz._getHumanoidActiveSliceInfo(includeWaist);
@@ -394,6 +575,72 @@ try {
                     return Number.isFinite(distance) ? Math.min(minValue, distance) : minValue;
                 }, Number.POSITIVE_INFINITY);
                 return Number.isFinite(dmin) ? dmin : Number.NaN;
+            };
+
+            const computeJointClearanceMin = (includeWaist = false) => {
+                const qFull = window.humanoidQ.slice();
+                const { armStart, activeCount } = viz._getHumanoidActiveSliceInfo(includeWaist);
+                const limits = viz._getHumanoidJointLimits?.()?.slice(armStart, armStart + activeCount) || [];
+                let best = Number.POSITIVE_INFINITY;
+                for (let index = 0; index < activeCount; index += 1) {
+                    const [lower, upper] = getLimitBounds(limits[index]);
+                    const q = Number(qFull[armStart + index]);
+                    if (!Number.isFinite(q)) continue;
+                    if (Number.isFinite(lower)) best = Math.min(best, q - lower);
+                    if (Number.isFinite(upper)) best = Math.min(best, upper - q);
+                }
+                return Number.isFinite(best) ? Math.max(0, best) : Number.NaN;
+            };
+
+            const computeWaistClearanceMin = (diagnostics = {}, fallback = {}) => {
+                const upper = Number(diagnostics.waistXDupper);
+                const lower = Number(diagnostics.waistXDlower);
+                const value = Number(fallback.value);
+                const min = Number(fallback.min);
+                const max = Number(fallback.max);
+                const fallbackUpper = Number.isFinite(value) && Number.isFinite(max) ? max - value : Number.NaN;
+                const fallbackLower = Number.isFinite(value) && Number.isFinite(min) ? value - min : Number.NaN;
+                const values = [upper, lower, fallbackUpper, fallbackLower].filter(Number.isFinite);
+                if (values.length === 0) return Number.NaN;
+                return Math.max(0, Math.min(...values));
+            };
+
+            const computeWaistViolation = (fallback = {}) => {
+                const value = Number(fallback.value);
+                const min = Number(fallback.min);
+                const max = Number(fallback.max);
+                if (!Number.isFinite(value)) return Number.NaN;
+                return Math.max(
+                    0,
+                    Number.isFinite(min) ? min - value : 0,
+                    Number.isFinite(max) ? value - max : 0
+                );
+            };
+
+            const extractTaskScale = (status = {}, diagnostics = {}) => {
+                const candidates = [
+                    status.taskScale,
+                    status.task_scale,
+                    diagnostics.taskScale,
+                    diagnostics.task_scale,
+                    diagnostics.predictiveTaskScale,
+                    diagnostics.snsTaskScale
+                ];
+                for (const candidate of candidates) {
+                    const value = Number(candidate);
+                    if (Number.isFinite(value)) return value;
+                }
+                return Number.NaN;
+            };
+
+            const extractTRSafety = (status = {}, diagnostics = {}) => {
+                const value = diagnostics.trSafetyStatus || diagnostics.tr_safety || status.safetyStatus || status.trSafetyStatus;
+                return typeof value === 'string' && value.length > 0 ? value : '';
+            };
+
+            const finiteDiagnostic = (diagnostics = {}, key = '') => {
+                const value = Number(diagnostics?.[key]);
+                return Number.isFinite(value) ? value : Number.NaN;
             };
 
             const maxJointDelta = (beforeQ, afterQ) => {
@@ -433,7 +680,11 @@ try {
                     const qChanged = Number.isFinite(maxJointDelta(qBefore, qAfter)) && maxJointDelta(qBefore, qAfter) > 1e-9;
                     const diagnosticsReady = diagnostics && diagnostics.modeTag && diagnostics.modeTag !== 'idle';
                     const statusReady = hasSettledStatus(status);
-                    const asyncMode = solverMode === 'mj_restore' || solverMode === 'mj_restore_pre_w';
+                    const asyncMode = (
+                        solverMode === 'mj_restore_tr' ||
+                        solverMode === 'mj_restore_tr_w' ||
+                        solverMode === 'mj_restore_tr_safe_wvfi'
+                    );
                     if (asyncMode) {
                         const graceElapsed = (performance.now() - start) >= 32;
                         if (!asyncBusy && (statusReady || diagnosticsReady || qChanged) && (observedAsyncBusy || graceElapsed)) {
@@ -445,9 +696,15 @@ try {
                 }
             };
 
-            const invokeJog = async (controlMode) => {
+            const invokeJog = async (task = {}) => {
+                const controlMode = task.controlMode;
                 if (controlMode === 'decoupled-upright') {
                     return Promise.resolve(viz.moveHumanoidAbsolutePoseAlongAxisDecoupledUpright('x', 'positive'));
+                }
+                if (controlMode === 'distance' || controlMode === 'distance-fullbody') {
+                    const direction = task.jogDirection === 'positive' ? 'positive' : 'negative';
+                    const includeWaist = controlMode === 'distance-fullbody' || task.includeWaist === true;
+                    return Promise.resolve(viz.moveDualArmRelativeDistance(direction, includeWaist));
                 }
                 return Promise.resolve(viz.moveDualArmAbsolutePoseAlongAxis('x', 'positive'));
             };
@@ -465,13 +722,17 @@ try {
                 const controllerOptions = task.comparisonOptions || {};
                 dispatchSelectValue('humanoid-jog-solver-select', task.solverMode);
                 dispatchSelectValue('dual-arm-control-mode-select', task.controlMode);
-                setCheckbox('humanoid-waist-x-corridor-toggle', task.includeWaist === true && task.keepBodyZVertical === true);
+                const appliedTeachSpeedPercent = applyTeachSpeedPercent(teachSpeedPercent);
                 setCheckbox('joint-limit-avoidance-toggle', controllerOptions.jointLimitAvoidanceEnabled);
                 if (viz.vfiConfig) {
                     viz.vfiConfig.qpUseInvariantEquality = controllerOptions.qpUseInvariantEquality !== false;
                 }
-                await resetHumanoidState(task.profile);
+                await resetHumanoidState(task.profile, task.initialQOverride);
+                const waistCorridor = configureBenchmarkWaistCorridor(task);
                 await sleep(50);
+                const initialQ = Array.isArray(window.humanoidQ) ? window.humanoidQ.slice() : [];
+                const initialWaistX = getWaistXPosition();
+                const waistCorridorActive = waistCorridor?.enabled === true;
 
                 viz.lastIKSolveStatus = {};
                 viz.lastHumanoidJogDiagnostics = { modeTag: 'idle' };
@@ -479,6 +740,7 @@ try {
                 const startTranslation = getAbsoluteTranslation();
                 const startX = Number(startTranslation?.[0]) || 0;
                 const startRelativePose = viz._getHumanoidRelativePose(window.humanoidQ.slice());
+                const startRelativeDistance = getRelativeDistance();
                 let previousProgress = 0;
                 let sustainableTicks = 0;
                 let stallTicks = 0;
@@ -496,26 +758,65 @@ try {
                     viz.lastIKSolveStatus = {};
                     viz.lastHumanoidJogDiagnostics = { modeTag: 'idle' };
                     const qBefore = Array.isArray(window.humanoidQ) ? window.humanoidQ.slice() : [];
+                    const distanceBefore = task.progressKind === 'relative-distance'
+                        ? getRelativeDistance()
+                        : Number.NaN;
+                    const distanceDirectionSign = task.jogDirection === 'positive' ? 1 : -1;
+                    const distanceCommandStep = Number(viz.getTeachTranslationStep?.());
+                    const distanceCommandTarget = Number.isFinite(distanceBefore) && Number.isFinite(distanceCommandStep)
+                        ? Math.max(0, distanceBefore + distanceDirectionSign * Math.abs(distanceCommandStep))
+                        : Number.NaN;
                     const t0 = performance.now();
-                    await invokeJog(task.controlMode);
+                    await invokeJog(task);
                     await waitForJogSettle(task.solverMode, qBefore);
                     const runtimeMs = performance.now() - t0;
 
                     const currentTranslation = getAbsoluteTranslation();
                     const xProgress = (Number(currentTranslation?.[0]) || 0) - startX;
-                    const stepProgress = xProgress - previousProgress;
-                    previousProgress = xProgress;
+                    const currentRelativeDistance = task.progressKind === 'relative-distance'
+                        ? getRelativeDistance()
+                        : Number.NaN;
+                    const distanceProgress = Number.isFinite(startRelativeDistance) && Number.isFinite(currentRelativeDistance)
+                        ? (task.jogDirection === 'positive'
+                            ? currentRelativeDistance - startRelativeDistance
+                            : startRelativeDistance - currentRelativeDistance)
+                        : Number.NaN;
+                    const progressValue = task.progressKind === 'relative-distance' ? distanceProgress : xProgress;
+                    const stepProgress = progressValue - previousProgress;
+                    previousProgress = progressValue;
                     const status = viz.lastIKSolveStatus || {};
                     const diagnostics = viz.lastHumanoidJogDiagnostics || {};
-                    const commandError = Number.isFinite(Number(diagnostics.commandError))
+                    const diagnosticCommandError = Number.isFinite(Number(diagnostics.commandError))
                         ? Number(diagnostics.commandError)
                         : (Number.isFinite(Number(status.finalResidual)) ? Number(status.finalResidual) : Number.NaN);
+                    const distanceCommandError = Number.isFinite(distanceCommandTarget) && Number.isFinite(currentRelativeDistance)
+                        ? Math.abs(currentRelativeDistance - distanceCommandTarget)
+                        : Number.NaN;
+                    const commandError = task.progressKind === 'relative-distance' && Number.isFinite(distanceCommandError)
+                        ? distanceCommandError
+                        : diagnosticCommandError;
+                    const diagnosticInvariantError = Number.isFinite(Number(diagnostics.invariantError))
+                        ? Number(diagnostics.invariantError)
+                        : (Number.isFinite(Number(status.invariantResidual)) ? Number(status.invariantResidual) : Number.NaN);
                     const bodyError = Number.isFinite(Number(diagnostics.bodyResidualNorm))
                         ? Number(diagnostics.bodyResidualNorm)
                         : Number.NaN;
+                    const waistXValue = waistCorridorActive
+                        ? getWaistXPosition()
+                        : Number.NaN;
+                    const waistXMin = Number(viz.vfiConfig?.waistXMin);
+                    const waistXMax = Number(viz.vfiConfig?.waistXMax);
+                    const fallbackWaist = {
+                        value: waistXValue,
+                        min: waistXMin,
+                        max: waistXMax
+                    };
+                    const fallbackWaistViolation = waistCorridorActive
+                        ? computeWaistViolation(fallbackWaist)
+                        : Number.NaN;
                     const waistXViolation = Number.isFinite(Number(diagnostics.waistXViolation))
                         ? Number(diagnostics.waistXViolation)
-                        : Number.NaN;
+                        : fallbackWaistViolation;
                     const currentRelativePose = viz._getHumanoidRelativePose(window.humanoidQ.slice());
                     const relativePoseChange = Array.isArray(startRelativePose) && Array.isArray(currentRelativePose)
                         ? (() => {
@@ -527,9 +828,24 @@ try {
                             return Number.isFinite(norm) ? norm : Number.NaN;
                         })()
                         : Number.NaN;
+                    const invariantError = Number.isFinite(diagnosticInvariantError)
+                        ? diagnosticInvariantError
+                        : relativePoseChange;
                     const dmin = Number.isFinite(Number(diagnostics.vfiMinDistance))
                         ? Number(diagnostics.vfiMinDistance)
                         : computeDmin(task.includeWaist);
+                    const jointClearanceMin = computeJointClearanceMin(task.includeWaist);
+                    const waistClearanceMin = waistCorridorActive
+                        ? computeWaistClearanceMin(diagnostics, fallbackWaist)
+                        : Number.NaN;
+                    const maxViolation = Math.max(
+                        0,
+                        Number.isFinite(waistXViolation) ? waistXViolation : 0,
+                        Number.isFinite(Number(diagnostics.maxViolation)) ? Number(diagnostics.maxViolation) : 0,
+                        Number.isFinite(Number(status.maxViolation)) ? Number(status.maxViolation) : 0
+                    );
+                    const taskScale = extractTaskScale(status, diagnostics);
+                    const trSafetyStatus = extractTRSafety(status, diagnostics);
                     const tickSolveMs = runtimeMs;
                     const stepEvaluation = evaluateStep({
                         stepProgress,
@@ -542,7 +858,7 @@ try {
                         ? Math.max(1e-8, Number(controllerOptions.targetXMeters))
                         : targetXMeters;
                     const completionEvaluation = evaluateCompletion({
-                        xProgress,
+                        xProgress: progressValue,
                         targetXMeters: scenarioTargetXMeters,
                         commandError,
                         commandTolerance: controllerOptions.commandTolerance,
@@ -550,7 +866,7 @@ try {
                         bodyTolerance,
                         waistXViolation,
                         enforceBody: task.keepBodyZVertical === true,
-                        enforceWaist: task.includeWaist === true && task.keepBodyZVertical === true
+                        enforceWaist: waistCorridorActive
                     });
 
                     if (stepEvaluation.progressed) {
@@ -563,13 +879,34 @@ try {
                         runtimeMs,
                         tickSolveMs,
                         xProgress,
+                        distanceBefore,
+                        relativeDistance: currentRelativeDistance,
+                        distanceCommandTarget,
+                        distanceCommandError,
+                        distanceProgress,
+                        progressValue,
                         stepProgress,
                         commandError,
                         bodyError,
+                        waistXValue,
                         waistXViolation,
                         relativePoseChange,
+                        diagnosticInvariantError,
+                        invariantError,
                         progressRatio: completionEvaluation.progressRatio,
                         dmin,
+                        jointClearanceMin,
+                        waistClearanceMin,
+                        maxViolation,
+                        taskScale,
+                        trSafetyStatus,
+                        cctsmW: finiteDiagnostic(diagnostics, 'cctsmW'),
+                        cctsmWvfi: finiteDiagnostic(diagnostics, 'cctsmWvfi'),
+                        cctsmWAbsHier: finiteDiagnostic(diagnostics, 'cctsmWAbsHier'),
+                        cctsmWAbsHierVfi: finiteDiagnostic(diagnostics, 'cctsmWAbsHierVfi'),
+                        cctsmWAbsArm: finiteDiagnostic(diagnostics, 'cctsmWAbsArm'),
+                        cctsmWAbsArmVfi: finiteDiagnostic(diagnostics, 'cctsmWAbsArmVfi'),
+                        cctsmWCmd: finiteDiagnostic(diagnostics, 'cctsmWCmd'),
                         ok: stepEvaluation.ok,
                         solver: typeof status.solver === 'string' ? status.solver : task.solverMode,
                         reason: stepEvaluation.reason,
@@ -578,22 +915,25 @@ try {
                         converged: status.converged !== false
                     });
 
-                    if (completionEvaluation.completed) {
+                    if (completionEvaluation.completed && completed !== true) {
                         reachedTarget = true;
                         completed = true;
                         completionTicks = tick;
                         terminalReason = 'completed';
-                        break;
+                        if (!fixedTicks) break;
                     }
-                    if (completionEvaluation.reachedTarget) {
+                    if (!fixedTicks && completionEvaluation.reachedTarget) {
                         reachedTarget = true;
                         terminalReason = 'target_not_converged';
                         break;
                     }
-                    if (stepEvaluation.shouldStop) {
+                    if (!fixedTicks && stepEvaluation.shouldStop) {
                         terminalReason = stepEvaluation.ok ? 'stall' : stepEvaluation.reason;
                         break;
                     }
+                }
+                if (fixedTicks) {
+                    terminalReason = completed ? 'fixed_ticks_completed' : 'fixed_ticks';
                 }
 
                 const finalStep = steps[steps.length - 1] || {};
@@ -606,29 +946,50 @@ try {
                     controllerKey: task.key,
                     solverMode: task.solverMode,
                     controlMode: task.controlMode,
+                    progressKind: task.progressKind || 'absolute-x',
+                    jogDirection: task.jogDirection || 'positive',
+                    initialQ,
+                    initialWaistX,
+                    initialRelativeDistance: Number.isFinite(startRelativeDistance) ? startRelativeDistance : Number.NaN,
                     sustainableTicks,
                     reachedTarget,
                     completed,
                     completionTicks,
                     finalXProgress: Number.isFinite(finalStep.xProgress) ? finalStep.xProgress : 0,
+                    finalDistanceProgress: Number.isFinite(finalStep.distanceProgress) ? finalStep.distanceProgress : Number.NaN,
                     finalCommandError: Number.isFinite(finalStep.commandError) ? finalStep.commandError : Number.NaN,
                     finalBodyError: Number.isFinite(finalStep.bodyError) ? finalStep.bodyError : Number.NaN,
                     finalRelativePoseChange: Number.isFinite(finalStep.relativePoseChange) ? finalStep.relativePoseChange : Number.NaN,
+                    finalInvariantError: Number.isFinite(finalStep.invariantError) ? finalStep.invariantError : Number.NaN,
                     finalDmin: Number.isFinite(finalStep.dmin) ? finalStep.dmin : Number.NaN,
+                    finalJointClearanceMin: Number.isFinite(finalStep.jointClearanceMin) ? finalStep.jointClearanceMin : Number.NaN,
+                    finalWaistClearanceMin: Number.isFinite(finalStep.waistClearanceMin) ? finalStep.waistClearanceMin : Number.NaN,
+                    finalCCTSMW: Number.isFinite(finalStep.cctsmW) ? finalStep.cctsmW : Number.NaN,
+                    finalCCTSMWvfi: Number.isFinite(finalStep.cctsmWvfi) ? finalStep.cctsmWvfi : Number.NaN,
+                    finalCCTSMWAbsHier: Number.isFinite(finalStep.cctsmWAbsHier) ? finalStep.cctsmWAbsHier : Number.NaN,
+                    finalCCTSMWAbsHierVfi: Number.isFinite(finalStep.cctsmWAbsHierVfi) ? finalStep.cctsmWAbsHierVfi : Number.NaN,
+                    finalCCTSMWAbsArm: Number.isFinite(finalStep.cctsmWAbsArm) ? finalStep.cctsmWAbsArm : Number.NaN,
+                    finalCCTSMWAbsArmVfi: Number.isFinite(finalStep.cctsmWAbsArmVfi) ? finalStep.cctsmWAbsArmVfi : Number.NaN,
+                    finalCCTSMWCmd: Number.isFinite(finalStep.cctsmWCmd) ? finalStep.cctsmWCmd : Number.NaN,
+                    maxViolation: Number.isFinite(finalStep.maxViolation) ? finalStep.maxViolation : Number.NaN,
+                    trSafetyStatus: finalStep.trSafetyStatus || '',
                     progressRatio: Number.isFinite(finalStep.progressRatio) ? finalStep.progressRatio : Number.NaN,
                     meanSolveMs,
                     p95SolveMs,
                     maxTicks: tickBudget,
+                    fixedTicks,
+                    teachSpeedPercent: appliedTeachSpeedPercent,
                     targetXMeters: Number.isFinite(Number(controllerOptions.targetXMeters))
                         ? Number(controllerOptions.targetXMeters)
                         : targetXMeters,
+                    waistCorridor,
                     terminalReason: terminalReason || finalStep.reason || 'unknown',
                     terminalLabel: finalStep.diagnosticLabel || 'unknown',
                     steps
                 });
                 console.log(
                     `[scenario] ${task.label} | ${task.profile} | ${task.label} | ${task.solverMode} `
-                    + `completed=${completed ? 'yes' : 'no'} progress=${((Number.isFinite(finalStep.xProgress) ? finalStep.xProgress : 0)).toFixed(4)}`
+                    + `completed=${completed ? 'yes' : 'no'} progress=${((Number.isFinite(finalStep.progressValue) ? finalStep.progressValue : 0)).toFixed(4)}`
                 );
             }
 
@@ -638,18 +999,25 @@ try {
             tasks,
             targetXMeters: TARGET_X_METERS,
             maxTicks: MAX_TICKS,
+            teachSpeedPercent: TEACH_SPEED_PERCENT,
             minEffectiveProgress: MIN_EFFECTIVE_PROGRESS,
             maxStallTicks: MAX_STALL_TICKS,
             commandTolerance: COMMAND_TOLERANCE,
             bodyTolerance: BODY_TOLERANCE,
+            fixedTicks: FIXED_TICKS,
+            waistCorridorBackwardMargin: WAIST_CORRIDOR_BACKWARD_MARGIN,
+            waistCorridorForwardMargin: WAIST_CORRIDOR_FORWARD_MARGIN,
             nearLimitSeed: NEAR_LIMIT_SEED
         }
     );
 
     for (const run of result.runs) {
+        const progress = Number.isFinite(Number(run.finalDistanceProgress))
+            ? Number(run.finalDistanceProgress)
+            : Number(run.finalXProgress);
         console.log(
             `[done] ${run.mode} | ${run.profile} | ${run.controllerLabel} `
-            + `completed=${run.completed ? 'yes' : 'no'} progress=${run.finalXProgress.toFixed(4)}`
+            + `completed=${run.completed ? 'yes' : 'no'} progress=${(Number.isFinite(progress) ? progress : 0).toFixed(4)}`
         );
     }
 
@@ -658,6 +1026,8 @@ try {
     console.log(markdown);
     console.log(`\nSaved JSON to ${OUTPUT_JSON}`);
     console.log(`Saved Markdown to ${OUTPUT_MD}`);
+    console.log(`Saved CSV to ${OUTPUT_CSV}`);
+    console.log(`Saved LaTeX to ${OUTPUT_LATEX}`);
 } finally {
     await browser.close();
     await stopServer(server);

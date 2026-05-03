@@ -1,0 +1,2 @@
+Scenario,Controller,Success / ticks,Task-valid ticks,Progress (m),Avg. task deviation,Avg. invariant deviation,Avg. joint-limit clearance (rad),Avg. waist-corridor clearance (m),Mean / P95 solve time (ms)
+waist-distance,Recovery Optimization (TR+w_vfi),yes / 30,30 / 30,0.075,7.93\times 10^{-9},3.23\times 10^{-8},0.081,0.188,253.1 / 309.5

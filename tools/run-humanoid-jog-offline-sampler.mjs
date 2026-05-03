@@ -24,7 +24,7 @@ Options:
   --humanoid '[...]'              Initial 20-element humanoid joint vector.
   --humanoid-file <path>          File containing JSON array or humanoid=[...].
   --mode <name>                   Control mode label. Default: absolute-target.
-  --solver <name>                 Solver label/config. Default: mj_restore_tr_safe.
+  --solver <name>                 Solver label/config. Default: mj_restore_tr_safe_wvfi.
   --axis <x|y|z>                  Command axis. Default: x.
   --direction <positive|negative> Command direction. Default: positive.
   --command-index <n>             Override active joint/variable index for the command.
@@ -144,7 +144,7 @@ if (args.help) {
 }
 
 const mode = args.mode || 'absolute-target';
-const solverMode = args.solver || args['solver-mode'] || 'mj_restore_tr_safe';
+const solverMode = args.solver || args['solver-mode'] || 'mj_restore_tr_safe_wvfi';
 const axis = args.axis || 'x';
 const direction = args.direction || 'positive';
 const steps = Math.max(1, Math.floor(parseNumber(args.steps, 50)));

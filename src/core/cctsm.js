@@ -354,14 +354,177 @@ export function directionalCCTSM(Gram, vHat) {
     return Math.max(0, sigma);
 }
 
+function symmetricEigenvaluesJacobi(G, tol = 1e-12) {
+    if (!Array.isArray(G) || G.length === 0) return [];
+    const n = G.length;
+    const A = G.map((row, i) => Array.from({ length: n }, (_, j) => asFinite(row?.[j], i === j ? 0 : 0)));
+    const maxIterations = Math.max(16, 32 * n * n);
+    for (let iter = 0; iter < maxIterations; iter++) {
+        let p = 0;
+        let q = 1;
+        let maxOff = 0;
+        for (let i = 0; i < n; i++) {
+            for (let j = i + 1; j < n; j++) {
+                const value = Math.abs(A[i][j]);
+                if (value > maxOff) {
+                    maxOff = value;
+                    p = i;
+                    q = j;
+                }
+            }
+        }
+        if (maxOff < tol || n < 2) break;
+        const app = A[p][p];
+        const aqq = A[q][q];
+        const apq = A[p][q];
+        const angle = 0.5 * Math.atan2(2 * apq, aqq - app);
+        const c = Math.cos(angle);
+        const s = Math.sin(angle);
+        for (let k = 0; k < n; k++) {
+            if (k === p || k === q) continue;
+            const aik = A[k][p];
+            const akq = A[k][q];
+            A[k][p] = c * aik - s * akq;
+            A[p][k] = A[k][p];
+            A[k][q] = s * aik + c * akq;
+            A[q][k] = A[k][q];
+        }
+        A[p][p] = c * c * app - 2 * s * c * apq + s * s * aqq;
+        A[q][q] = s * s * app + 2 * s * c * apq + c * c * aqq;
+        A[p][q] = 0;
+        A[q][p] = 0;
+    }
+    return A.map((row, i) => row[i]).sort((a, b) => a - b);
+}
+
+function conditionScoreFromJacobian(J) {
+    if (!Array.isArray(J) || J.length === 0 || !Array.isArray(J[0]) || J[0].length === 0) return 0;
+    const Gram = matMul(J, transpose(J));
+    const eigenvalues = symmetricEigenvaluesJacobi(Gram).map((value) => Math.max(0, asFinite(value)));
+    if (eigenvalues.length === 0) return 0;
+    const lambdaMax = Math.max(...eigenvalues);
+    if (lambdaMax <= 1e-18) return 0;
+    const lambdaMin = Math.min(...eigenvalues);
+    return Math.sqrt(Math.max(0, lambdaMin) / lambdaMax);
+}
+
+function enumerateHyperoctants(dim, maxHyperoctants = 64) {
+    const m = Math.max(0, Math.floor(dim));
+    if (m === 0) return [[]];
+    const maxCount = Math.max(1, Math.floor(maxHyperoctants));
+    const exactBits = m <= 20 ? (1 << m) : Number.POSITIVE_INFINITY;
+    const count = Math.min(exactBits, maxCount);
+    const patternBits = Math.max(1, Math.min(m, Math.floor(Math.log2(count)) || 1));
+    const gammas = [];
+    for (let mask = 0; mask < count; mask++) {
+        gammas.push(Array.from({ length: m }, (_, i) => ((mask >> (i % patternBits)) & 1) ? 1 : -1));
+    }
+    return gammas;
+}
+
+/**
+ * Direction-dependent extended manipulability inspired by augmented Jacobian
+ * measures for joint-limit and obstacle avoidance.
+ *
+ * Each monitored margin row is treated as an inward distance gradient. For a
+ * task-space hyperoctant, entries that would locally reduce a near-active margin
+ * are smoothly attenuated before the condition score is evaluated. Waist-corridor
+ * rows use the same mechanism as obstacle-distance rows.
+ */
+export function computeExtendedConditionManipulability(J, constraints = [], options = {}) {
+    if (!Array.isArray(J) || J.length === 0 || !Array.isArray(J[0]) || J[0].length === 0) {
+        return {
+            value: 0,
+            baseCondition: 0,
+            bestCondition: 0,
+            worstGamma: [],
+            conditions: [],
+            count: 0
+        };
+    }
+    const rows = J.length;
+    const cols = J[0].length;
+    const cleanJ = J.map((row) => Array.from({ length: cols }, (_, col) => asFinite(row?.[col])));
+    const baseCondition = conditionScoreFromJacobian(cleanJ);
+    const activeConstraints = (Array.isArray(constraints) ? constraints : [])
+        .filter((constraint) => Array.isArray(constraint?.row) && constraint.row.length >= cols)
+        .map((constraint) => {
+            const distance = Math.max(0, asFinite(constraint.distance));
+            const threshold = Math.max(1e-9, asFinite(constraint.threshold, 0.15));
+            const omega = distance / (distance + threshold);
+            return {
+                row: constraint.row.slice(0, cols).map((value) => asFinite(value)),
+                penalty: Math.sqrt(Math.max(0, Math.min(1, omega)))
+            };
+        })
+        .filter((constraint) => constraint.penalty < 0.999999);
+
+    if (activeConstraints.length === 0) {
+        return {
+            value: baseCondition,
+            baseCondition,
+            bestCondition: baseCondition,
+            worstGamma: new Array(rows).fill(1),
+            conditions: [baseCondition],
+            count: 1
+        };
+    }
+
+    const gammas = enumerateHyperoctants(rows, options?.maxHyperoctants ?? 64);
+    let worstCondition = Number.POSITIVE_INFINITY;
+    let bestCondition = 0;
+    let worstGamma = gammas[0]?.slice() ?? [];
+    const conditions = [];
+    for (const gamma of gammas) {
+        const augmented = cleanJ.map((row) => row.slice());
+        for (const constraint of activeConstraints) {
+            for (let r = 0; r < rows; r++) {
+                const taskSign = asFinite(gamma[r], 1);
+                for (let c = 0; c < cols; c++) {
+                    const boundaryMotion = taskSign * asFinite(cleanJ[r][c]) * asFinite(constraint.row[c]);
+                    if (boundaryMotion < 0) {
+                        augmented[r][c] *= constraint.penalty;
+                    }
+                }
+            }
+        }
+        const score = conditionScoreFromJacobian(augmented);
+        conditions.push(score);
+        if (score < worstCondition) {
+            worstCondition = score;
+            worstGamma = gamma.slice();
+        }
+        if (score > bestCondition) bestCondition = score;
+    }
+
+    const value = Number.isFinite(worstCondition) ? worstCondition : 0;
+    return {
+        value,
+        baseCondition,
+        bestCondition,
+        worstGamma,
+        conditions,
+        count: conditions.length
+    };
+}
+
 // ─── VFI attenuation matrix (eq. 969) ────────────────────────────────────────
 
 /**
  * Build the joint-space VFI attenuation matrix W_vfi (n×n).
  *
- *   W_vfi = I - sum_i (1 - omega_i) * j_i^T j_i / ||j_i||^2
+ * Each monitored row creates a contraction
+ *
+ *   C_i = I - (1 - sqrt(omega_i)) * u_i u_i^T,
+ *   u_i = j_i^T / ||j_i||.
+ *
+ * The returned metric is
+ *
+ *   W_vfi = B_vfi B_vfi^T,  B_vfi = C_k ... C_1.
  *
  * where omega_i = d_i / (d_i + d_bar_i) in [0,1) for all monitored constraints.
+ * This reduces to the old rank-one attenuation for a single row while remaining
+ * positive semidefinite for multiple non-orthogonal rows.
  *
  * @param {Array<{row: number[], distance: number, threshold: number}>} constraints
  *   Each entry is one monitored VFI constraint with its Jacobian row (length n),
@@ -370,8 +533,8 @@ export function directionalCCTSM(Gram, vHat) {
  * @returns {number[][]}  n×n attenuation matrix
  */
 export function computeVFIAttenuationMatrix(constraints, n) {
-    // Start with identity
-    const W = Array.from({ length: n }, (_, i) => {
+    // Build the contraction product B_vfi first, then return B_vfi B_vfi^T.
+    let B = Array.from({ length: n }, (_, i) => {
         const row = new Array(n).fill(0);
         row[i] = 1;
         return row;
@@ -381,15 +544,29 @@ export function computeVFIAttenuationMatrix(constraints, n) {
         if (c.threshold <= 0) continue;
         const distance = Math.max(0, c.distance);
         const omega = distance / (distance + c.threshold);
-        const baseScale = 1 - omega; // = d_bar / (d + d_bar)
-        const scale = baseScale;
+        const scale = 1 - Math.sqrt(Math.max(0, Math.min(1, omega)));
         const jrow = c.row;
         const norm2 = jrow.reduce((s, v) => s + asFinite(v) ** 2, 0);
         if (norm2 < 1e-24) continue;
+        const C = Array.from({ length: n }, (_, i) => {
+            const row = new Array(n).fill(0);
+            row[i] = 1;
+            return row;
+        });
         for (let i = 0; i < n; i++) {
             for (let j = 0; j < n; j++) {
-                W[i][j] -= scale * asFinite(jrow[i]) * asFinite(jrow[j]) / norm2;
+                C[i][j] -= scale * asFinite(jrow[i]) * asFinite(jrow[j]) / norm2;
             }
+        }
+        B = matMul(C, B);
+    }
+    const W = matMul(B, transpose(B));
+    // Symmetrize tiny roundoff differences from matrix products.
+    for (let i = 0; i < n; i++) {
+        for (let j = i + 1; j < n; j++) {
+            const avg = 0.5 * (asFinite(W[i][j]) + asFinite(W[j][i]));
+            W[i][j] = avg;
+            W[j][i] = avg;
         }
     }
     return W;

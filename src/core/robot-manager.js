@@ -24,6 +24,38 @@ import { resolveHumanoidInitialQ } from './humanoid-default-q-profiles.js';
 
 const ENABLE_SINGLE_ARM_FKM_LOG = false;
 const TEACH_MULTIPLICATION_ORDER_STORAGE_KEY = 'teach-multiply-order-delta-first';
+let humanoidFKDisplayWarningShown = false;
+let humanoidCooperativeDisplayWarningShown = false;
+
+function getHumanoidEffectorPoseForDisplay(q, effectorIndex) {
+    try {
+        return appState.humanoidModel.fkmEffector(q, effectorIndex);
+    } catch (error) {
+        if (!humanoidFKDisplayWarningShown) {
+            console.warn('Humanoid FK display unavailable:', error);
+            humanoidFKDisplayWarningShown = true;
+        }
+        return null;
+    }
+}
+
+function getHumanoidCooperativePoseForDisplay(q) {
+    if (!appState.dualArmSystem || typeof appState.dualArmSystem.getAbsolutePose !== 'function') {
+        return null;
+    }
+    try {
+        return {
+            absolute: appState.dualArmSystem.getAbsolutePose(q),
+            relative: appState.dualArmSystem.getRelativePose(q)
+        };
+    } catch (error) {
+        if (!humanoidCooperativeDisplayWarningShown) {
+            console.warn('Humanoid cooperative pose display unavailable:', error);
+            humanoidCooperativeDisplayWarningShown = true;
+        }
+        return null;
+    }
+}
 
 // ---------------------------------------------------------------------------
 // initVisualizer
@@ -155,15 +187,17 @@ export function updateHumanoidPose() {
     try {
         if (!appState.humanoidModel || !appState.humanoidQ.length) return;
         callbacks.applyHumanoidBasePose();
-        if (appState.visualizer) appState.visualizer.setHumanoidJoints(appState.humanoidQ);
+        if (appState.visualizer) appState.visualizer.setHumanoidJoints(appState.humanoidQ, { skipDQKinematics: true });
 
         // 更新关节滑块显示
         callbacks.updateHumanoidJointSlidersFromAngles();
 
         const dqModule = getDQModule();
         if (!dqModule) return;
-        const dq1 = appState.humanoidModel.fkmEffector(appState.humanoidQ, 1);
-        const dq2 = appState.humanoidModel.fkmEffector(appState.humanoidQ, 2);
+        const dq1 = getHumanoidEffectorPoseForDisplay(appState.humanoidQ, 1);
+        const dq2 = getHumanoidEffectorPoseForDisplay(appState.humanoidQ, 2);
+        if (!dq1 || !dq2) return;
+        humanoidFKDisplayWarningShown = false;
         // 注意：DQWrapper.pose 在当前 WASM 实现中等价于 R*T（平移在局部坐标）
         // 这里基座位姿需要世界坐标语义，因此统一使用 T*R。
         const baseX = appState.humanoidBasePose.x || 0;
@@ -183,9 +217,10 @@ export function updateHumanoidPose() {
         let absPose, relPose;
         let absDQForDisplay = null;
         let relDQForDisplay = null;
-        if (appState.dualArmSystem && typeof appState.dualArmSystem.getAbsolutePose === 'function') {
-            const absDQLocal = appState.dualArmSystem.getAbsolutePose(appState.humanoidQ);
-            const relDQArr = appState.dualArmSystem.getRelativePose(appState.humanoidQ);
+        const cooperativePose = getHumanoidCooperativePoseForDisplay(appState.humanoidQ);
+        if (cooperativePose) {
+            const absDQLocal = cooperativePose.absolute;
+            const relDQArr = cooperativePose.relative;
             const absDQ = dqModule.DQWrapper.toArray(dqModule.DQWrapper.multiply(baseObj, dqModule.DQWrapper.createFromArray(absDQLocal)));
             const absObj = dqModule.DQWrapper.createFromArray(absDQ);
             const relObj = dqModule.DQWrapper.createFromArray(relDQArr);
@@ -193,6 +228,7 @@ export function updateHumanoidPose() {
             relPose = { translation: dqModule.DQWrapper.getTranslation(relObj), rotation: dqModule.DQWrapper.getRotation(relObj) };
             absDQForDisplay = absDQ;
             relDQForDisplay = relDQArr;
+            humanoidCooperativeDisplayWarningShown = false;
         } else {
             // fallback: 简单计算
             absPose = {

@@ -18,7 +18,6 @@ import { extractMDHFromURDF, createMDHTestSuite, formatMDHForDQ } from '../urdf-
 import { URDFPackageManager, loadURDFFromPackage } from '../urdf-loader.js';
 import { getActiveJointConfig, displayStep, angleToDisplay } from '../utils/math.js';
 import { setupGlobalDragAndDrop } from './drag-drop.js';
-import { setupScenePresetListeners } from './environment-panel.js';
 import { normalizeHumanoidJogSolverMode } from '../core/humanoid-jog-solver-presentation.js';
 import { getHumanoidTaskMetricOptionLabels } from '../core/humanoid-jog-task-metric-labels.js';
 import { onLanguageChange, t } from '../i18n.js';
@@ -795,7 +794,7 @@ export function setupHumanoidParameterControls() {
 }
 
 function setupHumanoidJogSolverControls() {
-    // 人形点动求解器切换（new qpJ / 零空间投影 / MuJoCo 风格恢复）
+    // 人形点动求解器切换（恢复优化 TR / TR+w / TR+w_vfi）
     const humanoidJogSolverSelect = document.getElementById('humanoid-jog-solver-select');
     const humanoidJogMetricSelect = document.getElementById('humanoid-manifold-jog-metric-select');
     const humanoidWMetricIncreaseBtn = document.getElementById('humanoid-w-metric-increase-btn');
@@ -807,8 +806,8 @@ function setupHumanoidJogSolverControls() {
     const HUMANOID_JOG_SOLVER_STORAGE_KEY = 'humanoid-jog-solver-mode';
     const HUMANOID_JOG_METRIC_STORAGE_KEY = 'humanoid-manifold-jog-metric';
     const HUMANOID_JOG_DEFAULT_VERSION_STORAGE_KEY = 'humanoid-jog-default-version';
-    const HUMANOID_JOG_DEFAULT_VERSION = 'tr-safe-vfi-metric';
-    const DEFAULT_HUMANOID_JOG_SOLVER_MODE = 'mj_restore_tr_safe';
+    const HUMANOID_JOG_DEFAULT_VERSION = 'tr-wvfi-three-solver';
+    const DEFAULT_HUMANOID_JOG_SOLVER_MODE = 'mj_restore_tr_safe_wvfi';
     const DEFAULT_HUMANOID_JOG_METRIC = 'w_abs_hier_vfi';
     const HUMANOID_WAIST_X_CORRIDOR_STORAGE_KEY = 'humanoid-waist-x-corridor-enabled';
     const HUMANOID_WAIST_X_CORRIDOR_MIN_STORAGE_KEY = 'humanoid-waist-x-corridor-min';
@@ -816,38 +815,47 @@ function setupHumanoidJogSolverControls() {
     const HUMANOID_TEST_DUAL_ARM_LOCK_STORAGE_KEY = 'humanoid-test-dual-arm-lock-enabled';
     const isHumanoidRuledSurfacePolishingMode = (mode) => (
         mode === 'left-ruled-surface-polishing'
-        || mode === 'cooperative-ruled-surface-polishing'
         || mode === 'cooperative-ruled-surface-polishing-dq-setpoint'
         || mode === 'cooperative-ruled-surface-polishing-dq-setpoint-arm-only'
     );
     const isHumanoidMJRestoreLikeSolverMode = (mode) => (
-        mode === 'mj_restore'
-        || mode === 'mj_restore_pre_w'
-        || mode === 'mj_restore_tr'
-        || mode === 'mj_restore_tr_safe'
+        mode === 'mj_restore_tr'
+        || mode === 'mj_restore_tr_w'
+        || mode === 'mj_restore_tr_safe_wvfi'
     );
     const normalizeHumanoidJogSolverModeForUI = (modeRaw) => {
         const mode = normalizeHumanoidJogSolverMode(modeRaw);
-        return mode === 'mj_restore_pre_w' ? DEFAULT_HUMANOID_JOG_SOLVER_MODE : mode;
+        return isHumanoidMJRestoreLikeSolverMode(mode)
+            ? mode
+            : DEFAULT_HUMANOID_JOG_SOLVER_MODE;
     };
     const normalizeHumanoidJogMetric = (metricRaw) => {
-        return metricRaw === 'w_abs_hier_vfi' ? 'w_abs_hier_vfi' : 'w_abs_hier';
+        return (
+            metricRaw === 'w_abs_hier_ext'
+            || metricRaw === 'w_abs_hier_vfi'
+        ) ? metricRaw : 'w_abs_hier';
     };
     const resolveInitialHumanoidJogSolverMode = (savedMode, selectMode, defaultVersionSeen = false) => {
         if (
             savedMode == null ||
             savedMode === '' ||
+            savedMode === 'vfi' ||
+            savedMode === 'priority' ||
+            savedMode === 'hqp' ||
+            savedMode === 'sns' ||
+            savedMode === 'predictive_ik' ||
+            savedMode === 'proxqp' ||
+            savedMode === 'mj_restore' ||
             savedMode === 'mj_restore_pre_w' ||
+            savedMode === 'mj_restore_tr_safe' ||
+            savedMode === 'wbc_qp' ||
             savedMode === 'torso_seed_upright' ||
-            savedMode === 'torso_seed_upright_vfi' ||
-            (!defaultVersionSeen && savedMode === 'vfi')
+            savedMode === 'torso_seed_upright_vfi'
         ) {
             return DEFAULT_HUMANOID_JOG_SOLVER_MODE;
         }
         const normalized = normalizeHumanoidJogSolverModeForUI(savedMode ?? selectMode ?? DEFAULT_HUMANOID_JOG_SOLVER_MODE);
-        return normalized === 'vfi' && savedMode !== 'vfi'
-            ? DEFAULT_HUMANOID_JOG_SOLVER_MODE
-            : normalized;
+        return normalized;
     };
     const resolveInitialHumanoidJogMetric = (savedMetric, selectMetric, defaultVersionSeen = false) => {
         if (savedMetric == null || savedMetric === '' || (!defaultVersionSeen && savedMetric === 'w_abs_hier')) {
@@ -973,6 +981,10 @@ function setupHumanoidJogSolverControls() {
         );
         if (metric === 'w_abs_hier_vfi') {
             appState.visualizer.optimizeHumanoidHierarchicalAbsoluteVFIManipulability?.(direction);
+            return;
+        }
+        if (metric === 'w_abs_hier_ext') {
+            appState.visualizer.optimizeHumanoidHierarchicalAbsoluteExtendedManipulability?.(direction);
             return;
         }
         appState.visualizer.optimizeHumanoidHierarchicalAbsoluteManipulability?.(direction);
@@ -1289,32 +1301,6 @@ function setupEventListeners() {
         });
     }
 
-    const addEnvironmentBoxBtn = document.getElementById('add-environment-box-btn');
-    if (addEnvironmentBoxBtn) {
-        const defaultLabel = addEnvironmentBoxBtn.textContent.trim();
-        addEnvironmentBoxBtn.addEventListener('click', () => {
-            addEnvironmentBoxBtn.disabled = true;
-            try {
-                if (callbacks.addEnvironmentBoxToScene) {
-                    callbacks.addEnvironmentBoxToScene();
-                }
-                addEnvironmentBoxBtn.textContent = t('Environment box added');
-            } catch (error) {
-                console.error('添加环境箱体失败:', error);
-                addEnvironmentBoxBtn.textContent = t('Add failed');
-                window.alert(t('Failed to add environment box: {{message}}', { message: error.message }));
-            } finally {
-                setTimeout(() => {
-                    addEnvironmentBoxBtn.textContent = t('Add Box (41.5 × 30.5 × 14 cm)');
-                    addEnvironmentBoxBtn.disabled = false;
-                }, 1500);
-            }
-        });
-    }
-
-    // 场景预设下拉菜单
-    setupScenePresetListeners();
-
     const copyAnglesBtn = document.getElementById('copy-joint-angles-btn');
     if (copyAnglesBtn) {
         const defaultCopyText = copyAnglesBtn.textContent.trim();
@@ -1529,8 +1515,7 @@ function setupEventListeners() {
                 if (
                     appState.visualizer.humanoidMode
                     && (
-                        controlMode === 'cooperative-ruled-surface-polishing'
-                        || controlMode === 'cooperative-ruled-surface-polishing-dq-setpoint'
+                        controlMode === 'cooperative-ruled-surface-polishing-dq-setpoint'
                         || controlMode === 'cooperative-ruled-surface-polishing-dq-setpoint-arm-only'
                     )
                 ) {
@@ -1718,9 +1703,6 @@ function setupEventListeners() {
     });
 
     // 全局拖拽加载
-    if (callbacks.renderEnvironmentObjectList) {
-        callbacks.renderEnvironmentObjectList();
-    }
     setupGlobalDragAndDrop();
     
     // 浮动面板与底部功能栏

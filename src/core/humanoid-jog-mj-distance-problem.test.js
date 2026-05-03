@@ -72,3 +72,64 @@ test('buildHumanoidJogMJDistanceProblem preserves waist corridor inequalities wh
     assert.deepEqual(problem.inequalities.waistXCorridor.vfiRows, [[1, 0]]);
     assert.deepEqual(problem.inequalities.waistXCorridor.rhs, [0.01]);
 });
+
+test('buildHumanoidJogMJDistanceProblem carries joint-limit VFI rows for trust-region repair', () => {
+    const problem = buildHumanoidJogMJDistanceProblem({
+        q: [0.8, -0.99995],
+        qCurrent: [0, 0],
+        distanceTarget: 0.49,
+        currentDistance: 0.36,
+        distanceJacobian: () => [[0.4, 0.6]],
+        absoluteTarget: [1.0],
+        absolutePose: () => [0.7],
+        absoluteJacobian: () => [[1, 0]],
+        relativeRotationTarget: [],
+        relativeRotation: () => [],
+        relativeRotationJacobian: () => [],
+        lowerBounds: [-1, -1],
+        upperBounds: [1, 1],
+        stepBounds: [1, 1],
+        jointLimitEta: 5,
+        jointLimitEdgeStopDistance: 1e-4
+    });
+
+    assert.deepEqual(problem.inequalities.jointLimitVFI.rows, [
+        [1, 0],
+        [-1, 0],
+        [0, 1],
+        [0, -1]
+    ]);
+    assertCloseArray(problem.inequalities.jointLimitVFI.rhs, [1, 1, 1, 0]);
+    assert.equal(problem.inequalities.jointLimitVFI.count, 4);
+});
+
+test('buildHumanoidJogMJDistanceProblem builds safety push rows away from tight joint limits', () => {
+    const problem = buildHumanoidJogMJDistanceProblem({
+        q: [0.96, -0.97, 0],
+        qCurrent: [0, 0, 0],
+        distanceTarget: 0.49,
+        currentDistance: 0.49,
+        distanceJacobian: () => [[1, 0, 0]],
+        absoluteTarget: [1],
+        absolutePose: () => [1],
+        absoluteJacobian: () => [[0, 1, 0]],
+        relativeRotationTarget: [],
+        relativeRotation: () => [],
+        relativeRotationJacobian: () => [],
+        lowerBounds: [-1, -1, -1],
+        upperBounds: [1, 1, 1],
+        stepBounds: [1, 1, 1],
+        mjRestoreSafetyPushEnabled: true,
+        jointLimitActivationThreshold: 0.2,
+        safetyPushTargetFraction: 0.25,
+        safetyPushMaxDistanceStep: 0.01
+    });
+
+    assert.equal(problem.safetyObjective.enabled, true);
+    assert.deepEqual(problem.safetyObjective.rows, [
+        [-1, 0, 0],
+        [0, 1, 0]
+    ]);
+    assertCloseArray(problem.safetyObjective.targets, [0.01, 0.01]);
+    assert.equal(problem.safetyObjective.count, 2);
+});

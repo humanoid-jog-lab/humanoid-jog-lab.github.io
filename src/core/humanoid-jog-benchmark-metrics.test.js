@@ -4,6 +4,8 @@ import assert from 'node:assert/strict';
 import {
     computePearsonCorrelation,
     countByLabel,
+    formatBenchmarkCsvTable,
+    formatBenchmarkLatexTable,
     formatBenchmarkMarkdownTable,
     meanOf,
     summarizePairedMethodDelta,
@@ -102,6 +104,57 @@ test('formatBenchmarkMarkdownTable renders a markdown table', () => {
 
     assert.match(table, /\| Method \| Success \| Ticks \| Runtime \|/);
     assert.match(table, /\| Predictive \| 75\.0% \| 9\.5 \| 13\.21 \|/);
+});
+
+test('formatBenchmarkCsvTable renders machine-readable table rows with n/a for missing values', () => {
+    const csv = formatBenchmarkCsvTable(
+        [
+            {
+                scenario: 'absolute',
+                controller: 'TR+Safety',
+                progress_m: 0.3,
+                avg_waist_clearance_m: Number.NaN
+            }
+        ],
+        {
+            columns: [
+                { key: 'scenario', label: 'Scenario' },
+                { key: 'controller', label: 'Controller' },
+                { key: 'progress_m', label: 'Progress (m)', digits: 3 },
+                { key: 'avg_waist_clearance_m', label: 'Avg. waist-corridor clearance (m)' }
+            ]
+        }
+    );
+
+    assert.equal(
+        csv.trim(),
+        'Scenario,Controller,Progress (m),Avg. waist-corridor clearance (m)\nabsolute,TR+Safety,0.300,n/a'
+    );
+});
+
+test('formatBenchmarkLatexTable renders a compact tabular with formatted numeric values', () => {
+    const latex = formatBenchmarkLatexTable(
+        [
+            {
+                scenario: 'absolute',
+                controller: 'Predictive IK',
+                avg_task_deviation: 2e-4,
+                avg_waist_clearance_m: Number.NaN
+            }
+        ],
+        {
+            columns: [
+                { key: 'scenario', label: 'Scenario' },
+                { key: 'controller', label: 'Controller' },
+                { key: 'avg_task_deviation', label: 'Avg. task deviation', format: 'sci', digits: 2 },
+                { key: 'avg_waist_clearance_m', label: 'Avg. waist-corridor clearance (m)' }
+            ]
+        }
+    );
+
+    assert.match(latex, /\\begin\{tabular\}/);
+    assert.equal(latex.includes('absolute & Predictive IK & $2.00\\times 10^{-4}$ & n/a \\\\'), true);
+    assert.match(latex, /\\end\{tabular\}/);
 });
 
 test('computePearsonCorrelation returns a positive correlation for aligned trends', () => {

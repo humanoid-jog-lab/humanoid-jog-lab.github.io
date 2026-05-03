@@ -99,6 +99,25 @@ test('evaluateHumanoidJogCommandOutcome upgrades best-effort progress to practic
     assert.equal(outcome.converged, true);
 });
 
+test('evaluateHumanoidJogCommandOutcome upgrades time-budget best-effort progress when tolerances are satisfied', () => {
+    const outcome = evaluateHumanoidJogCommandOutcome({
+        stopReason: 'best_effort_time_budget',
+        initialCommandNorm: 0.02,
+        finalCommandNorm: 5.9e-8,
+        finalInvariantNorm: 1.56e-6,
+        hardCommandTol: 1e-6,
+        hardInvariantTol: 5e-5,
+        practicalCommandTol: 1e-4,
+        practicalInvariantTol: 5e-5,
+        mismatchTol: 1e-3,
+        mismatchRequiredReduction: 0.8
+    });
+
+    assert.equal(outcome.reason, 'converged');
+    assert.equal(outcome.applyResult, true);
+    assert.equal(outcome.converged, true);
+});
+
 test('evaluateHumanoidJogCommandOutcome upgrades polish-best-effort progress to practical convergence when practical tolerances are satisfied', () => {
     const outcome = evaluateHumanoidJogCommandOutcome({
         stopReason: 'polish_best_effort',
@@ -129,6 +148,47 @@ test('evaluateHumanoidJogCommandOutcome treats polish-converged as converged', (
         practicalCommandTol: 1e-4,
         practicalInvariantTol: 2.5e-4,
         mismatchTol: 1e-3,
+        mismatchRequiredReduction: 0.8
+    });
+
+    assert.equal(outcome.reason, 'converged');
+    assert.equal(outcome.applyResult, true);
+    assert.equal(outcome.converged, true);
+});
+
+test('evaluateHumanoidJogCommandOutcome accepts secondary-limited restoration when the task residuals are satisfied', () => {
+    const result = resolveHumanoidJogCommandResult({
+        stopReason: 'secondary_limited',
+        initialCommandNorm: 0.334,
+        finalCommandNorm: 3.21e-9,
+        finalInvariantNorm: 2.45e-8,
+        hardCommandTol: 1e-6,
+        hardInvariantTol: 5e-5,
+        practicalCommandTol: 1e-4,
+        practicalInvariantTol: 2.5e-4,
+        mismatchTol: 1e-12,
+        mismatchRequiredReduction: 0.8,
+        q: [1, 2, 3],
+        qInitial: [4, 5, 6]
+    });
+
+    assert.equal(result.outcome.reason, 'converged');
+    assert.equal(result.outcome.applyResult, true);
+    assert.equal(result.outcome.converged, true);
+    assert.deepEqual(result.qApplied, [1, 2, 3]);
+});
+
+test('evaluateHumanoidJogCommandOutcome accepts safety-limited restoration when the task residuals are satisfied', () => {
+    const outcome = evaluateHumanoidJogCommandOutcome({
+        stopReason: 'safety_limited',
+        initialCommandNorm: 0.01,
+        finalCommandNorm: 5e-7,
+        finalInvariantNorm: 1e-6,
+        hardCommandTol: 1e-6,
+        hardInvariantTol: 5e-5,
+        practicalCommandTol: 1e-4,
+        practicalInvariantTol: 2.5e-4,
+        mismatchTol: 1e-12,
         mismatchRequiredReduction: 0.8
     });
 

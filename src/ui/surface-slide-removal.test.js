@@ -5,13 +5,14 @@ import { resolve } from 'node:path';
 
 const ROOT = resolve(import.meta.dirname, '../..');
 
-test('old surface-slide control modes stay removed while the new ruled-surface polishing modes remain available', () => {
+test('old surface-slide and plain cooperative polishing control modes stay removed while DQ polishing modes remain available', () => {
     const indexHtml = readFileSync(resolve(ROOT, 'index.html'), 'utf8');
     assert.doesNotMatch(indexHtml, /value="surface-slide"/);
     assert.doesNotMatch(indexHtml, /value="surface-slide-absolute"/);
     assert.doesNotMatch(indexHtml, /value="dual-independent-surface-slide"/);
     assert.match(indexHtml, /value="left-ruled-surface-polishing"/);
-    assert.match(indexHtml, /value="cooperative-ruled-surface-polishing"/);
+    assert.doesNotMatch(indexHtml, /value="cooperative-ruled-surface-polishing"/);
+    assert.match(indexHtml, /value="cooperative-ruled-surface-polishing-dq-setpoint"/);
     assert.match(indexHtml, /value="cooperative-ruled-surface-polishing-dq-setpoint-arm-only"/);
 
     const modeSwitcherJs = readFileSync(resolve(ROOT, 'src/ui/mode-switcher.js'), 'utf8');
@@ -19,7 +20,9 @@ test('old surface-slide control modes stay removed while the new ruled-surface p
     assert.doesNotMatch(modeSwitcherJs, /surface-slide/);
     assert.doesNotMatch(modeSwitcherJs, /dual-independent-surface-slide/);
     assert.match(modeSwitcherJs, /left-ruled-surface-polishing/);
-    assert.match(modeSwitcherJs, /cooperative-ruled-surface-polishing/);
+    assert.doesNotMatch(modeSwitcherJs, /mode === 'cooperative-ruled-surface-polishing'/);
+    assert.doesNotMatch(modeSwitcherJs, /opt\.value === 'cooperative-ruled-surface-polishing'/);
+    assert.match(modeSwitcherJs, /cooperative-ruled-surface-polishing-dq-setpoint/);
     assert.match(modeSwitcherJs, /cooperative-ruled-surface-polishing-dq-setpoint-arm-only/);
     assert.doesNotMatch(modeSwitcherJs, /prepareHumanoidCooperativeRuledSurfacePolishingMode/);
 
@@ -28,7 +31,8 @@ test('old surface-slide control modes stay removed while the new ruled-surface p
     assert.doesNotMatch(eventHandlersJs, /controlMode === 'surface-slide-absolute'/);
     assert.doesNotMatch(eventHandlersJs, /controlMode === 'dual-independent-surface-slide'/);
     assert.match(eventHandlersJs, /controlMode === 'left-ruled-surface-polishing'/);
-    assert.match(eventHandlersJs, /controlMode === 'cooperative-ruled-surface-polishing'/);
+    assert.doesNotMatch(eventHandlersJs, /controlMode === 'cooperative-ruled-surface-polishing'/);
+    assert.match(eventHandlersJs, /controlMode === 'cooperative-ruled-surface-polishing-dq-setpoint'/);
     assert.match(eventHandlersJs, /controlMode === 'cooperative-ruled-surface-polishing-dq-setpoint-arm-only'/);
 
     const taskAdapterJs = readFileSync(resolve(ROOT, 'src/core/humanoid-jog-mj-task-adapter.js'), 'utf8');

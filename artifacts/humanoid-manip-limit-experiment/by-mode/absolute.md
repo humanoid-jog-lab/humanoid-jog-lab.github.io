@@ -1,0 +1,5 @@
+| Scenario | Controller | Success / ticks | Task-valid ticks | Progress (m) | Avg. task deviation | Avg. invariant deviation | Avg. joint-limit clearance (rad) | Avg. waist-corridor clearance (m) | Mean / P95 solve time (ms) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| absolute | Recovery Optimization (TR) | yes / 30 | 30 / 30 | 0.075 | 8.83\times 10^{-9} | 1.09\times 10^{-9} | 0.000 | n/a | 34.2 / 38.1 |
+| absolute | Recovery Optimization (TR+w) | yes / 30 | 30 / 30 | 0.075 | 5.74\times 10^{-9} | 4.82\times 10^{-12} | 0.025 | n/a | 224.3 / 232.8 |
+| absolute | Recovery Optimization (TR+w_vfi) | yes / 30 | 30 / 30 | 0.075 | 2.04\times 10^{-9} | 2.01\times 10^{-9} | 0.116 | n/a | 136.3 / 162.8 |
