@@ -4,6 +4,8 @@ import assert from 'node:assert/strict';
 import {
     buildVFIMarginAscentGradient,
     buildManipulabilityVFIConstraints,
+    computeProtectedForwardSecondaryGradient,
+    computeProtectedSPSASecondaryGradient,
     computeProtectedSecondaryGradient,
     projectSecondaryGradient,
     summarizeManipulabilityVFIConstraints
@@ -162,6 +164,46 @@ test('computeProtectedSecondaryGradient preserves ascent along unprotected direc
 
     assert.ok(Math.abs(gradient[0]) < 1e-6);
     assert.ok(Math.abs(gradient[1] - 1) < 1e-6);
+});
+
+test('computeProtectedForwardSecondaryGradient uses one base plus one scalar evaluation per joint', () => {
+    let evalCount = 0;
+    const gradient = computeProtectedForwardSecondaryGradient({
+        evalFn: (q) => {
+            evalCount += 1;
+            return { w_vfi: q[0] + 2 * q[1] + 3 * q[2] + 4 * q[3] };
+        },
+        qActive: [0, 0, 0, 0],
+        protectRows: [],
+        eps: 1e-5,
+        damping: 1e-9
+    });
+
+    assert.equal(evalCount, 5);
+    assert.equal(gradient.length, 4);
+    const norm = Math.sqrt(1 + 4 + 9 + 16);
+    assert.ok(Math.abs(gradient[0] - 1 / norm) < 1e-8);
+    assert.ok(Math.abs(gradient[3] - 4 / norm) < 1e-8);
+});
+
+test('computeProtectedSPSASecondaryGradient uses two scalar evaluations per sample', () => {
+    let evalCount = 0;
+    const gradient = computeProtectedSPSASecondaryGradient({
+        evalFn: (q) => {
+            evalCount += 1;
+            return { w_vfi: q[0] + 2 * q[1] + 3 * q[2] + 4 * q[3] };
+        },
+        qActive: [0, 0, 0, 0],
+        protectRows: [],
+        eps: 1e-4,
+        samples: 2,
+        damping: 1e-9
+    });
+
+    assert.equal(evalCount, 4);
+    assert.equal(gradient.length, 4);
+    const norm = Math.sqrt(gradient.reduce((sum, value) => sum + value * value, 0));
+    assert.ok(Math.abs(norm - 1) < 1e-9);
 });
 
 test('projectSecondaryGradient keeps fully protected redundant row spaces at zero instead of normalizing residue', () => {

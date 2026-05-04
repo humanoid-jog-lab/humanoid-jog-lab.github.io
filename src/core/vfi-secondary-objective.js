@@ -265,3 +265,80 @@ export function computeProtectedSecondaryGradient({
     const rawGradient = gradientVFICCTSM(evalFn, q, eps);
     return projectSecondaryGradient(rawGradient, protectRows, { damping, normalize });
 }
+
+export function computeProtectedForwardSecondaryGradient({
+    evalFn,
+    qActive,
+    protectRows = [],
+    eps = 1e-5,
+    damping = 1e-6,
+    normalize = true
+} = {}) {
+    const q = Array.isArray(qActive) ? qActive.slice() : [];
+    const n = q.length;
+    if (n === 0 || typeof evalFn !== 'function') return [];
+
+    const h = Math.max(1e-7, asFinite(eps, 1e-5));
+    const base = evalFn(q);
+    const baseValue = asFinite(base?.w_vfi, Number.NaN);
+    if (!Number.isFinite(baseValue)) return new Array(n).fill(0);
+
+    const rawGradient = new Array(n).fill(0);
+    for (let j = 0; j < n; j += 1) {
+        const qp = q.slice();
+        qp[j] = asFinite(qp[j]) + h;
+        const plus = evalFn(qp);
+        const plusValue = asFinite(plus?.w_vfi, Number.NaN);
+        rawGradient[j] = Number.isFinite(plusValue) ? (plusValue - baseValue) / h : 0;
+    }
+    return projectSecondaryGradient(rawGradient, protectRows, { damping, normalize });
+}
+
+function buildDeterministicSPSADirection(width, sampleIndex) {
+    const n = Math.max(0, Math.floor(asFinite(width, 0)));
+    const block = 1 << (Math.max(0, Math.floor(asFinite(sampleIndex, 0))) % 20);
+    return Array.from({ length: n }, (_item, index) => (
+        Math.floor(index / block) % 2 === 0 ? 1 : -1
+    ));
+}
+
+export function computeProtectedSPSASecondaryGradient({
+    evalFn,
+    qActive,
+    protectRows = [],
+    eps = 1e-4,
+    samples = 2,
+    damping = 1e-6,
+    normalize = true
+} = {}) {
+    const q = Array.isArray(qActive) ? qActive.slice() : [];
+    const n = q.length;
+    if (n === 0 || typeof evalFn !== 'function') return [];
+
+    const h = Math.max(1e-7, asFinite(eps, 1e-4));
+    const sampleCount = Math.max(1, Math.floor(asFinite(samples, 2)));
+    const rawGradient = new Array(n).fill(0);
+    let acceptedSamples = 0;
+
+    for (let sample = 0; sample < sampleCount; sample += 1) {
+        const direction = buildDeterministicSPSADirection(n, sample);
+        const qPlus = q.map((value, index) => asFinite(value) + h * direction[index]);
+        const qMinus = q.map((value, index) => asFinite(value) - h * direction[index]);
+        const plus = evalFn(qPlus);
+        const minus = evalFn(qMinus);
+        const plusValue = asFinite(plus?.w_vfi, Number.NaN);
+        const minusValue = asFinite(minus?.w_vfi, Number.NaN);
+        if (!Number.isFinite(plusValue) || !Number.isFinite(minusValue)) continue;
+        const directionalDerivative = (plusValue - minusValue) / (2 * h);
+        for (let index = 0; index < n; index += 1) {
+            rawGradient[index] += directionalDerivative * direction[index];
+        }
+        acceptedSamples += 1;
+    }
+
+    if (acceptedSamples === 0) return new Array(n).fill(0);
+    for (let index = 0; index < n; index += 1) {
+        rawGradient[index] /= acceptedSamples;
+    }
+    return projectSecondaryGradient(rawGradient, protectRows, { damping, normalize });
+}

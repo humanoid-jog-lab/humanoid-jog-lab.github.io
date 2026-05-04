@@ -69,6 +69,35 @@ test('RobotVisualizer fast wvfi secondary gradient follows indexed DQ set-point 
     assert.deepEqual(corridorArgs?.activeIndices, [1, 3]);
 });
 
+test('RobotVisualizer fast wvfi secondary gradient keeps waist components out of full-body secondary optimization', () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.humanoidWaistLength = 2;
+    visualizer.vfiConfig = {
+        ...visualizer.vfiConfig,
+        mjRestoreWVFISecondaryActivationDistance: 0.15
+    };
+
+    const gradient = visualizer._computeFastWVFISecondaryGradient({
+        q: [0.95, -0.95, 0.95, -0.95, 0],
+        armStart: 0,
+        activeCount: 5,
+        activeLimits: [
+            { lower: -1, upper: 1 },
+            { lower: -1, upper: 1 },
+            { lower: -1, upper: 1 },
+            { lower: -1, upper: 1 },
+            { lower: -1, upper: 1 }
+        ]
+    });
+
+    assert.ok(Array.isArray(gradient));
+    assert.equal(gradient.length, 5);
+    assert.equal(gradient[0], 0);
+    assert.equal(gradient[1], 0);
+    assert.ok(Math.abs(gradient[2]) > 0);
+    assert.ok(Math.abs(gradient[3]) > 0);
+});
+
 test('RobotVisualizer fast w secondary gradient uses ordinary manipulability semantics', () => {
     const visualizer = new RobotVisualizer(null);
     let captured = null;
@@ -94,6 +123,143 @@ test('RobotVisualizer fast w secondary gradient uses ordinary manipulability sem
     assert.equal(captured.metric, 'w_abs_hier');
     assert.equal(captured.mode, 'relative');
     assert.equal(captured.forceInvariantEquality, true);
+});
+
+test('RobotVisualizer fast w secondary gradient keeps waist components out of full-body w optimization', () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.humanoidWaistLength = 2;
+    let captured = null;
+    visualizer._computeProtectedManipulabilityGradient = (options) => {
+        captured = options;
+        return [0.2, -0.3, 0.4];
+    };
+
+    const gradient = visualizer._computeFastWSecondaryGradient({
+        q: [0, 0, 0, 0, 0],
+        armStart: 0,
+        activeCount: 5,
+        mode: 'absolute',
+        Jcmd: [[1, 2, 3, 4, 5]],
+        Jinvariant: [[6, 7, 8, 9, 10]],
+        activeLimits: [
+            { lower: -1, upper: 1 },
+            { lower: -2, upper: 2 },
+            { lower: -3, upper: 3 },
+            { lower: -4, upper: 4 },
+            { lower: -5, upper: 5 }
+        ]
+    });
+
+    assert.deepEqual(gradient, [0, 0, 0.2, -0.3, 0.4]);
+    assert.equal(captured.armStart, 2);
+    assert.equal(captured.activeCount, 3);
+    assert.deepEqual(captured.Jcmd, [[3, 4, 5]]);
+    assert.deepEqual(captured.Jinvariant, [[8, 9, 10]]);
+    assert.deepEqual(captured.activeLimits, [
+        { lower: -3, upper: 3 },
+        { lower: -4, upper: 4 },
+        { lower: -5, upper: 5 }
+    ]);
+    assert.equal(captured.metric, 'w_abs_hier');
+});
+
+test('RobotVisualizer defaults ordinary w secondary gradients to forward differences', () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.vfiConfig = {
+        ...visualizer.vfiConfig,
+        manipGradWeight: 1
+    };
+    let cctsmCalls = 0;
+    visualizer._sliceHumanoidActiveJoints = (q, _armStart, activeCount) => q.slice(0, activeCount);
+    visualizer._writeHumanoidActiveJoints = (_q, qAct) => qAct.slice();
+    visualizer._buildManipulabilityVFIConstraints = () => [];
+    visualizer._computeModeCCTSM = (qFull) => {
+        cctsmCalls += 1;
+        return {
+            w_task_hier: qFull[0] + 2 * qFull[1] + 3 * qFull[2] + 4 * qFull[3]
+        };
+    };
+
+    const gradient = visualizer._computeProtectedManipulabilityGradient({
+        q: [0, 0, 0, 0],
+        armStart: 0,
+        activeCount: 4,
+        mode: 'absolute',
+        Jcmd: [],
+        Jinvariant: [],
+        metric: 'w_abs_hier'
+    });
+
+    assert.ok(Array.isArray(gradient));
+    assert.equal(gradient.length, 4);
+    assert.equal(cctsmCalls, 5);
+});
+
+test('RobotVisualizer can use SPSA for ordinary w secondary gradients', () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.vfiConfig = {
+        ...visualizer.vfiConfig,
+        manipGradWeight: 1,
+        mjRestoreWSecondaryGradientMode: 'spsa',
+        mjRestoreWSecondaryGradientSamples: 2
+    };
+    let cctsmCalls = 0;
+    visualizer._sliceHumanoidActiveJoints = (q, _armStart, activeCount) => q.slice(0, activeCount);
+    visualizer._writeHumanoidActiveJoints = (_q, qAct) => qAct.slice();
+    visualizer._buildManipulabilityVFIConstraints = () => [];
+    visualizer._computeModeCCTSM = (qFull) => {
+        cctsmCalls += 1;
+        return {
+            w_task_hier: qFull[0] + 2 * qFull[1] + 3 * qFull[2] + 4 * qFull[3]
+        };
+    };
+
+    const gradient = visualizer._computeProtectedManipulabilityGradient({
+        q: [0, 0, 0, 0],
+        armStart: 0,
+        activeCount: 4,
+        mode: 'absolute',
+        Jcmd: [],
+        Jinvariant: [],
+        metric: 'w_abs_hier'
+    });
+
+    assert.ok(Array.isArray(gradient));
+    assert.equal(gradient.length, 4);
+    assert.equal(cctsmCalls, 4);
+});
+
+test('RobotVisualizer can keep ordinary w secondary gradients on finite differences', () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.vfiConfig = {
+        ...visualizer.vfiConfig,
+        manipGradWeight: 1,
+        mjRestoreWSecondaryGradientMode: 'finite_difference'
+    };
+    let cctsmCalls = 0;
+    visualizer._sliceHumanoidActiveJoints = (q, _armStart, activeCount) => q.slice(0, activeCount);
+    visualizer._writeHumanoidActiveJoints = (_q, qAct) => qAct.slice();
+    visualizer._buildManipulabilityVFIConstraints = () => [];
+    visualizer._computeModeCCTSM = (qFull) => {
+        cctsmCalls += 1;
+        return {
+            w_task_hier: qFull[0] + 2 * qFull[1] + 3 * qFull[2] + 4 * qFull[3]
+        };
+    };
+
+    const gradient = visualizer._computeProtectedManipulabilityGradient({
+        q: [0, 0, 0, 0],
+        armStart: 0,
+        activeCount: 4,
+        mode: 'absolute',
+        Jcmd: [],
+        Jinvariant: [],
+        metric: 'w_abs_hier'
+    });
+
+    assert.ok(Array.isArray(gradient));
+    assert.equal(gradient.length, 4);
+    assert.equal(cctsmCalls, 8);
 });
 
 test('RobotVisualizer gives SNS a wider JS-comparison step bound without changing the shared maxStep', () => {
@@ -916,6 +1082,9 @@ test('RobotVisualizer sets TR safety push defaults', () => {
     assert.equal(visualizer.vfiConfig.mjRestoreWVFISecondaryObjective, 'log_margin');
     assert.equal(visualizer.vfiConfig.mjRestoreWVFISecondaryLogEpsilon, 1e-4);
     assert.equal(visualizer.vfiConfig.mjRestoreWVFISecondaryMaxLogWeight, 100);
+    assert.equal(visualizer.vfiConfig.mjRestoreWSecondaryGradientMode, 'forward_difference');
+    assert.equal(visualizer.vfiConfig.mjRestoreWSecondaryGradientSamples, 2);
+    assert.equal(visualizer.vfiConfig.manipGradApproxEps, 1e-4);
 });
 
 test('RobotVisualizer sets hierarchical VFI blend default to 1', () => {

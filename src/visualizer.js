@@ -71,6 +71,8 @@ import { generateBranchSeeds, projectToManifold, rolloutBranch, selectBranch } f
 import {
     buildVFIMarginAscentGradient,
     buildManipulabilityVFIConstraints,
+    computeProtectedForwardSecondaryGradient,
+    computeProtectedSPSASecondaryGradient,
     computeProtectedSecondaryGradient,
     summarizeManipulabilityVFIConstraints
 } from './core/vfi-secondary-objective.js';
@@ -572,7 +574,10 @@ export class RobotVisualizer {
             wvfiLowerBoundDefault: 0.001,
             wvfiLowerBoundWithWaist: 3e-2,
             wvfiGuardBacktrackScales: [1, 0.5, 0.25, 0.125, 0.0625, 0.03125],
-            manipGradWeight: 1.0   // secondary task weight for protected ∇w_vfi ascent in VFI+QP
+            mjRestoreWSecondaryGradientMode: 'forward_difference',
+            mjRestoreWSecondaryGradientSamples: 2,
+            manipGradApproxEps: 1e-4,
+            manipGradWeight: 1.0   // secondary task weight for protected manipulability ascent in VFI+QP
         };
 
         // ── Regulated Pure Pursuit 路径可视化 ──
@@ -1756,16 +1761,37 @@ export class RobotVisualizer {
             return Number.isFinite(scalar) ? { w_vfi: scalar } : null;
         };
 
-        const projectedGrad = computeProtectedSecondaryGradient({
+        const wGradientMode = typeof cfg.mjRestoreWSecondaryGradientMode === 'string'
+            ? cfg.mjRestoreWSecondaryGradientMode.trim()
+            : 'forward_difference';
+        const useFastForwardWGradient = metric === 'w_abs_hier' &&
+            wGradientMode !== 'finite_difference' &&
+            wGradientMode !== 'spsa';
+        const useSPSAWGradient = metric === 'w_abs_hier' && wGradientMode === 'spsa';
+        const gradientOptions = {
             evalFn,
             qActive,
             protectRows,
-            eps: Number.isFinite(cfg.manipGradEps) ? Math.max(1e-7, cfg.manipGradEps) : 1e-5,
+            eps: useSPSAWGradient
+                ? (Number.isFinite(cfg.manipGradApproxEps)
+                    ? Math.max(1e-7, cfg.manipGradApproxEps)
+                    : 1e-4)
+                : (Number.isFinite(cfg.manipGradEps) ? Math.max(1e-7, cfg.manipGradEps) : 1e-5),
             damping: Number.isFinite(cfg.manipGradProjectionDamping)
                 ? Math.max(1e-12, cfg.manipGradProjectionDamping)
                 : 1e-6,
             normalize: true
-        });
+        };
+        const projectedGrad = useSPSAWGradient
+            ? computeProtectedSPSASecondaryGradient({
+                ...gradientOptions,
+                samples: Number.isFinite(cfg.mjRestoreWSecondaryGradientSamples)
+                    ? Math.max(1, Math.floor(cfg.mjRestoreWSecondaryGradientSamples))
+                    : 2
+            })
+            : (useFastForwardWGradient
+                ? computeProtectedForwardSecondaryGradient(gradientOptions)
+                : computeProtectedSecondaryGradient(gradientOptions));
 
         if (!Array.isArray(projectedGrad) || projectedGrad.length !== activeCount) return null;
         const gradNorm = Math.sqrt(projectedGrad.reduce((sum, value) => sum + (value || 0) * (value || 0), 0));
@@ -1782,13 +1808,44 @@ export class RobotVisualizer {
         activeLimits = null
     } = {}) {
         const usingIndexedSelection = Array.isArray(activeIndices) && activeIndices.length > 0;
-        const effectiveActiveCount = usingIndexedSelection ? activeIndices.length : activeCount;
-        const qActive = usingIndexedSelection
+        let effectiveActiveCount = usingIndexedSelection ? activeIndices.length : activeCount;
+        let qActive = usingIndexedSelection
             ? this._sliceHumanoidIndexedJoints(q, activeIndices)
             : this._sliceHumanoidActiveJoints(q, armStart, activeCount);
         if (!Array.isArray(qActive) || qActive.length !== effectiveActiveCount || effectiveActiveCount <= 0) return null;
         const cfg = this.vfiConfig || {};
+        let effectiveActiveLimits = activeLimits;
+        let embedArmOnlyGradient = false;
+        let gradientOffset = 0;
+        let armSelectionPositions = null;
+        const originalActiveCount = effectiveActiveCount;
+        const waistCount = Math.max(0, Number.isFinite(this.humanoidWaistLength) ? this.humanoidWaistLength : 0);
+        if (waistCount > 0) {
+            if (usingIndexedSelection) {
+                armSelectionPositions = activeIndices
+                    .map((jointIndex, position) => (jointIndex >= waistCount ? position : -1))
+                    .filter((position) => position >= 0);
+                if (armSelectionPositions.length > 0 && armSelectionPositions.length < activeIndices.length) {
+                    embedArmOnlyGradient = true;
+                    qActive = armSelectionPositions.map((position) => qActive[position]);
+                    effectiveActiveLimits = Array.isArray(activeLimits)
+                        ? armSelectionPositions.map((position) => activeLimits[position] ?? null)
+                        : activeLimits;
+                    effectiveActiveCount = qActive.length;
+                }
+            } else if (armStart < waistCount && armStart + activeCount > waistCount) {
+                gradientOffset = waistCount - armStart;
+                qActive = qActive.slice(gradientOffset);
+                effectiveActiveLimits = Array.isArray(activeLimits)
+                    ? activeLimits.slice(gradientOffset)
+                    : activeLimits;
+                effectiveActiveCount = qActive.length;
+                embedArmOnlyGradient = true;
+            }
+        }
+        if (!Array.isArray(qActive) || qActive.length !== effectiveActiveCount || effectiveActiveCount <= 0) return null;
         const waistConstraints = (() => {
+            if (embedArmOnlyGradient) return null;
             if (usingIndexedSelection) {
                 const corridor = this._buildHumanoidManifoldWaistXCorridor({
                     qFull: q,
@@ -1811,7 +1868,7 @@ export class RobotVisualizer {
                 : 0.15);
         const gradient = buildVFIMarginAscentGradient({
             qActive,
-            activeLimits,
+            activeLimits: effectiveActiveLimits,
             extraConstraints: waistConstraints,
             activationThreshold: Number.isFinite(cfg.jointLimitManipulabilityActivationThreshold)
                 ? Math.max(0, cfg.jointLimitManipulabilityActivationThreshold)
@@ -1829,7 +1886,19 @@ export class RobotVisualizer {
             const numeric = Number.isFinite(value) ? value : 0;
             return sum + numeric * numeric;
         }, 0));
-        return norm > 1e-8 ? gradient : null;
+        if (!(norm > 1e-8)) return null;
+        if (!embedArmOnlyGradient) return gradient;
+        const expanded = new Array(originalActiveCount).fill(0);
+        if (usingIndexedSelection && Array.isArray(armSelectionPositions)) {
+            for (let i = 0; i < armSelectionPositions.length && i < gradient.length; i += 1) {
+                expanded[armSelectionPositions[i]] = Number.isFinite(gradient[i]) ? gradient[i] : 0;
+            }
+            return expanded;
+        }
+        for (let i = 0; i < gradient.length; i += 1) {
+            expanded[gradientOffset + i] = Number.isFinite(gradient[i]) ? gradient[i] : 0;
+        }
+        return expanded;
     }
 
     _computeFastWSecondaryGradient({
@@ -1851,17 +1920,52 @@ export class RobotVisualizer {
             effectiveArmStart = first;
             effectiveActiveCount = activeIndices.length;
         }
-        return this._computeProtectedManipulabilityGradient({
+        const originalActiveCount = effectiveActiveCount;
+        let gradientOffset = 0;
+        let embedArmOnlyGradient = false;
+        let effectiveJcmd = Jcmd;
+        let effectiveJinvariant = Jinvariant;
+        let effectiveActiveLimits = activeLimits;
+        const waistCount = Math.max(0, Number.isFinite(this.humanoidWaistLength) ? this.humanoidWaistLength : 0);
+        if (
+            waistCount > 0 &&
+            effectiveArmStart < waistCount &&
+            effectiveArmStart + effectiveActiveCount > waistCount
+        ) {
+            gradientOffset = waistCount - effectiveArmStart;
+            effectiveArmStart = waistCount;
+            effectiveActiveCount = originalActiveCount - gradientOffset;
+            embedArmOnlyGradient = true;
+            const sliceRows = (rows) => Array.isArray(rows)
+                ? rows.map((row) => Array.isArray(row)
+                    ? row.slice(gradientOffset, gradientOffset + effectiveActiveCount)
+                    : row)
+                : rows;
+            effectiveJcmd = sliceRows(Jcmd);
+            effectiveJinvariant = sliceRows(Jinvariant);
+            effectiveActiveLimits = Array.isArray(activeLimits)
+                ? activeLimits.slice(gradientOffset, gradientOffset + effectiveActiveCount)
+                : activeLimits;
+        }
+        if (effectiveActiveCount <= 0) return null;
+        const gradient = this._computeProtectedManipulabilityGradient({
             q,
             armStart: effectiveArmStart,
             activeCount: effectiveActiveCount,
             mode,
-            Jcmd,
-            Jinvariant,
-            activeLimits,
+            Jcmd: effectiveJcmd,
+            Jinvariant: effectiveJinvariant,
+            activeLimits: effectiveActiveLimits,
             forceInvariantEquality: true,
             metric: 'w_abs_hier'
         });
+        if (!embedArmOnlyGradient) return gradient;
+        if (!Array.isArray(gradient) || gradient.length !== effectiveActiveCount) return null;
+        const expanded = new Array(originalActiveCount).fill(0);
+        for (let i = 0; i < gradient.length; i += 1) {
+            expanded[gradientOffset + i] = Number.isFinite(gradient[i]) ? gradient[i] : 0;
+        }
+        return expanded;
     }
 
     _getWVFILowerBound(includeWaist = false) {
