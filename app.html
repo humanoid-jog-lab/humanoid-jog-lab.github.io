@@ -4,6 +4,15 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Humanoid Jog Lab</title>
+    <script>
+        (() => {
+            try {
+                document.documentElement.classList.add(window.self === window.top ? 'standalone-app' : 'embedded-app');
+            } catch {
+                document.documentElement.classList.add('embedded-app');
+            }
+        })();
+    </script>
     <link rel="stylesheet" href="/src/styles.css">
 </head>
 <body>

@@ -1,6 +1,7 @@
 /* DQ Robotics 可视化样式 - 浮动面板版 */
 
 :root {
+    --app-visual-scale: 0.81;
     --primary-color: #3b82f6;
     --secondary-color: #8b5cf6;
     --success-color: #10b981;
@@ -31,6 +32,12 @@ body {
     overflow: hidden;
     width: 100vw;
     height: 100vh;
+}
+
+html.standalone-app body {
+    zoom: var(--app-visual-scale);
+    width: calc(100vw / var(--app-visual-scale));
+    height: calc(100vh / var(--app-visual-scale));
 }
 
 /* 全屏3D画布 */

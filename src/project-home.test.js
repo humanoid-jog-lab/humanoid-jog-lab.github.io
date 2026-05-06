@@ -19,3 +19,10 @@ test('project home hardware videos use deterministic autoplay presentation witho
         assert.doesNotMatch(tag, /\scontrols(?:\s|>|=)/);
     }
 });
+
+test('project home renders at the compounded 81 percent visual scale', () => {
+    const css = readFileSync(resolve(ROOT, 'src/project-home.css'), 'utf8');
+
+    assert.match(css, /--page-visual-scale:\s*0\.81;/);
+    assert.match(css, /body\s*\{[\s\S]*zoom:\s*var\(--page-visual-scale\);/);
+});
