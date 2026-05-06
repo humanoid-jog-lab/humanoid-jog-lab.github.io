@@ -17,7 +17,9 @@ test('index.html is a scrollable project homepage that embeds the app', () => {
     assert.match(html, /class="link-block"/);
     const linkBlock = html.match(/<div class="link-block" aria-label="Project links">([\s\S]*?)<\/div>/)?.[1] || '';
     assert.match(html, /Code \(coming soon\)/);
-    assert.match(html, /href="#video"/);
+    assert.match(html, /href="https:\/\/youtu\.be\/EpACglMYUrI"[^>]*>Video<\/a>/);
+    assert.match(html, /target="_blank"/);
+    assert.match(html, /rel="noopener noreferrer"/);
     assert.match(html, /href="#interactive-demo"/);
     assert.doesNotMatch(linkBlock, /Open full demo/);
     assert.doesNotMatch(html, /class="project-nav"/);
@@ -27,6 +29,10 @@ test('index.html is a scrollable project homepage that embeds the app', () => {
     assert.doesNotMatch(html, /class="publication-subtitle"/);
     assert.doesNotMatch(html, /class="author-line"/);
     assert.doesNotMatch(html, /href="#method"/);
+    assert.match(html, /<section class="section youtube-section" id="project-video">/);
+    assert.match(html, /<p class="section-kicker">Project Video<\/p>/);
+    assert.match(html, /class="youtube-frame-shell"/);
+    assert.match(html, /<iframe[\s\S]*src="https:\/\/www\.youtube\.com\/embed\/EpACglMYUrI\?si=JDVWW2aEDl3XpG1Q"[\s\S]*title="YouTube video player"[\s\S]*allowfullscreen[\s\S]*><\/iframe>/);
     assert.match(html, /id="video"/);
     assert.match(html, /class="video-grid"/);
     assert.match(html, /<p class="section-kicker">Hardware Demonstrations<\/p>/);
@@ -38,7 +44,7 @@ test('index.html is a scrollable project homepage that embeds the app', () => {
     const projectVideoTags = html.match(/<video\s+[^>]*class="project-video"[^>]*>/g) || [];
     assert.equal(projectVideoTags.length, 3);
     projectVideoTags.forEach((videoTag) => {
-        assert.match(videoTag, /\scontrols/);
+        assert.doesNotMatch(videoTag, /\scontrols(?:\s|>|=)/);
         assert.match(videoTag, /\sautoplay/);
         assert.match(videoTag, /\smuted/);
         assert.match(videoTag, /\splaysinline/);
@@ -90,12 +96,16 @@ test('index.html is a scrollable project homepage that embeds the app', () => {
     assert.doesNotMatch(css, /project-nav/);
     assert.match(css, /\.hero\s*\{[\s\S]*min-height: auto;/);
     assert.match(css, /\.hero\s*\{[\s\S]*padding: 48px 24px 36px;/);
+    assert.match(css, /\.youtube-section\s*\{[\s\S]*padding: 24px 0 20px;/);
+    assert.match(css, /\.youtube-frame-shell\s*\{[\s\S]*aspect-ratio: 16 \/ 9;/);
+    assert.match(css, /\.youtube-frame-shell iframe\s*\{[\s\S]*width: 100%;[\s\S]*height: 100%;/);
     assert.match(css, /\.video-section\s*\{[\s\S]*padding: 12px 0 24px;/);
     assert.match(css, /\.abstract-section\s*\{[\s\S]*padding: 16px 0 12px;/);
     assert.match(css, /\.abstract-section \.narrow-copy p:last-child\s*\{[\s\S]*margin-bottom: 0;/);
     assert.match(css, /\.demo-section\s*\{[\s\S]*padding: 8px 0 64px;/);
     assert.doesNotMatch(css, /paper-section/);
     assert.match(css, /@media \(max-width: 820px\)[\s\S]*\.hero\s*\{[\s\S]*padding: 40px 16px 30px;/);
+    assert.match(css, /@media \(max-width: 820px\)[\s\S]*\.youtube-section\s*\{[\s\S]*padding: 18px 0 16px;/);
     assert.match(css, /@media \(max-width: 820px\)[\s\S]*\.video-section\s*\{[\s\S]*padding: 12px 0 18px;/);
     assert.match(css, /@media \(max-width: 820px\)[\s\S]*\.abstract-section\s*\{[\s\S]*padding: 14px 0 10px;/);
     assert.match(css, /@media \(max-width: 820px\)[\s\S]*\.demo-section\s*\{[\s\S]*padding: 8px 0 52px;/);

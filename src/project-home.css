@@ -158,6 +158,28 @@ a {
     padding: 12px 0 24px;
 }
 
+.youtube-section {
+    width: min(960px, calc(100% - 40px));
+    padding: 24px 0 20px;
+}
+
+.youtube-frame-shell {
+    overflow: hidden;
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #0b1017;
+    box-shadow: var(--shadow);
+}
+
+.youtube-frame-shell iframe {
+    display: block;
+    width: 100%;
+    height: 100%;
+    border: 0;
+}
+
 .abstract-section {
     padding: 16px 0 12px;
 }
@@ -289,6 +311,11 @@ pre code {
     .video-section {
         width: min(100% - 28px, 1080px);
         padding: 12px 0 18px;
+    }
+
+    .youtube-section {
+        width: min(100% - 28px, 960px);
+        padding: 18px 0 16px;
     }
 
     .abstract-section {

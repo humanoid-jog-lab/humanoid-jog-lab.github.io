@@ -20,6 +20,18 @@ test('project home hardware videos use deterministic autoplay presentation witho
     }
 });
 
+test('project home links to and embeds the full YouTube project video', () => {
+    const html = readFileSync(resolve(ROOT, 'index.html'), 'utf8');
+
+    assert.match(html, /<a href="https:\/\/youtu\.be\/EpACglMYUrI"[^>]*>Video<\/a>/);
+    assert.match(html, /<section class="section youtube-section" id="project-video">/);
+    assert.match(html, /src="https:\/\/www\.youtube\.com\/embed\/EpACglMYUrI\?si=JDVWW2aEDl3XpG1Q"/);
+    assert.match(html, /title="YouTube video player"/);
+    assert.match(html, /allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"/);
+    assert.match(html, /referrerpolicy="strict-origin-when-cross-origin"/);
+    assert.match(html, /\sallowfullscreen/);
+});
+
 test('project home renders at the compounded 81 percent visual scale', () => {
     const css = readFileSync(resolve(ROOT, 'src/project-home.css'), 'utf8');
 
