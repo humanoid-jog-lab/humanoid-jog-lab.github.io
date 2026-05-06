@@ -10,7 +10,7 @@ import { chromium } from 'playwright';
 const REPO_ROOT = process.env.SURFACE_COMPARISON_REPO_ROOT || process.cwd();
 const OUTPUT_DIR = process.env.SURFACE_COMPARISON_OUTPUT_DIR
     || path.join(REPO_ROOT, 'artifacts', 'humanoid-surface-polishing');
-const BASE_URL = process.env.BASE_URL || 'http://127.0.0.1:4173';
+const BASE_URL = process.env.BASE_URL || 'http://127.0.0.1:4173/app.html';
 const TICKS = Number.isFinite(Number(process.env.SURFACE_TICKS))
     ? Math.max(1, Math.floor(Number(process.env.SURFACE_TICKS)))
     : 50;
@@ -39,9 +39,9 @@ const INITIAL_Q = [
 ];
 
 const CONTROLLERS = [
-    { label: 'Restore (TR)', solverMode: 'mj_restore_tr' },
-    { label: 'Restore (TR+w)', solverMode: 'mj_restore_tr_w' },
-    { label: 'Restore (TR+w_vfi)', solverMode: 'mj_restore_tr_safe_wvfi' }
+    { label: 'ProxQP', solverMode: 'proxqp' },
+    { label: 'ProxQP+w', solverMode: 'proxqp_w' },
+    { label: 'ProxQP+w_vfi', solverMode: 'proxqp_w_vfi' }
 ].filter((item) => SOLVER_FILTER.size === 0 || SOLVER_FILTER.has(item.solverMode) || SOLVER_FILTER.has(item.label));
 
 async function waitForHttp(url, timeoutMs = 120000) {
@@ -311,11 +311,7 @@ try {
                     const qChanged = Number.isFinite(maxJointDelta(qBefore, qAfter)) && maxJointDelta(qBefore, qAfter) > 1e-9;
                     const diagnosticsReady = diagnostics && diagnostics.modeTag && diagnostics.modeTag !== 'idle';
                     const statusReady = hasSettledStatus(status);
-                    const asyncMode = (
-                        solverMode === 'mj_restore_tr' ||
-                        solverMode === 'mj_restore_tr_w' ||
-                        solverMode === 'mj_restore_tr_safe_wvfi'
-                    );
+                    const asyncMode = false;
                     if (asyncMode) {
                         const graceElapsed = (performance.now() - start) >= 32;
                         if (!asyncBusy && (statusReady || diagnosticsReady || qChanged) && (observedAsyncBusy || graceElapsed)) {
@@ -455,7 +451,9 @@ try {
                         solver: typeof status.solver === 'string' ? status.solver : controller.solverMode,
                         reason: extractReason(status),
                         message: typeof status.message === 'string' ? status.message : '',
-                        qpMessage: typeof status.qpMessage === 'string' ? status.qpMessage : '',
+                        qpMessage: typeof status.qpMessage === 'string' && status.qpMessage.length > 0
+                            ? status.qpMessage
+                            : (typeof diagnostics.qpMessage === 'string' ? diagnostics.qpMessage : ''),
                         converged: status.converged !== false
                     };
                     steps.push(step);

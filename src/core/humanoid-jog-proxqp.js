@@ -336,6 +336,11 @@ export function solveHumanoidJogProxQP(options = {}) {
     const { A, b } = buildHardConstraintRows(n, hardConstraints);
     const damping = Math.max(0, finiteNumber(options.damping, 1e-6));
     const { H, f } = buildTaskQP(n, blocks, damping);
+    if (Array.isArray(options.linearObjective)) {
+        for (let i = 0; i < n; i += 1) {
+            f[i] += finiteNumber(options.linearObjective[i], 0);
+        }
+    }
     const tolerance = Math.max(0, finiteNumber(options.tolerance, 1e-8));
     const feasibleAcceptanceTolerance = Math.max(
         tolerance,

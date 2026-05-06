@@ -341,6 +341,37 @@ test('restoreHumanoidJogMJTrustRegion gates secondary bias until the primary tas
     assert.ok(Math.abs(result.qApplied[1]) <= 1e-9);
 });
 
+test('restoreHumanoidJogMJTrustRegion requests lightweight secondary evaluations for trials', () => {
+    const calls = [];
+    const evaluateProblem = (q, options = {}) => {
+        calls.push({
+            role: options.evaluationRole || '',
+            computeWVFISecondary: options.computeWVFISecondary,
+            computeManipData: options.computeManipData
+        });
+        return buildSecondaryBiasProblem(q);
+    };
+
+    const result = restoreHumanoidJogMJTrustRegion({
+        qInitial: [0, 0],
+        evaluateProblem,
+        maxIterations: 4,
+        equalityTolerance: 1e-9,
+        secondaryObjectiveEnabled: true,
+        secondaryObjectiveWeight: 1,
+        secondaryObjectiveDuringRestore: false,
+        secondaryObjectivePostConvergenceEnabled: true,
+        initialTrustRadius: 0.2
+    });
+
+    const trialCalls = calls.filter((call) => call.role === 'trial');
+    assert.equal(result.converged, true);
+    assert.ok(trialCalls.length > 0);
+    assert.equal(trialCalls.every((call) => call.computeWVFISecondary === false), true);
+    assert.equal(trialCalls.every((call) => call.computeManipData === false), true);
+    assert.equal(calls.some((call) => call.role === 'current' && call.computeWVFISecondary === true), true);
+});
+
 test('restoreHumanoidJogMJTrustRegion accepts a best-effort constraint-improving step that restoreHumanoidJogMJ rejects', () => {
     const classic = restoreHumanoidJogMJ({
         qInitial: [0],

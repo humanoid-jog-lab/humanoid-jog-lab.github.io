@@ -6,11 +6,11 @@ import { resolve } from 'node:path';
 const ROOT = resolve(import.meta.dirname, '../..');
 
 test('planned motion UI and monitor assets are fully removed from the source tree', () => {
-    const indexHtml = readFileSync(resolve(ROOT, 'index.html'), 'utf8');
-    assert.doesNotMatch(indexHtml, /planned-motion-section/);
-    assert.doesNotMatch(indexHtml, /planned-motion-joint-monitor/);
-    assert.doesNotMatch(indexHtml, /规划运动/);
-    assert.doesNotMatch(indexHtml, /执行关节实时监控/);
+    const appHtml = readFileSync(resolve(ROOT, 'app.html'), 'utf8');
+    assert.doesNotMatch(appHtml, /planned-motion-section/);
+    assert.doesNotMatch(appHtml, /planned-motion-joint-monitor/);
+    assert.doesNotMatch(appHtml, /规划运动/);
+    assert.doesNotMatch(appHtml, /执行关节实时监控/);
 
     const mainJs = readFileSync(resolve(ROOT, 'src/main.js'), 'utf8');
     assert.doesNotMatch(mainJs, /planned-motion/);

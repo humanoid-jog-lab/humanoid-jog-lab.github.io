@@ -55,8 +55,8 @@ function createFakeDocument(selectorMap = {}, elementById = {}) {
     };
 }
 
-test('index shell defaults to English and exposes a language switcher', () => {
-    const html = readFileSync(resolve(ROOT, 'index.html'), 'utf8');
+test('app shell defaults to English and exposes a language switcher', () => {
+    const html = readFileSync(resolve(ROOT, 'app.html'), 'utf8');
     assert.match(html, /<html lang="en">/);
     assert.match(html, /id="language-select"/);
     assert.match(html, />Control Panel</);

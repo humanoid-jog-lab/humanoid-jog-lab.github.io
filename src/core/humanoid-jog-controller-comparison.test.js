@@ -14,36 +14,38 @@ import {
     summarizeHumanoidControllerComparisonRows
 } from './humanoid-jog-controller-comparison.js';
 
-test('buildHumanoidControllerComparisonTasks returns the 9 three-controller comparison scenarios', () => {
+test('buildHumanoidControllerComparisonTasks returns the 9 ProxQP-only comparison scenarios', () => {
     const tasks = buildHumanoidControllerComparisonTasks();
     assert.equal(tasks.length, 9);
-    assert.equal(tasks.some((task) => task.solverMode === 'mj_restore_tr'), true);
-    assert.equal(tasks.some((task) => task.solverMode === 'mj_restore_tr_w'), true);
-    assert.equal(tasks.some((task) => task.solverMode === 'mj_restore_tr_safe_wvfi'), true);
-    assert.equal(tasks.some((task) => task.solverMode === 'proxqp'), false);
+    assert.equal(tasks.some((task) => task.solverMode === 'mj_restore_tr'), false);
+    assert.equal(tasks.some((task) => task.solverMode === 'mj_restore_tr_w'), false);
+    assert.equal(tasks.some((task) => task.solverMode === 'mj_restore_tr_safe_wvfi'), false);
+    assert.equal(tasks.some((task) => task.solverMode === 'proxqp'), true);
+    assert.equal(tasks.some((task) => task.solverMode === 'proxqp_w'), true);
+    assert.equal(tasks.some((task) => task.solverMode === 'proxqp_w_vfi'), true);
     assert.equal(tasks.some((task) => task.solverMode === 'mj_restore_tr_safe'), false);
     assert.deepEqual(
         tasks.slice(0, 3).map((task) => task.scenarioLabel),
         [
-            'absolute | nominal | Recovery Optimization (TR)',
-            'absolute | nominal | Recovery Optimization (TR+w)',
-            'absolute | nominal | Recovery Optimization (TR+w_vfi)'
+            'absolute | nominal | ProxQP',
+            'absolute | nominal | ProxQP+w',
+            'absolute | nominal | ProxQP+w_vfi'
         ]
     );
     assert.deepEqual(
         tasks.slice(-3).map((task) => task.scenarioLabel),
         [
-            'waist-distance | nominal | Recovery Optimization (TR)',
-            'waist-distance | nominal | Recovery Optimization (TR+w)',
-            'waist-distance | nominal | Recovery Optimization (TR+w_vfi)'
+            'waist-distance | nominal | ProxQP',
+            'waist-distance | nominal | ProxQP+w',
+            'waist-distance | nominal | ProxQP+w_vfi'
         ]
     );
     assert.deepEqual(
         tasks.slice(3, 6).map((task) => task.scenarioLabel),
         [
-            'decoupled-upright | nominal | Recovery Optimization (TR)',
-            'decoupled-upright | nominal | Recovery Optimization (TR+w)',
-            'decoupled-upright | nominal | Recovery Optimization (TR+w_vfi)'
+            'decoupled-upright | nominal | ProxQP',
+            'decoupled-upright | nominal | ProxQP+w',
+            'decoupled-upright | nominal | ProxQP+w_vfi'
         ]
     );
     assert.equal(tasks.at(-1).controlMode, 'distance-fullbody');
@@ -56,8 +58,8 @@ test('summarizeHumanoidControllerComparisonRows reports long-form table metrics 
         {
             mode: 'absolute',
             profile: 'nominal',
-            controllerKey: 'restore_tr',
-            controllerLabel: 'Recovery Optimization (TR)',
+            controllerKey: 'proxqp',
+            controllerLabel: 'ProxQP',
             completed: true,
             completionTicks: 2,
             finalXProgress: 0.012,
@@ -87,8 +89,8 @@ test('summarizeHumanoidControllerComparisonRows reports long-form table metrics 
         {
             mode: 'decoupled-upright',
             profile: 'nominal',
-            controllerKey: 'restore_tr_w',
-            controllerLabel: 'Recovery Optimization (TR+w)',
+            controllerKey: 'proxqp_w',
+            controllerLabel: 'ProxQP+w',
             completed: false,
             completionTicks: Number.NaN,
             finalXProgress: 0.20,
@@ -122,8 +124,8 @@ test('summarizeHumanoidControllerComparisonRows reports long-form table metrics 
         {
             mode: 'waist-distance',
             profile: 'nominal',
-            controllerKey: 'restore_tr_wvfi',
-            controllerLabel: 'Recovery Optimization (TR+w_vfi)',
+            controllerKey: 'proxqp_w_vfi',
+            controllerLabel: 'ProxQP+w_vfi',
             completed: true,
             completionTicks: 3,
             finalDistanceProgress: 0.04,
@@ -155,7 +157,7 @@ test('summarizeHumanoidControllerComparisonRows reports long-form table metrics 
         {
             scenario: 'absolute',
             start_posture: 'nominal',
-            controller: 'Recovery Optimization (TR)',
+            controller: 'ProxQP',
             success_ticks: 'yes / 2',
             task_valid_ticks: '0 / 2',
             progress_m: 0.01,
@@ -178,7 +180,7 @@ test('summarizeHumanoidControllerComparisonRows reports long-form table metrics 
         {
             scenario: 'decoupled-upright',
             start_posture: 'nominal',
-            controller: 'Recovery Optimization (TR+w)',
+            controller: 'ProxQP+w',
             success_ticks: 'no / n/a',
             task_valid_ticks: '0 / 2',
             progress_m: 0.20,
@@ -201,7 +203,7 @@ test('summarizeHumanoidControllerComparisonRows reports long-form table metrics 
         {
             scenario: 'waist-distance',
             start_posture: 'nominal',
-            controller: 'Recovery Optimization (TR+w_vfi)',
+            controller: 'ProxQP+w_vfi',
             success_ticks: 'yes / 3',
             task_valid_ticks: '2 / 2',
             progress_m: 0.04,
@@ -229,7 +231,7 @@ test('summarizeHumanoidControllerComparisonRows supports configurable task-valid
         {
             mode: 'absolute',
             profile: 'nominal',
-            controllerKey: 'restore_tr',
+            controllerKey: 'proxqp',
             completed: false,
             steps: [
                 { commandError: 8e-7 },
@@ -247,7 +249,7 @@ test('summarizeHumanoidControllerComparisonRows reports raw progress for fixed-t
         {
             mode: 'absolute',
             profile: 'nominal',
-            controllerKey: 'restore_tr',
+            controllerKey: 'proxqp',
             completed: true,
             completionTicks: 30,
             targetXMeters: 0.075,
@@ -280,9 +282,9 @@ test('getHumanoidControllerComparisonColumns exposes the table schema for the pa
     );
 });
 
-test('resolveHumanoidControllerComparisonControllerOptions keeps TR benchmark settings on the requested full-body budget', () => {
+test('resolveHumanoidControllerComparisonControllerOptions keeps ProxQP benchmark settings on the requested full-body budget', () => {
     const result = resolveHumanoidControllerComparisonControllerOptions({
-        controllerKey: 'restore_tr_w',
+        controllerKey: 'proxqp_w',
         mode: 'decoupled-upright',
         includeWaist: true,
         maxTicks: 60,
@@ -298,9 +300,9 @@ test('resolveHumanoidControllerComparisonControllerOptions keeps TR benchmark se
     assert.equal(result.qpUseInvariantEquality, true);
 });
 
-test('resolveHumanoidControllerComparisonControllerOptions keeps TR methods under shared hard limits', () => {
+test('resolveHumanoidControllerComparisonControllerOptions keeps ProxQP methods under shared hard limits', () => {
     const result = resolveHumanoidControllerComparisonControllerOptions({
-        controllerKey: 'restore_tr_wvfi',
+        controllerKey: 'proxqp_w_vfi',
         mode: 'decoupled-upright',
         includeWaist: true,
         maxTicks: 120,
@@ -319,7 +321,7 @@ test('resolveHumanoidControllerComparisonControllerOptions keeps TR methods unde
 
 test('resolveHumanoidControllerComparisonControllerOptions honors the requested full-body target distance', () => {
     const result = resolveHumanoidControllerComparisonControllerOptions({
-        controllerKey: 'restore_tr',
+        controllerKey: 'proxqp',
         mode: 'decoupled-upright',
         includeWaist: true,
         maxTicks: 30,
@@ -335,7 +337,7 @@ test('resolveHumanoidControllerComparisonControllerOptions honors the requested 
 
 test('resolveHumanoidControllerComparisonControllerOptions uses a short d-minus horizon for waist distance', () => {
     const result = resolveHumanoidControllerComparisonControllerOptions({
-        controllerKey: 'restore_tr_wvfi',
+        controllerKey: 'proxqp_w_vfi',
         mode: 'waist-distance',
         includeWaist: true,
         maxTicks: 120,
@@ -353,7 +355,7 @@ test('resolveHumanoidControllerComparisonControllerOptions uses a short d-minus 
 
 test('resolveHumanoidControllerComparisonControllerOptions can preserve fixed-tick benchmark budgets', () => {
     const armOnly = resolveHumanoidControllerComparisonControllerOptions({
-        controllerKey: 'restore_tr',
+        controllerKey: 'proxqp',
         mode: 'absolute',
         includeWaist: false,
         maxTicks: 50,
@@ -361,7 +363,7 @@ test('resolveHumanoidControllerComparisonControllerOptions can preserve fixed-ti
         fixedTicks: true
     });
     const waistDistance = resolveHumanoidControllerComparisonControllerOptions({
-        controllerKey: 'restore_tr_wvfi',
+        controllerKey: 'proxqp_w_vfi',
         mode: 'waist-distance',
         includeWaist: true,
         maxTicks: 100,
@@ -375,9 +377,9 @@ test('resolveHumanoidControllerComparisonControllerOptions can preserve fixed-ti
     assert.equal(waistDistance.targetXMeters, 0.075);
 });
 
-test('resolveHumanoidControllerComparisonControllerOptions shortens the arm-only absolute benchmark for TR+w', () => {
+test('resolveHumanoidControllerComparisonControllerOptions shortens the arm-only absolute benchmark for ProxQP+w', () => {
     const result = resolveHumanoidControllerComparisonControllerOptions({
-        controllerKey: 'restore_tr_w',
+        controllerKey: 'proxqp_w',
         mode: 'absolute',
         includeWaist: false,
         maxTicks: 120,
@@ -394,9 +396,9 @@ test('resolveHumanoidControllerComparisonControllerOptions shortens the arm-only
     assert.equal(result.qpUseInvariantEquality, true);
 });
 
-test('resolveHumanoidControllerComparisonControllerOptions matches arm-only Restore TR web jogging without joint-limit VFI', () => {
+test('resolveHumanoidControllerComparisonControllerOptions matches arm-only ProxQP web jogging without joint-limit VFI', () => {
     const result = resolveHumanoidControllerComparisonControllerOptions({
-        controllerKey: 'restore_tr',
+        controllerKey: 'proxqp',
         mode: 'absolute',
         includeWaist: false,
         maxTicks: 120,

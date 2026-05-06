@@ -19,6 +19,8 @@ test('normalizeHumanoidJogSolverMode only accepts the remaining supported solver
     assert.equal(normalizeHumanoidJogSolverMode('sns'), 'sns');
     assert.equal(normalizeHumanoidJogSolverMode('predictive_ik'), 'predictive_ik');
     assert.equal(normalizeHumanoidJogSolverMode('proxqp'), 'proxqp');
+    assert.equal(normalizeHumanoidJogSolverMode('proxqp_w'), 'proxqp_w');
+    assert.equal(normalizeHumanoidJogSolverMode('proxqp_w_vfi'), 'proxqp_w_vfi');
     assert.equal(normalizeHumanoidJogSolverMode('wbc_qp'), 'vfi');
     assert.equal(normalizeHumanoidJogSolverMode('torso_seed_upright'), 'vfi');
     assert.equal(normalizeHumanoidJogSolverMode('torso_seed_upright_vfi'), 'vfi');
@@ -32,6 +34,8 @@ test('getHumanoidJogSolverDisplayName maps internal solver ids to the public nam
     assert.equal(getHumanoidJogSolverDisplayName('sns'), 'SNS');
     assert.equal(getHumanoidJogSolverDisplayName('predictive_ik'), 'Predictive IK');
     assert.equal(getHumanoidJogSolverDisplayName('proxqp'), 'ProxQP');
+    assert.equal(getHumanoidJogSolverDisplayName('proxqp_w'), 'ProxQP+w');
+    assert.equal(getHumanoidJogSolverDisplayName('proxqp_w_vfi'), 'ProxQP+w_vfi');
     assert.equal(getHumanoidJogSolverDisplayName('wbc_qp'), 'new qpJ');
     assert.equal(getHumanoidJogSolverDisplayName('vfi'), 'new qpJ');
     assert.equal(getHumanoidJogSolverDisplayName('cns'), 'new qpJ');
@@ -54,6 +58,8 @@ test('getHumanoidJogSolverReadyMessage uses the public solver names', () => {
     assert.equal(getHumanoidJogSolverReadyMessage('sns'), 'SNS is enabled and waiting for jog input.');
     assert.equal(getHumanoidJogSolverReadyMessage('predictive_ik'), 'Predictive IK is enabled and waiting for jog input.');
     assert.equal(getHumanoidJogSolverReadyMessage('proxqp'), 'ProxQP is enabled and waiting for jog input.');
+    assert.equal(getHumanoidJogSolverReadyMessage('proxqp_w'), 'ProxQP+w is enabled and waiting for jog input.');
+    assert.equal(getHumanoidJogSolverReadyMessage('proxqp_w_vfi'), 'ProxQP+w_vfi is enabled and waiting for jog input.');
     assert.equal(getHumanoidJogSolverReadyMessage('wbc_qp'), 'new qpJ is enabled and waiting for jog input.');
     assert.equal(getHumanoidJogSolverReadyMessage('vfi'), 'new qpJ is enabled and waiting for jog input.');
     assert.equal(getHumanoidJogSolverReadyMessage('cns'), 'new qpJ is enabled and waiting for jog input.');

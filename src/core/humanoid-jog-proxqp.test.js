@@ -70,3 +70,34 @@ test('ProxQP returns finite best effort diagnostics for inconsistent constraints
     assert.ok(result.maxViolation > 0);
     assert.ok(result.qp_message.includes('best_effort'));
 });
+
+test('ProxQP applies a caller-provided linear secondary objective', () => {
+    const result = solveHumanoidJogProxQP({
+        qActive: [0, 0],
+        taskBlocks: [{
+            label: 'hold-primary',
+            J: [[1, 0]],
+            target: [0],
+            weight: 1
+        }],
+        hardConstraints: {
+            A: [
+                [1, 0],
+                [-1, 0],
+                [0, 1],
+                [0, -1]
+            ],
+            b: [0.2, 0.2, 0.2, 0.2]
+        },
+        damping: 1e-3,
+        linearObjective: [0, -1],
+        tolerance: 1e-8,
+        feasibleAcceptanceTolerance: 1e-8,
+        outerMaxIterations: 12,
+        innerMaxIterations: 16
+    });
+
+    assert.equal(result.solver, 'proxqp');
+    assert.ok(Math.abs(result.dq[0]) < 1e-5);
+    assert.ok(result.dq[1] > 0.05);
+});

@@ -680,11 +680,7 @@ try {
                     const qChanged = Number.isFinite(maxJointDelta(qBefore, qAfter)) && maxJointDelta(qBefore, qAfter) > 1e-9;
                     const diagnosticsReady = diagnostics && diagnostics.modeTag && diagnostics.modeTag !== 'idle';
                     const statusReady = hasSettledStatus(status);
-                    const asyncMode = (
-                        solverMode === 'mj_restore_tr' ||
-                        solverMode === 'mj_restore_tr_w' ||
-                        solverMode === 'mj_restore_tr_safe_wvfi'
-                    );
+                    const asyncMode = false;
                     if (asyncMode) {
                         const graceElapsed = (performance.now() - start) >= 32;
                         if (!asyncBusy && (statusReady || diagnosticsReady || qChanged) && (observedAsyncBusy || graceElapsed)) {

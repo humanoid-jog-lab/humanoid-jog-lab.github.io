@@ -1,9 +1,9 @@
 import { t } from '../i18n.js';
 
 const CONTROLLERS = [
-    { solverMode: 'mj_restore_tr', key: 'restore_tr', label: 'Recovery Optimization (TR)' },
-    { solverMode: 'mj_restore_tr_w', key: 'restore_tr_w', label: 'Recovery Optimization (TR+w)' },
-    { solverMode: 'mj_restore_tr_safe_wvfi', key: 'restore_tr_wvfi', label: 'Recovery Optimization (TR+w_vfi)' }
+    { solverMode: 'proxqp', key: 'proxqp', label: 'ProxQP' },
+    { solverMode: 'proxqp_w', key: 'proxqp_w', label: 'ProxQP+w' },
+    { solverMode: 'proxqp_w_vfi', key: 'proxqp_w_vfi', label: 'ProxQP+w_vfi' }
 ];
 
 const TASKS = [
@@ -272,7 +272,7 @@ export function resolveHumanoidControllerComparisonControllerOptions({
         qpUseInvariantEquality: true
     };
 
-    if (controllerKey === 'restore_tr' && mode === 'absolute' && includeWaist !== true) {
+    if (controllerKey === 'proxqp' && mode === 'absolute' && includeWaist !== true) {
         return {
             ...defaultOptions,
             jointLimitAvoidanceEnabled: false

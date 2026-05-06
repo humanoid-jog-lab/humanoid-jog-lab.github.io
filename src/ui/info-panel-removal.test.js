@@ -6,16 +6,16 @@ import { resolve } from 'node:path';
 const ROOT = resolve(import.meta.dirname, '../..');
 
 test('info panel removes legacy tabs and keeps only pose content', () => {
-    const indexHtml = readFileSync(resolve(ROOT, 'index.html'), 'utf8');
-    assert.doesNotMatch(indexHtml, /info-tabs/);
-    assert.doesNotMatch(indexHtml, /data-tab="pose"/);
-    assert.doesNotMatch(indexHtml, /data-tab="jacobian"/);
-    assert.doesNotMatch(indexHtml, /data-tab="dq"/);
-    assert.doesNotMatch(indexHtml, /id="jacobian-tab"/);
-    assert.doesNotMatch(indexHtml, /id="dq-tab"/);
-    assert.doesNotMatch(indexHtml, /双臂机器人位姿/);
-    assert.doesNotMatch(indexHtml, /实部:/);
-    assert.doesNotMatch(indexHtml, /对偶:/);
+    const appHtml = readFileSync(resolve(ROOT, 'app.html'), 'utf8');
+    assert.doesNotMatch(appHtml, /info-tabs/);
+    assert.doesNotMatch(appHtml, /data-tab="pose"/);
+    assert.doesNotMatch(appHtml, /data-tab="jacobian"/);
+    assert.doesNotMatch(appHtml, /data-tab="dq"/);
+    assert.doesNotMatch(appHtml, /id="jacobian-tab"/);
+    assert.doesNotMatch(appHtml, /id="dq-tab"/);
+    assert.doesNotMatch(appHtml, /双臂机器人位姿/);
+    assert.doesNotMatch(appHtml, /实部:/);
+    assert.doesNotMatch(appHtml, /对偶:/);
 
     const eventHandlersJs = readFileSync(resolve(ROOT, 'src/ui/event-handlers.js'), 'utf8');
     assert.doesNotMatch(eventHandlersJs, /function switchTab/);

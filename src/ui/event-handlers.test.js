@@ -9,6 +9,7 @@ import {
     setupHumanoidCooperativePolishingSurfaceControls,
     setupHumanoidCooperativePolishingObjectPoseControls,
     setupTeachOrderControls,
+    setupJogOptionBarControls,
     setupEventListeners
 } from './event-handlers.js';
 
@@ -119,6 +120,60 @@ test('setupTeachOrderControls defaults teach jogging to world frame and persists
         if (originalLocalStorage === undefined) delete globalThis.localStorage;
         else globalThis.localStorage = originalLocalStorage;
         appState.visualizer = originalVisualizer;
+    }
+});
+
+test('setupJogOptionBarControls mirrors lightweight controls into the real app selects', () => {
+    const originalDocument = globalThis.document;
+
+    const quickControlModeSelect = createMockSelect('absolute', ['absolute', 'relative']);
+    const controlModeSelect = createMockSelect('absolute', ['absolute', 'relative']);
+    const quickJogSolverSelect = createMockSelect('proxqp_w_vfi', ['proxqp', 'proxqp_w', 'proxqp_w_vfi']);
+    const jogSolverSelect = createMockSelect('proxqp_w_vfi', ['proxqp', 'proxqp_w', 'proxqp_w_vfi']);
+    const dispatchedChanges = [];
+    controlModeSelect.dispatchEvent = (event) => {
+        dispatchedChanges.push(`control:${event.type}`);
+        controlModeSelect.trigger(event.type, controlModeSelect.value);
+        return true;
+    };
+    jogSolverSelect.dispatchEvent = (event) => {
+        dispatchedChanges.push(`solver:${event.type}`);
+        jogSolverSelect.trigger(event.type, jogSolverSelect.value);
+        return true;
+    };
+
+    globalThis.document = {
+        getElementById(id) {
+            if (id === 'quick-control-mode-select') return quickControlModeSelect;
+            if (id === 'dual-arm-control-mode-select') return controlModeSelect;
+            if (id === 'quick-jog-solver-select') return quickJogSolverSelect;
+            if (id === 'humanoid-jog-solver-select') return jogSolverSelect;
+            return null;
+        }
+    };
+
+    try {
+        setupJogOptionBarControls();
+
+        quickControlModeSelect.value = 'relative';
+        quickControlModeSelect.trigger('change', 'relative');
+        quickJogSolverSelect.value = 'proxqp';
+        quickJogSolverSelect.trigger('change', 'proxqp');
+
+        assert.equal(controlModeSelect.value, 'relative');
+        assert.equal(jogSolverSelect.value, 'proxqp');
+        assert.deepEqual(dispatchedChanges, ['control:change', 'solver:change']);
+
+        controlModeSelect.value = 'absolute';
+        controlModeSelect.trigger('change', 'absolute');
+        jogSolverSelect.value = 'proxqp_w';
+        jogSolverSelect.trigger('change', 'proxqp_w');
+
+        assert.equal(quickControlModeSelect.value, 'absolute');
+        assert.equal(quickJogSolverSelect.value, 'proxqp_w');
+    } finally {
+        if (originalDocument === undefined) delete globalThis.document;
+        else globalThis.document = originalDocument;
     }
 });
 
@@ -318,27 +373,27 @@ test('setupHumanoidParameterControls restores, applies, and validates humanoid j
         setupHumanoidParameterControls();
 
         assert.equal(humanoidJointLimitEtaInput.value, '4.5');
-        assert.equal(humanoidJointLimitEtaStatus.textContent, '当前值已应用：η_θ=4.5');
+        assert.equal(humanoidJointLimitEtaStatus.textContent, 'Value applied: η_θ=4.5');
         assert.equal(globalThis.window.humanoidJointLimitEta, 4.5);
         assert.deepEqual(etaCalls, [4.5]);
         assert.equal(humanoidWaistXEtaInput.value, '2.5');
-        assert.equal(humanoidWaistXVFIStatus.textContent, '当前值已应用：η_x=2.5');
+        assert.equal(humanoidWaistXVFIStatus.textContent, 'Value applied: η_x=2.5');
         assert.equal(globalThis.window.humanoidWaistXEta, 2.5);
         assert.equal(globalThis.window.humanoidWaistXActivationThreshold, undefined);
         assert.deepEqual(waistXVFICalls, [{ eta: 2.5 }]);
         assert.equal(humanoidTRSafetyPushWeightInput.value, '0.08');
-        assert.equal(humanoidTRSafetyPushStatus.textContent, '当前值已应用：β=0.08');
+        assert.equal(humanoidTRSafetyPushStatus.textContent, 'Value applied: β=0.08');
         assert.equal(globalThis.window.humanoidTRSafetyPushWeight, 0.08);
         assert.deepEqual(safetyPushWeightCalls, [0.08]);
         assert.equal(humanoidSafetyRefineJointInput.value, '0.2');
         assert.equal(humanoidSafetyRefineWaistInput.value, '0.09');
-        assert.equal(humanoidSafetyRefineStatus.textContent, '当前值已应用：关节=0.2rad，腰部=0.09m');
+        assert.equal(humanoidSafetyRefineStatus.textContent, 'Value applied: joint=0.2rad, waist=0.09m');
         assert.deepEqual(safetyRefineCalls, [{ jointActivationDistance: 0.2, waistActivationDistance: 0.09 }]);
         assert.equal(humanoidRos2ArmVelInput.value, '0.6');
         assert.equal(humanoidRos2ArmAccInput.value, '1.1');
         assert.equal(humanoidRos2WaistVelInput.value, '0.7');
         assert.equal(humanoidRos2WaistAccInput.value, '1.2');
-        assert.equal(humanoidRos2PublishDefaultsStatus.textContent, '当前值已应用：双臂 vel/acc=0.6/1.1，腰部 vel/acc=0.7/1.2');
+        assert.equal(humanoidRos2PublishDefaultsStatus.textContent, 'Value applied: arm vel/acc=0.6/1.1, waist vel/acc=0.7/1.2');
         assert.deepEqual(appState.humanoidRos2PublishDefaults, {
             armVel: 0.6,
             armAcc: 1.1,
@@ -349,7 +404,7 @@ test('setupHumanoidParameterControls restores, applies, and validates humanoid j
         humanoidJointLimitEtaInput.trigger('change', '6.2');
 
         assert.equal(humanoidJointLimitEtaInput.value, '6.2');
-        assert.equal(humanoidJointLimitEtaStatus.textContent, '当前值已应用：η_θ=6.2');
+        assert.equal(humanoidJointLimitEtaStatus.textContent, 'Value applied: η_θ=6.2');
         assert.equal(globalThis.window.humanoidJointLimitEta, 6.2);
         assert.equal(globalThis.localStorage.getItem('humanoid-joint-limit-eta'), '6.2');
         assert.deepEqual(etaCalls, [4.5, 6.2]);
@@ -358,7 +413,7 @@ test('setupHumanoidParameterControls restores, applies, and validates humanoid j
         humanoidWaistXEtaInput.trigger('change', '3.5');
 
         assert.equal(humanoidWaistXEtaInput.value, '3.5');
-        assert.equal(humanoidWaistXVFIStatus.textContent, '当前值已应用：η_x=3.5');
+        assert.equal(humanoidWaistXVFIStatus.textContent, 'Value applied: η_x=3.5');
         assert.equal(globalThis.localStorage.getItem('humanoid-waist-x-eta'), '3.5');
         assert.equal(globalThis.localStorage.getItem('humanoid-waist-x-activation-threshold'), null);
         assert.deepEqual(waistXVFICalls, [
@@ -370,7 +425,7 @@ test('setupHumanoidParameterControls restores, applies, and validates humanoid j
         humanoidTRSafetyPushWeightInput.trigger('change', '0.12');
 
         assert.equal(humanoidTRSafetyPushWeightInput.value, '0.12');
-        assert.equal(humanoidTRSafetyPushStatus.textContent, '当前值已应用：β=0.12');
+        assert.equal(humanoidTRSafetyPushStatus.textContent, 'Value applied: β=0.12');
         assert.equal(globalThis.localStorage.getItem('humanoid-tr-safety-push-weight'), '0.12');
         assert.deepEqual(safetyPushWeightCalls, [0.08, 0.12]);
 
@@ -378,7 +433,7 @@ test('setupHumanoidParameterControls restores, applies, and validates humanoid j
         humanoidTRSafetyPushWeightInput.trigger('change', '0');
 
         assert.equal(humanoidTRSafetyPushWeightInput.value, '0');
-        assert.equal(humanoidTRSafetyPushStatus.textContent, '当前值已应用：β=0');
+        assert.equal(humanoidTRSafetyPushStatus.textContent, 'Value applied: β=0');
         assert.equal(globalThis.localStorage.getItem('humanoid-tr-safety-push-weight'), '0');
         assert.deepEqual(safetyPushWeightCalls, [0.08, 0.12, 0]);
 
@@ -387,7 +442,7 @@ test('setupHumanoidParameterControls restores, applies, and validates humanoid j
 
         assert.equal(humanoidSafetyRefineJointInput.value, '0.25');
         assert.equal(humanoidSafetyRefineWaistInput.value, '0.09');
-        assert.equal(humanoidSafetyRefineStatus.textContent, '当前值已应用：关节=0.25rad，腰部=0.09m');
+        assert.equal(humanoidSafetyRefineStatus.textContent, 'Value applied: joint=0.25rad, waist=0.09m');
         assert.equal(globalThis.localStorage.getItem('humanoid-safety-refine-joint-activation'), '0.25');
         assert.equal(globalThis.localStorage.getItem('humanoid-safety-refine-waist-activation'), '0.09');
         assert.deepEqual(safetyRefineCalls, [
@@ -398,7 +453,7 @@ test('setupHumanoidParameterControls restores, applies, and validates humanoid j
         humanoidRos2ArmVelInput.value = '0.9';
         humanoidRos2ArmVelInput.trigger('change', '0.9');
 
-        assert.equal(humanoidRos2PublishDefaultsStatus.textContent, '当前值已应用：双臂 vel/acc=0.9/1.1，腰部 vel/acc=0.7/1.2');
+        assert.equal(humanoidRos2PublishDefaultsStatus.textContent, 'Value applied: arm vel/acc=0.9/1.1, waist vel/acc=0.7/1.2');
         assert.equal(globalThis.localStorage.getItem('humanoid-ros2-arm-vel'), '0.9');
         assert.deepEqual(appState.humanoidRos2PublishDefaults, {
             armVel: 0.9,
@@ -410,7 +465,7 @@ test('setupHumanoidParameterControls restores, applies, and validates humanoid j
         humanoidJointLimitEtaInput.trigger('change', 'bad');
 
         assert.equal(humanoidJointLimitEtaInput.value, '6.2');
-        assert.equal(humanoidJointLimitEtaStatus.textContent, '输入无效，已恢复为 η_θ=6.2');
+        assert.equal(humanoidJointLimitEtaStatus.textContent, 'Invalid input; restored to η_θ=6.2');
         assert.equal(globalThis.window.humanoidJointLimitEta, 6.2);
         assert.equal(globalThis.localStorage.getItem('humanoid-joint-limit-eta'), '6.2');
         assert.deepEqual(etaCalls, [4.5, 6.2]);
@@ -419,7 +474,7 @@ test('setupHumanoidParameterControls restores, applies, and validates humanoid j
         humanoidWaistXEtaInput.trigger('change', 'bad');
 
         assert.equal(humanoidWaistXEtaInput.value, '3.5');
-        assert.equal(humanoidWaistXVFIStatus.textContent, '输入无效，已恢复为 η_x=3.5');
+        assert.equal(humanoidWaistXVFIStatus.textContent, 'Invalid input; restored to η_x=3.5');
         assert.equal(globalThis.window.humanoidWaistXEta, 3.5);
         assert.equal(globalThis.window.humanoidWaistXActivationThreshold, undefined);
 
@@ -427,20 +482,20 @@ test('setupHumanoidParameterControls restores, applies, and validates humanoid j
         humanoidTRSafetyPushWeightInput.trigger('change', 'bad');
 
         assert.equal(humanoidTRSafetyPushWeightInput.value, '0');
-        assert.equal(humanoidTRSafetyPushStatus.textContent, '输入无效，已恢复为 β=0');
+        assert.equal(humanoidTRSafetyPushStatus.textContent, 'Invalid input; restored to β=0');
 
         humanoidSafetyRefineWaistInput.value = 'bad';
         humanoidSafetyRefineWaistInput.trigger('change', 'bad');
 
         assert.equal(humanoidSafetyRefineJointInput.value, '0.25');
         assert.equal(humanoidSafetyRefineWaistInput.value, '0.09');
-        assert.equal(humanoidSafetyRefineStatus.textContent, '输入无效，已恢复为 关节=0.25rad，腰部=0.09m');
+        assert.equal(humanoidSafetyRefineStatus.textContent, 'Invalid input; restored to joint=0.25rad, waist=0.09m');
 
         humanoidRos2WaistAccInput.value = 'bad';
         humanoidRos2WaistAccInput.trigger('change', 'bad');
 
         assert.equal(humanoidRos2WaistAccInput.value, '1.2');
-        assert.equal(humanoidRos2PublishDefaultsStatus.textContent, '输入无效，已恢复为 双臂(0.9/1.1) 腰部(0.7/1.2)');
+        assert.equal(humanoidRos2PublishDefaultsStatus.textContent, 'Invalid input; restored to arms(0.9/1.1) waist(0.7/1.2)');
         assert.deepEqual(appState.humanoidRos2PublishDefaults, {
             armVel: 0.9,
             armAcc: 1.1,
@@ -459,7 +514,7 @@ test('setupHumanoidParameterControls restores, applies, and validates humanoid j
     }
 });
 
-test('setupHumanoidJogSolverControls falls back stored mj_restore_pre_w selections to the TR+w_vfi default', () => {
+test('setupHumanoidJogSolverControls falls back stored mj_restore_pre_w selections to the ProxQP+w_vfi default', () => {
     const originalWindow = globalThis.window;
     const originalDocument = globalThis.document;
     const originalLocalStorage = globalThis.localStorage;
@@ -539,7 +594,7 @@ test('setupHumanoidJogSolverControls falls back stored mj_restore_pre_w selectio
     try {
         setupHumanoidJogSolverControls();
 
-        assert.equal(humanoidJogSolverSelect.value, 'mj_restore_tr_safe_wvfi');
+        assert.equal(humanoidJogSolverSelect.value, 'proxqp_w_vfi');
         assert.equal(humanoidJogMetricSelect.value, 'w_abs_hier_vfi');
         assert.deepEqual(
             humanoidJogMetricSelect.options.map((option) => option.textContent),
@@ -549,19 +604,19 @@ test('setupHumanoidJogSolverControls falls back stored mj_restore_pre_w selectio
         assert.equal(humanoidWaistXCorridorMinInput.value, '-0.12');
         assert.equal(humanoidWaistXCorridorMaxInput.value, '0.12');
         assert.equal(humanoidTestDualArmLockToggle.checked, true);
-        assert.equal(globalThis.window.humanoidJogSolverMode, 'mj_restore_tr_safe_wvfi');
+        assert.equal(globalThis.window.humanoidJogSolverMode, 'proxqp_w_vfi');
         assert.equal(globalThis.window.humanoidManifoldJogSecondaryMetric, 'w_abs_hier_vfi');
         assert.equal(globalThis.window.humanoidWaistXCorridorEnabled, true);
         assert.equal(globalThis.window.humanoidWaistXCorridorMin, -0.12);
         assert.equal(globalThis.window.humanoidWaistXCorridorMax, 0.12);
-        assert.deepEqual(visualizerCalls, ['mj_restore_tr_safe_wvfi']);
+        assert.deepEqual(visualizerCalls, ['proxqp_w_vfi']);
         assert.deepEqual(metricOptimizationCalls, ['set:w_abs_hier_vfi']);
         assert.deepEqual(waistXCorridorCalls, [true]);
         assert.deepEqual(waistXCorridorMinCalls, [-0.12]);
         assert.deepEqual(waistXCorridorMaxCalls, [0.12]);
         assert.deepEqual(testLockCalls, [true]);
-        assert.equal(globalThis.localStorage.getItem('humanoid-jog-solver-mode'), 'mj_restore_tr_safe_wvfi');
-        assert.equal(globalThis.localStorage.getItem('humanoid-jog-default-version'), 'tr-wvfi-three-solver');
+        assert.equal(globalThis.localStorage.getItem('humanoid-jog-solver-mode'), 'proxqp_w_vfi');
+        assert.equal(globalThis.localStorage.getItem('humanoid-jog-default-version'), 'proxqp-three-solver');
         assert.equal(globalThis.localStorage.getItem('humanoid-manifold-jog-metric'), 'w_abs_hier_vfi');
         assert.equal(globalThis.localStorage.getItem('humanoid-waist-x-corridor-enabled'), '1');
         assert.equal(globalThis.localStorage.getItem('humanoid-waist-x-corridor-min'), '-0.12');
@@ -577,7 +632,7 @@ test('setupHumanoidJogSolverControls falls back stored mj_restore_pre_w selectio
         humanoidWaistXCorridorToggle.trigger('change', false);
         humanoidTestDualArmLockToggle.trigger('change', false);
 
-        assert.equal(humanoidJogSolverSelect.value, 'mj_restore_tr_w');
+        assert.equal(humanoidJogSolverSelect.value, 'proxqp_w_vfi');
         assert.equal(humanoidJogMetricSelect.value, 'w_abs_hier');
         assert.deepEqual(
             humanoidJogMetricSelect.options.map((option) => option.textContent),
@@ -586,12 +641,12 @@ test('setupHumanoidJogSolverControls falls back stored mj_restore_pre_w selectio
         assert.equal(humanoidWaistXCorridorToggle.checked, false);
         assert.equal(humanoidWaistXCorridorMinInput.value, '-0.08');
         assert.equal(humanoidTestDualArmLockToggle.checked, false);
-        assert.equal(globalThis.window.humanoidJogSolverMode, 'mj_restore_tr_w');
+        assert.equal(globalThis.window.humanoidJogSolverMode, 'proxqp_w_vfi');
         assert.equal(globalThis.window.humanoidManifoldJogSecondaryMetric, 'w_abs_hier');
         assert.equal(globalThis.window.humanoidWaistXCorridorEnabled, false);
         assert.equal(globalThis.window.humanoidWaistXCorridorMin, -0.08);
         assert.equal(globalThis.window.humanoidWaistXCorridorMax, 0.08);
-        assert.deepEqual(visualizerCalls, ['mj_restore_tr_safe_wvfi', 'mj_restore_tr_w']);
+        assert.deepEqual(visualizerCalls, ['proxqp_w_vfi', 'proxqp_w_vfi']);
         assert.deepEqual(metricOptimizationCalls, [
             'set:w_abs_hier_vfi',
             'set:w_abs_hier',
@@ -601,7 +656,7 @@ test('setupHumanoidJogSolverControls falls back stored mj_restore_pre_w selectio
         assert.deepEqual(waistXCorridorMinCalls, [-0.12, -0.08]);
         assert.deepEqual(waistXCorridorMaxCalls, [0.12, 0.08]);
         assert.deepEqual(testLockCalls, [true, false]);
-        assert.equal(globalThis.localStorage.getItem('humanoid-jog-solver-mode'), 'mj_restore_tr_w');
+        assert.equal(globalThis.localStorage.getItem('humanoid-jog-solver-mode'), 'proxqp_w_vfi');
         assert.equal(globalThis.localStorage.getItem('humanoid-manifold-jog-metric'), 'w_abs_hier');
         assert.equal(globalThis.localStorage.getItem('humanoid-waist-x-corridor-enabled'), '0');
         assert.equal(globalThis.localStorage.getItem('humanoid-waist-x-corridor-min'), '-0.08');
@@ -637,7 +692,7 @@ test('setupHumanoidJogSolverControls falls back stored mj_restore_pre_w selectio
     }
 });
 
-test('setupHumanoidJogSolverControls resets legacy JS comparison solvers to TR+w_vfi', () => {
+test('setupHumanoidJogSolverControls resets legacy JS comparison solvers but keeps ProxQP variants', () => {
     const originalWindow = globalThis.window;
     const originalDocument = globalThis.document;
     const originalLocalStorage = globalThis.localStorage;
@@ -668,7 +723,7 @@ test('setupHumanoidJogSolverControls resets legacy JS comparison solvers to TR+w
     globalThis.localStorage = createMockLocalStorage([
         ['humanoid-jog-solver-mode', 'hqp'],
         ['humanoid-manifold-jog-metric', 'w_abs_hier_vfi'],
-        ['humanoid-jog-default-version', 'tr-wvfi-three-solver']
+        ['humanoid-jog-default-version', 'proxqp-three-solver']
     ]);
     globalThis.setInterval = () => 1;
     globalThis.clearInterval = () => {};
@@ -683,25 +738,35 @@ test('setupHumanoidJogSolverControls resets legacy JS comparison solvers to TR+w
 
     try {
         setupHumanoidJogSolverControls();
-        assert.equal(humanoidJogSolverSelect.value, 'mj_restore_tr_safe_wvfi');
-        assert.equal(globalThis.window.humanoidJogSolverMode, 'mj_restore_tr_safe_wvfi');
-        assert.deepEqual(visualizerCalls, ['mj_restore_tr_safe_wvfi']);
-        assert.equal(globalThis.localStorage.getItem('humanoid-jog-solver-mode'), 'mj_restore_tr_safe_wvfi');
+        assert.equal(humanoidJogSolverSelect.value, 'proxqp_w_vfi');
+        assert.equal(globalThis.window.humanoidJogSolverMode, 'proxqp_w_vfi');
+        assert.deepEqual(visualizerCalls, ['proxqp_w_vfi']);
+        assert.equal(globalThis.localStorage.getItem('humanoid-jog-solver-mode'), 'proxqp_w_vfi');
 
         humanoidJogSolverSelect.trigger('change', 'sns');
-        assert.equal(humanoidJogSolverSelect.value, 'mj_restore_tr_safe_wvfi');
-        assert.equal(globalThis.window.humanoidJogSolverMode, 'mj_restore_tr_safe_wvfi');
-        assert.equal(globalThis.localStorage.getItem('humanoid-jog-solver-mode'), 'mj_restore_tr_safe_wvfi');
+        assert.equal(humanoidJogSolverSelect.value, 'proxqp_w_vfi');
+        assert.equal(globalThis.window.humanoidJogSolverMode, 'proxqp_w_vfi');
+        assert.equal(globalThis.localStorage.getItem('humanoid-jog-solver-mode'), 'proxqp_w_vfi');
 
         humanoidJogSolverSelect.trigger('change', 'predictive_ik');
-        assert.equal(humanoidJogSolverSelect.value, 'mj_restore_tr_safe_wvfi');
-        assert.equal(globalThis.window.humanoidJogSolverMode, 'mj_restore_tr_safe_wvfi');
-        assert.equal(globalThis.localStorage.getItem('humanoid-jog-solver-mode'), 'mj_restore_tr_safe_wvfi');
+        assert.equal(humanoidJogSolverSelect.value, 'proxqp_w_vfi');
+        assert.equal(globalThis.window.humanoidJogSolverMode, 'proxqp_w_vfi');
+        assert.equal(globalThis.localStorage.getItem('humanoid-jog-solver-mode'), 'proxqp_w_vfi');
 
         humanoidJogSolverSelect.trigger('change', 'proxqp');
-        assert.equal(humanoidJogSolverSelect.value, 'mj_restore_tr_safe_wvfi');
-        assert.equal(globalThis.window.humanoidJogSolverMode, 'mj_restore_tr_safe_wvfi');
-        assert.equal(globalThis.localStorage.getItem('humanoid-jog-solver-mode'), 'mj_restore_tr_safe_wvfi');
+        assert.equal(humanoidJogSolverSelect.value, 'proxqp');
+        assert.equal(globalThis.window.humanoidJogSolverMode, 'proxqp');
+        assert.equal(globalThis.localStorage.getItem('humanoid-jog-solver-mode'), 'proxqp');
+
+        humanoidJogSolverSelect.trigger('change', 'proxqp_w');
+        assert.equal(humanoidJogSolverSelect.value, 'proxqp_w');
+        assert.equal(globalThis.window.humanoidJogSolverMode, 'proxqp_w');
+        assert.equal(globalThis.localStorage.getItem('humanoid-jog-solver-mode'), 'proxqp_w');
+
+        humanoidJogSolverSelect.trigger('change', 'proxqp_w_vfi');
+        assert.equal(humanoidJogSolverSelect.value, 'proxqp_w_vfi');
+        assert.equal(globalThis.window.humanoidJogSolverMode, 'proxqp_w_vfi');
+        assert.equal(globalThis.localStorage.getItem('humanoid-jog-solver-mode'), 'proxqp_w_vfi');
     } finally {
         if (originalWindow === undefined) delete globalThis.window;
         else globalThis.window = originalWindow;
@@ -1119,11 +1184,11 @@ test('setupHumanoidJogSolverControls falls back when storage contains a removed 
 
     try {
         setupHumanoidJogSolverControls();
-        assert.equal(humanoidJogSolverSelect.value, 'mj_restore_tr_safe_wvfi');
-        assert.equal(globalThis.window.humanoidJogSolverMode, 'mj_restore_tr_safe_wvfi');
-        assert.deepEqual(visualizerCalls, ['mj_restore_tr_safe_wvfi']);
-        assert.equal(globalThis.localStorage.getItem('humanoid-jog-solver-mode'), 'mj_restore_tr_safe_wvfi');
-        assert.equal(globalThis.localStorage.getItem('humanoid-jog-default-version'), 'tr-wvfi-three-solver');
+        assert.equal(humanoidJogSolverSelect.value, 'proxqp_w_vfi');
+        assert.equal(globalThis.window.humanoidJogSolverMode, 'proxqp_w_vfi');
+        assert.deepEqual(visualizerCalls, ['proxqp_w_vfi']);
+        assert.equal(globalThis.localStorage.getItem('humanoid-jog-solver-mode'), 'proxqp_w_vfi');
+        assert.equal(globalThis.localStorage.getItem('humanoid-jog-default-version'), 'proxqp-three-solver');
     } finally {
         if (originalWindow === undefined) delete globalThis.window;
         else globalThis.window = originalWindow;
@@ -1139,7 +1204,7 @@ test('setupHumanoidJogSolverControls falls back when storage contains a removed 
     }
 });
 
-test('setupHumanoidJogSolverControls keeps ruled-surface polishing modes on supported TR solvers', () => {
+test('setupHumanoidJogSolverControls keeps ruled-surface polishing modes on supported ProxQP solvers', () => {
     const originalWindow = globalThis.window;
     const originalDocument = globalThis.document;
     const originalLocalStorage = globalThis.localStorage;
@@ -1183,15 +1248,15 @@ test('setupHumanoidJogSolverControls keeps ruled-surface polishing modes on supp
 
     try {
         setupHumanoidJogSolverControls();
-        assert.equal(humanoidJogSolverSelect.value, 'mj_restore_tr_safe_wvfi');
-        assert.equal(globalThis.window.humanoidJogSolverMode, 'mj_restore_tr_safe_wvfi');
+        assert.equal(humanoidJogSolverSelect.value, 'proxqp_w_vfi');
+        assert.equal(globalThis.window.humanoidJogSolverMode, 'proxqp_w_vfi');
 
         controlModeSelect.trigger('change', 'left-ruled-surface-polishing');
 
-        assert.equal(humanoidJogSolverSelect.value, 'mj_restore_tr_safe_wvfi');
-        assert.equal(globalThis.window.humanoidJogSolverMode, 'mj_restore_tr_safe_wvfi');
-        assert.deepEqual(visualizerCalls, ['mj_restore_tr_safe_wvfi']);
-        assert.equal(globalThis.localStorage.getItem('humanoid-jog-solver-mode'), 'mj_restore_tr_safe_wvfi');
+        assert.equal(humanoidJogSolverSelect.value, 'proxqp_w_vfi');
+        assert.equal(globalThis.window.humanoidJogSolverMode, 'proxqp_w_vfi');
+        assert.deepEqual(visualizerCalls, ['proxqp_w_vfi']);
+        assert.equal(globalThis.localStorage.getItem('humanoid-jog-solver-mode'), 'proxqp_w_vfi');
     } finally {
         if (originalWindow === undefined) delete globalThis.window;
         else globalThis.window = originalWindow;
@@ -1246,7 +1311,7 @@ test('setupHumanoidJogSolverControls repeats humanoid w+ while the button is hel
         }
     };
     globalThis.localStorage = createMockLocalStorage([
-        ['humanoid-jog-default-version', 'tr-wvfi-three-solver'],
+        ['humanoid-jog-default-version', 'proxqp-three-solver'],
         ['humanoid-manifold-jog-metric', 'w_abs_hier_ext']
     ]);
     globalThis.setTimeout = (handler) => {
@@ -1335,7 +1400,7 @@ test('setupHumanoidJogSolverControls repeats humanoid w+ while the button is hel
     }
 });
 
-test('setupHumanoidJogSolverControls keeps supported TR solvers for cooperative DQ set-point polishing modes', () => {
+test('setupHumanoidJogSolverControls keeps supported ProxQP solvers for cooperative DQ set-point polishing modes', () => {
     const originalWindow = globalThis.window;
     const originalDocument = globalThis.document;
     const originalLocalStorage = globalThis.localStorage;
@@ -1343,7 +1408,7 @@ test('setupHumanoidJogSolverControls keeps supported TR solvers for cooperative 
     const originalSetInterval = globalThis.setInterval;
     const originalClearInterval = globalThis.clearInterval;
 
-    const humanoidJogSolverSelect = createMockElement('mj_restore_tr_w');
+    const humanoidJogSolverSelect = createMockElement('proxqp_w');
     const humanoidJogMetricSelect = createMockSelect('w_abs_hier_vfi', ['w_abs_hier', 'w_abs_hier_vfi']);
     const humanoidWMetricIncreaseBtn = createMockElement('');
     const humanoidWaistXCorridorToggle = createMockElement('');
@@ -1364,8 +1429,8 @@ test('setupHumanoidJogSolverControls keeps supported TR solvers for cooperative 
         }
     };
     globalThis.localStorage = createMockLocalStorage([
-        ['humanoid-jog-solver-mode', 'mj_restore_tr_w'],
-        ['humanoid-jog-default-version', 'tr-wvfi-three-solver']
+        ['humanoid-jog-solver-mode', 'proxqp_w'],
+        ['humanoid-jog-default-version', 'proxqp-three-solver']
     ]);
     globalThis.setInterval = () => 1;
     globalThis.clearInterval = () => {};
@@ -1382,10 +1447,10 @@ test('setupHumanoidJogSolverControls keeps supported TR solvers for cooperative 
         setupHumanoidJogSolverControls();
         controlModeSelect.trigger('change', 'cooperative-ruled-surface-polishing-dq-setpoint');
 
-        assert.equal(humanoidJogSolverSelect.value, 'mj_restore_tr_w');
-        assert.equal(globalThis.window.humanoidJogSolverMode, 'mj_restore_tr_w');
-        assert.deepEqual(visualizerCalls, ['mj_restore_tr_w']);
-        assert.equal(globalThis.localStorage.getItem('humanoid-jog-solver-mode'), 'mj_restore_tr_w');
+        assert.equal(humanoidJogSolverSelect.value, 'proxqp_w');
+        assert.equal(globalThis.window.humanoidJogSolverMode, 'proxqp_w');
+        assert.deepEqual(visualizerCalls, ['proxqp_w']);
+        assert.equal(globalThis.localStorage.getItem('humanoid-jog-solver-mode'), 'proxqp_w');
     } finally {
         if (originalWindow === undefined) delete globalThis.window;
         else globalThis.window = originalWindow;

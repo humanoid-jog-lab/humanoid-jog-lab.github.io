@@ -82,6 +82,99 @@ body {
     font-size: 1rem;
 }
 
+.jog-option-bar {
+    position: fixed;
+    top: 18px;
+    left: 50%;
+    z-index: 14;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    max-width: min(1180px, calc(100vw - 32px));
+    padding: 0.55rem 0.75rem;
+    transform: translateX(-50%);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 14px;
+    background: rgba(15, 23, 42, 0.78);
+    box-shadow: var(--panel-shadow);
+    backdrop-filter: blur(14px);
+    color: #e2e8f0;
+}
+
+.quick-field {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    white-space: nowrap;
+    font-size: 0.82rem;
+    font-weight: 700;
+}
+
+.quick-field span {
+    color: #cbd5e1;
+}
+
+.quick-field select {
+    min-width: 9.5rem;
+    height: 34px;
+    padding: 0 0.55rem;
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    border-radius: 8px;
+    background: rgba(15, 23, 42, 0.95);
+    color: #f8fafc;
+    font-size: 0.82rem;
+}
+
+.quick-jog-controls,
+.quick-distance-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+}
+
+.quick-distance-controls {
+    display: none;
+}
+
+.quick-axis-control {
+    display: grid;
+    grid-template-columns: auto 28px 28px;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.18rem 0.28rem;
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 9px;
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.quick-axis-control[hidden] {
+    display: none;
+}
+
+.quick-distance-control {
+    min-width: 7.5rem;
+}
+
+.quick-axis-control span {
+    min-width: 1.45rem;
+    color: #cbd5e1;
+    font-size: 0.78rem;
+    font-weight: 800;
+    text-align: center;
+}
+
+.quick-jog-btn.teach-btn {
+    min-width: 28px;
+    height: 28px;
+    flex: 0 0 auto;
+    padding: 0;
+    border-width: 1px;
+    border-radius: 7px;
+    font-size: 0.9rem;
+    line-height: 1;
+    box-shadow: none;
+}
+
 /* 浮动面板通用样式 */
 .floating-panel {
     position: fixed;
@@ -835,6 +928,32 @@ body {
 }
 
 @media (max-width: 768px) {
+    .jog-option-bar {
+        top: 10px;
+        width: calc(100vw - 20px);
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 0.5rem;
+        padding: 0.5rem;
+    }
+
+    .quick-field {
+        flex: 1 1 9.5rem;
+        justify-content: space-between;
+    }
+
+    .quick-field select {
+        min-width: 0;
+        width: 100%;
+    }
+
+    .quick-jog-controls,
+    .quick-distance-controls {
+        width: 100%;
+        flex-wrap: wrap;
+        justify-content: center;
+    }
+
     .control-panel {
         width: 280px;
         top: 10px;

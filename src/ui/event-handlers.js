@@ -26,6 +26,78 @@ const TEACH_MULTIPLICATION_ORDER_STORAGE_KEY = 'teach-multiply-order-delta-first
 const HUMANOID_W_METRIC_HOLD_DELAY_MS = 250;
 const HUMANOID_W_METRIC_REPEAT_INTERVAL_MS = 100;
 
+function isHumanoidPolishingControlMode(mode) {
+    return (
+        mode === 'left-ruled-surface-polishing'
+        || mode === 'cooperative-ruled-surface-polishing-dq-setpoint'
+        || mode === 'cooperative-ruled-surface-polishing-dq-setpoint-arm-only'
+    );
+}
+
+function refreshHumanoidPolishingReferenceForCurrentHands(mode) {
+    if (!isHumanoidPolishingControlMode(mode)) return null;
+    const visualizer = appState.visualizer;
+    if (!visualizer || typeof visualizer.captureHumanoidCooperativeRuledSurfaceObjectPoseFromCurrentHands !== 'function') {
+        return null;
+    }
+    const existingPose = (typeof window !== 'undefined' ? window.humanoidCooperativeRuledSurfaceObjectPose : null)
+        ?? appState.humanoidCooperativePolishingObjectPose
+        ?? null;
+    const capturedPose = visualizer.captureHumanoidCooperativeRuledSurfaceObjectPoseFromCurrentHands({
+        flipNormal: Boolean(existingPose?.flipNormal)
+    });
+    visualizer.refreshHumanoidSurfaceSlideVisualization?.();
+    return capturedPose;
+}
+
+export function getHumanoidDefaultQProfileForControlMode(mode) {
+    return isHumanoidPolishingControlMode(mode)
+        ? 'default2'
+        : DEFAULT_HUMANOID_INITIAL_Q_PROFILE_ID;
+}
+
+export function resetHumanoidJointsToProfile(profileIdRaw) {
+    if (!appState.humanoidMode || appState.humanoidJointNames.length === 0) return false;
+    const profileId = normalizeHumanoidInitialQProfileId(profileIdRaw);
+    appState.humanoidQ = resolveHumanoidInitialQ(
+        { initial_q_profile: profileId },
+        appState.humanoidJointNames.length,
+        profileId
+    );
+    callbacks.updateGlobalVariables?.();
+    callbacks.updateRobotPose?.();
+    appState.visualizer?.resetHumanoidSurfaceSlideReference?.();
+    return true;
+}
+
+export function resetHumanoidJointsToCurrentDefaultProfile() {
+    const profileId = appState.humanoidInitialQProfileId
+        ?? (typeof window !== 'undefined' ? window.humanoidInitialQProfileId : null)
+        ?? DEFAULT_HUMANOID_INITIAL_Q_PROFILE_ID;
+    const applied = resetHumanoidJointsToProfile(profileId);
+    const currentMode = (typeof document !== 'undefined'
+        ? document.getElementById('dual-arm-control-mode-select')?.value
+        : null)
+        ?? (typeof window !== 'undefined' ? window.currentDualArmControlMode : null);
+    if (applied) refreshHumanoidPolishingReferenceForCurrentHands(currentMode);
+    return applied;
+}
+
+export function resetHumanoidJointsForControlMode(mode) {
+    const applied = resetHumanoidJointsToProfile(getHumanoidDefaultQProfileForControlMode(mode));
+    if (applied) refreshHumanoidPolishingReferenceForCurrentHands(mode);
+    return applied;
+}
+
+function scheduleHumanoidControlModeJointReset(mode) {
+    const reset = () => resetHumanoidJointsForControlMode(mode);
+    if (typeof queueMicrotask === 'function') {
+        queueMicrotask(reset);
+        return;
+    }
+    Promise.resolve().then(reset);
+}
+
 export function setupHumanoidDefaultPoseControls() {
     const profile1Btn = document.getElementById('humanoid-default-q-profile-1-btn');
     const profile2Btn = document.getElementById('humanoid-default-q-profile-2-btn');
@@ -58,14 +130,7 @@ export function setupHumanoidDefaultPoseControls() {
         updateButtonState(profileId);
 
         if (applyToCurrentHumanoid && appState.humanoidMode && appState.humanoidJointNames.length > 0) {
-            appState.humanoidQ = resolveHumanoidInitialQ(
-                { initial_q_profile: profileId },
-                appState.humanoidJointNames.length,
-                profileId
-            );
-            callbacks.updateGlobalVariables?.();
-            callbacks.updateRobotPose?.();
-            appState.visualizer?.resetHumanoidSurfaceSlideReference?.();
+            resetHumanoidJointsToCurrentDefaultProfile();
         }
 
         return profileId;
@@ -498,7 +563,9 @@ export function setupHumanoidParameterControls() {
         const value = normalizeHumanoidJointLimitEta(valueRaw);
         if (value == null) {
             humanoidJointLimitEtaInput.value = String(appliedHumanoidJointLimitEta);
-            updateHumanoidJointLimitEtaStatus(`输入无效，已恢复为 η_θ=${appliedHumanoidJointLimitEta}`);
+            updateHumanoidJointLimitEtaStatus(t('Invalid input; restored to η_θ={{value}}', {
+                value: appliedHumanoidJointLimitEta
+            }));
             return false;
         }
 
@@ -515,7 +582,7 @@ export function setupHumanoidParameterControls() {
         try {
             localStorage.setItem(HUMANOID_JOINT_LIMIT_ETA_STORAGE_KEY, String(value));
         } catch (_) {}
-        updateHumanoidJointLimitEtaStatus(`当前值已应用：η_θ=${value}`);
+        updateHumanoidJointLimitEtaStatus(t('Value applied: η_θ={{value}}', { value }));
         return true;
     };
     const normalizePositiveParameterNumber = (valueRaw) => {
@@ -532,7 +599,9 @@ export function setupHumanoidParameterControls() {
             if (humanoidTRSafetyPushWeightInput) {
                 humanoidTRSafetyPushWeightInput.value = String(appliedHumanoidTRSafetyPushWeight);
             }
-            updateHumanoidTRSafetyPushStatus(`输入无效，已恢复为 β=${appliedHumanoidTRSafetyPushWeight}`);
+            updateHumanoidTRSafetyPushStatus(t('Invalid input; restored to β={{value}}', {
+                value: appliedHumanoidTRSafetyPushWeight
+            }));
             return false;
         }
 
@@ -549,7 +618,7 @@ export function setupHumanoidParameterControls() {
         try {
             localStorage.setItem(HUMANOID_TR_SAFETY_PUSH_WEIGHT_STORAGE_KEY, String(value));
         } catch (_) {}
-        updateHumanoidTRSafetyPushStatus(`当前值已应用：β=${value}`);
+        updateHumanoidTRSafetyPushStatus(t('Value applied: β={{value}}', { value }));
         return true;
     };
     const applyHumanoidSafetyRefineParams = (paramsRaw = {}) => {
@@ -569,7 +638,10 @@ export function setupHumanoidParameterControls() {
                 humanoidSafetyRefineWaistActivationInput.value = String(appliedHumanoidSafetyRefineParams.waistActivationDistance);
             }
             updateHumanoidSafetyRefineStatus(
-                `输入无效，已恢复为 关节=${appliedHumanoidSafetyRefineParams.jointActivationDistance}rad，腰部=${appliedHumanoidSafetyRefineParams.waistActivationDistance}m`
+                t('Invalid input; restored to joint={{joint}}rad, waist={{waist}}m', {
+                    joint: appliedHumanoidSafetyRefineParams.jointActivationDistance,
+                    waist: appliedHumanoidSafetyRefineParams.waistActivationDistance
+                })
             );
             return false;
         }
@@ -591,7 +663,10 @@ export function setupHumanoidParameterControls() {
             localStorage.setItem(HUMANOID_SAFETY_REFINE_JOINT_ACTIVATION_STORAGE_KEY, String(jointActivationDistance));
             localStorage.setItem(HUMANOID_SAFETY_REFINE_WAIST_ACTIVATION_STORAGE_KEY, String(waistActivationDistance));
         } catch (_) {}
-        updateHumanoidSafetyRefineStatus(`当前值已应用：关节=${jointActivationDistance}rad，腰部=${waistActivationDistance}m`);
+        updateHumanoidSafetyRefineStatus(t('Value applied: joint={{joint}}rad, waist={{waist}}m', {
+            joint: jointActivationDistance,
+            waist: waistActivationDistance
+        }));
         return true;
     };
     const applyHumanoidWaistXVFIParams = (paramsRaw = {}) => {
@@ -602,7 +677,7 @@ export function setupHumanoidParameterControls() {
         if (nextEta == null) {
             if (humanoidWaistXEtaInput) humanoidWaistXEtaInput.value = String(appliedHumanoidWaistXEta);
             updateHumanoidWaistXVFIStatus(
-                `输入无效，已恢复为 η_x=${appliedHumanoidWaistXEta}`
+                t('Invalid input; restored to η_x={{value}}', { value: appliedHumanoidWaistXEta })
             );
             return false;
         }
@@ -621,7 +696,7 @@ export function setupHumanoidParameterControls() {
             localStorage.setItem(HUMANOID_WAIST_X_ETA_STORAGE_KEY, String(nextEta));
         } catch (_) {}
         updateHumanoidWaistXVFIStatus(
-            `当前值已应用：η_x=${nextEta}`
+            t('Value applied: η_x={{value}}', { value: nextEta })
         );
         return true;
     };
@@ -642,7 +717,12 @@ export function setupHumanoidParameterControls() {
             if (humanoidRos2WaistVelInput) humanoidRos2WaistVelInput.value = String(appliedHumanoidRos2PublishDefaults.waistVel);
             if (humanoidRos2WaistAccInput) humanoidRos2WaistAccInput.value = String(appliedHumanoidRos2PublishDefaults.waistAcc);
             updateHumanoidRos2PublishDefaultsStatus(
-                `输入无效，已恢复为 双臂(${appliedHumanoidRos2PublishDefaults.armVel}/${appliedHumanoidRos2PublishDefaults.armAcc}) 腰部(${appliedHumanoidRos2PublishDefaults.waistVel}/${appliedHumanoidRos2PublishDefaults.waistAcc})`
+                t('Invalid input; restored to arms({{armVel}}/{{armAcc}}) waist({{waistVel}}/{{waistAcc}})', {
+                    armVel: appliedHumanoidRos2PublishDefaults.armVel,
+                    armAcc: appliedHumanoidRos2PublishDefaults.armAcc,
+                    waistVel: appliedHumanoidRos2PublishDefaults.waistVel,
+                    waistAcc: appliedHumanoidRos2PublishDefaults.waistAcc
+                })
             );
             return false;
         }
@@ -668,7 +748,12 @@ export function setupHumanoidParameterControls() {
             localStorage.setItem(HUMANOID_ROS2_WAIST_ACC_STORAGE_KEY, String(next.waistAcc));
         } catch (_) {}
         updateHumanoidRos2PublishDefaultsStatus(
-            `当前值已应用：双臂 vel/acc=${next.armVel}/${next.armAcc}，腰部 vel/acc=${next.waistVel}/${next.waistAcc}`
+            t('Value applied: arm vel/acc={{armVel}}/{{armAcc}}, waist vel/acc={{waistVel}}/{{waistAcc}}', {
+                armVel: next.armVel,
+                armAcc: next.armAcc,
+                waistVel: next.waistVel,
+                waistAcc: next.waistAcc
+            })
         );
         return true;
     };
@@ -794,7 +879,7 @@ export function setupHumanoidParameterControls() {
 }
 
 function setupHumanoidJogSolverControls() {
-    // 人形点动求解器切换（恢复优化 TR / TR+w / TR+w_vfi）
+    // 人形点动求解器切换（ProxQP 系列）
     const humanoidJogSolverSelect = document.getElementById('humanoid-jog-solver-select');
     const humanoidJogMetricSelect = document.getElementById('humanoid-manifold-jog-metric-select');
     const humanoidWMetricIncreaseBtn = document.getElementById('humanoid-w-metric-increase-btn');
@@ -806,26 +891,29 @@ function setupHumanoidJogSolverControls() {
     const HUMANOID_JOG_SOLVER_STORAGE_KEY = 'humanoid-jog-solver-mode';
     const HUMANOID_JOG_METRIC_STORAGE_KEY = 'humanoid-manifold-jog-metric';
     const HUMANOID_JOG_DEFAULT_VERSION_STORAGE_KEY = 'humanoid-jog-default-version';
-    const HUMANOID_JOG_DEFAULT_VERSION = 'tr-wvfi-three-solver';
-    const DEFAULT_HUMANOID_JOG_SOLVER_MODE = 'mj_restore_tr_safe_wvfi';
+    const HUMANOID_JOG_DEFAULT_VERSION = 'proxqp-three-solver';
+    const DEFAULT_HUMANOID_JOG_SOLVER_MODE = 'proxqp_w_vfi';
     const DEFAULT_HUMANOID_JOG_METRIC = 'w_abs_hier_vfi';
     const HUMANOID_WAIST_X_CORRIDOR_STORAGE_KEY = 'humanoid-waist-x-corridor-enabled';
     const HUMANOID_WAIST_X_CORRIDOR_MIN_STORAGE_KEY = 'humanoid-waist-x-corridor-min';
     const HUMANOID_WAIST_X_CORRIDOR_MAX_STORAGE_KEY = 'humanoid-waist-x-corridor-max';
+    const DEFAULT_HUMANOID_WAIST_X_CORRIDOR_ENABLED = true;
+    const DEFAULT_HUMANOID_WAIST_X_CORRIDOR_MIN = -0.4;
+    const DEFAULT_HUMANOID_WAIST_X_CORRIDOR_MAX = -0.1;
     const HUMANOID_TEST_DUAL_ARM_LOCK_STORAGE_KEY = 'humanoid-test-dual-arm-lock-enabled';
     const isHumanoidRuledSurfacePolishingMode = (mode) => (
         mode === 'left-ruled-surface-polishing'
         || mode === 'cooperative-ruled-surface-polishing-dq-setpoint'
         || mode === 'cooperative-ruled-surface-polishing-dq-setpoint-arm-only'
     );
-    const isHumanoidMJRestoreLikeSolverMode = (mode) => (
-        mode === 'mj_restore_tr'
-        || mode === 'mj_restore_tr_w'
-        || mode === 'mj_restore_tr_safe_wvfi'
+    const isHumanoidSelectableJogSolverMode = (mode) => (
+        mode === 'proxqp'
+        || mode === 'proxqp_w'
+        || mode === 'proxqp_w_vfi'
     );
     const normalizeHumanoidJogSolverModeForUI = (modeRaw) => {
         const mode = normalizeHumanoidJogSolverMode(modeRaw);
-        return isHumanoidMJRestoreLikeSolverMode(mode)
+        return isHumanoidSelectableJogSolverMode(mode)
             ? mode
             : DEFAULT_HUMANOID_JOG_SOLVER_MODE;
     };
@@ -844,10 +932,12 @@ function setupHumanoidJogSolverControls() {
             savedMode === 'hqp' ||
             savedMode === 'sns' ||
             savedMode === 'predictive_ik' ||
-            savedMode === 'proxqp' ||
             savedMode === 'mj_restore' ||
             savedMode === 'mj_restore_pre_w' ||
+            savedMode === 'mj_restore_tr' ||
             savedMode === 'mj_restore_tr_safe' ||
+            savedMode === 'mj_restore_tr_w' ||
+            savedMode === 'mj_restore_tr_safe_wvfi' ||
             savedMode === 'wbc_qp' ||
             savedMode === 'torso_seed_upright' ||
             savedMode === 'torso_seed_upright_vfi'
@@ -883,7 +973,7 @@ function setupHumanoidJogSolverControls() {
             ?? (typeof window !== 'undefined' ? window.humanoidJogSolverMode : null)
             ?? DEFAULT_HUMANOID_JOG_SOLVER_MODE
         );
-        if (!isHumanoidMJRestoreLikeSolverMode(currentSolverMode)) {
+        if (!isHumanoidSelectableJogSolverMode(currentSolverMode)) {
             applyHumanoidJogSolverMode(DEFAULT_HUMANOID_JOG_SOLVER_MODE);
         }
     };
@@ -941,11 +1031,11 @@ function setupHumanoidJogSolverControls() {
     };
     const normalizeHumanoidWaistXCorridorMax = (valueRaw) => {
         const parsed = Number(valueRaw);
-        return Number.isFinite(parsed) ? parsed : 0.05;
+        return Number.isFinite(parsed) ? parsed : DEFAULT_HUMANOID_WAIST_X_CORRIDOR_MAX;
     };
     const normalizeHumanoidWaistXCorridorMin = (valueRaw) => {
         const parsed = Number(valueRaw);
-        return Number.isFinite(parsed) ? parsed : -0.1;
+        return Number.isFinite(parsed) ? parsed : DEFAULT_HUMANOID_WAIST_X_CORRIDOR_MIN;
     };
     const applyHumanoidWaistXCorridorMin = (valueRaw) => {
         const value = normalizeHumanoidWaistXCorridorMin(valueRaw);
@@ -1087,20 +1177,20 @@ function setupHumanoidJogSolverControls() {
             savedWaistXCorridorMin
             ?? ((typeof window !== 'undefined' && Number.isFinite(window.humanoidWaistXCorridorMin))
                 ? window.humanoidWaistXCorridorMin
-                : -0.1)
+                : DEFAULT_HUMANOID_WAIST_X_CORRIDOR_MIN)
         );
         applyHumanoidWaistXCorridorMax(
             savedWaistXCorridorMax
             ?? ((typeof window !== 'undefined' && Number.isFinite(window.humanoidWaistXCorridorMax))
                 ? window.humanoidWaistXCorridorMax
-                : 0.05)
+                : DEFAULT_HUMANOID_WAIST_X_CORRIDOR_MAX)
         );
         applyHumanoidWaistXCorridor(
             savedWaistXCorridor != null
                 ? savedWaistXCorridor === '1'
                 : ((typeof window !== 'undefined' && typeof window.humanoidWaistXCorridorEnabled === 'boolean')
                     ? window.humanoidWaistXCorridorEnabled
-                    : false)
+                    : DEFAULT_HUMANOID_WAIST_X_CORRIDOR_ENABLED)
         );
         applyHumanoidTestDualArmLock(
             savedTestDualArmLock != null
@@ -1121,6 +1211,7 @@ function setupHumanoidJogSolverControls() {
             dualArmControlModeSelect.addEventListener('change', (e) => {
                 updateHumanoidJogMetricOptionLabels(e.target?.value);
                 ensureHumanoidJogSolverSupportsControlMode(e.target?.value);
+                scheduleHumanoidControlModeJointReset(e.target?.value);
             });
         }
         if (humanoidWaistXCorridorToggle) {
@@ -1163,6 +1254,44 @@ function setupHumanoidJogSolverControls() {
         applyHumanoidWaistXCorridorMax,
         applyHumanoidTestDualArmLock
     };
+}
+
+export function setupJogOptionBarControls() {
+    const optionExists = (select, value) => {
+        if (!select?.options) return false;
+        return Array.from(select.options).some((option) => option.value === value);
+    };
+
+    const dispatchChange = (select) => {
+        if (!select || typeof select.dispatchEvent !== 'function') return;
+        const EventCtor = typeof Event === 'function' ? Event : null;
+        if (!EventCtor) return;
+        select.dispatchEvent(new EventCtor('change', { bubbles: true }));
+    };
+
+    const bindMirroredSelect = (proxyId, targetId) => {
+        const proxy = document.getElementById(proxyId);
+        const target = document.getElementById(targetId);
+        if (!proxy || !target) return;
+
+        const syncProxyFromTarget = () => {
+            if (optionExists(proxy, target.value)) {
+                proxy.value = target.value;
+            }
+        };
+
+        proxy.addEventListener('change', (event) => {
+            const nextValue = event.target?.value ?? proxy.value;
+            if (!optionExists(target, nextValue)) return;
+            target.value = nextValue;
+            dispatchChange(target);
+        });
+        target.addEventListener('change', syncProxyFromTarget);
+        syncProxyFromTarget();
+    };
+
+    bindMirroredSelect('quick-control-mode-select', 'dual-arm-control-mode-select');
+    bindMirroredSelect('quick-jog-solver-select', 'humanoid-jog-solver-select');
 }
 
 // ═══════════════════════════════════════════
@@ -1351,6 +1480,7 @@ function setupEventListeners() {
     const teachSpeedSlider = document.getElementById('teach-speed-percent');
     const teachSpeedValue = document.getElementById('teach-speed-value');
     const TEACH_SPEED_STORAGE_KEY = 'teach-speed-percent';
+    const DEFAULT_TEACH_SPEED_PERCENT = 25;
     const clampInt = (v, min, max) => Math.max(min, Math.min(max, Number.parseInt(v, 10) || min));
     const applyTeachSpeedPercent = (percent) => {
         const p = clampInt(percent, 1, 100);
@@ -1369,7 +1499,7 @@ function setupEventListeners() {
         const saved = (() => {
             try { return localStorage.getItem(TEACH_SPEED_STORAGE_KEY); } catch (_) { return null; }
         })();
-        applyTeachSpeedPercent(saved ?? teachSpeedSlider.value ?? 100);
+        applyTeachSpeedPercent(saved ?? teachSpeedSlider.value ?? DEFAULT_TEACH_SPEED_PERCENT);
         teachSpeedSlider.addEventListener('input', (e) => {
             applyTeachSpeedPercent(e.target?.value);
         });
@@ -1380,6 +1510,7 @@ function setupEventListeners() {
     setupHumanoidCooperativePolishingSurfaceControls();
     setupHumanoidCooperativePolishingObjectPoseControls();
     setupHumanoidJogSolverControls();
+    setupJogOptionBarControls();
     
     // 示教器控制按钮（移除拖动末端执行器模式）
     const teachButtons = document.querySelectorAll('.teach-btn');

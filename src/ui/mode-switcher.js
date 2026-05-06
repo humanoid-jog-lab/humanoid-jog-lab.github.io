@@ -10,6 +10,94 @@ import { appState, callbacks } from '../core/state.js';
 import { onLanguageChange, t } from '../i18n.js';
 
 let modeSwitcherLanguageBound = false;
+const HUMANOID_QUICK_JOG_AXES = ['x', 'y', 'z', 'rx', 'ry', 'rz'];
+
+function isHumanoidCooperativePolishingMode(mode) {
+    return (
+        mode === 'cooperative-ruled-surface-polishing-dq-setpoint'
+        || mode === 'cooperative-ruled-surface-polishing-dq-setpoint-arm-only'
+    );
+}
+
+function isHumanoidLeftPolishingMode(mode) {
+    return mode === 'left-ruled-surface-polishing';
+}
+
+export function getHumanoidQuickJogControlState(mode = 'absolute') {
+    const showDistanceControls = mode === 'distance' || mode === 'distance-fullbody';
+    const axisLabels = {
+        x: 'X',
+        y: 'Y',
+        z: 'Z',
+        rx: 'Rx',
+        ry: 'Ry',
+        rz: 'Rz'
+    };
+    const visibleAxes = new Set(HUMANOID_QUICK_JOG_AXES);
+
+    if (showDistanceControls) {
+        visibleAxes.clear();
+    } else if (isHumanoidCooperativePolishingMode(mode)) {
+        Object.assign(axisLabels, {
+            x: 'u',
+            y: 'vc',
+            z: 'n',
+            rx: 'Δv'
+        });
+        visibleAxes.clear();
+        ['x', 'y', 'z', 'rx'].forEach((axis) => visibleAxes.add(axis));
+    } else if (isHumanoidLeftPolishingMode(mode)) {
+        Object.assign(axisLabels, {
+            x: 'u',
+            y: 'v',
+            z: 'n'
+        });
+        visibleAxes.clear();
+        ['x', 'y', 'z'].forEach((axis) => visibleAxes.add(axis));
+    } else if (mode === 'waist-body-link-xz') {
+        visibleAxes.clear();
+        ['x', 'z'].forEach((axis) => visibleAxes.add(axis));
+    }
+
+    const axes = Object.fromEntries(
+        HUMANOID_QUICK_JOG_AXES.map((axis) => [
+            axis,
+            {
+                label: axisLabels[axis],
+                visible: visibleAxes.has(axis)
+            }
+        ])
+    );
+
+    return {
+        showDistanceControls,
+        axes
+    };
+}
+
+export function updateHumanoidQuickJogControls(mode = 'absolute') {
+    const state = getHumanoidQuickJogControlState(mode);
+    const quickJogControls = document.querySelector('.quick-jog-controls');
+    const quickDistanceControls = document.getElementById('quick-distance-controls');
+
+    if (quickJogControls) {
+        quickJogControls.style.display = state.showDistanceControls ? 'none' : 'flex';
+    }
+    if (quickDistanceControls) {
+        quickDistanceControls.style.display = state.showDistanceControls ? 'flex' : 'none';
+    }
+
+    Object.entries(state.axes).forEach(([axis, axisState]) => {
+        const negativeBtn = document.querySelector(`.quick-jog-controls .quick-jog-btn[data-axis="${axis}"][data-direction="negative"]`);
+        const positiveBtn = document.querySelector(`.quick-jog-controls .quick-jog-btn[data-axis="${axis}"][data-direction="positive"]`);
+        const group = negativeBtn?.closest('.quick-axis-control') ?? positiveBtn?.closest('.quick-axis-control');
+        const label = group?.querySelector('.quick-axis-label') ?? group?.querySelector('span');
+        if (group) group.hidden = !axisState.visible;
+        if (label) label.textContent = axisState.label;
+        if (negativeBtn) negativeBtn.title = `${axisState.label} negative`;
+        if (positiveBtn) positiveBtn.title = `${axisState.label} positive`;
+    });
+}
 
 function getHumanoidModeDescription(mode) {
     if (mode === 'robot1') return t('Left Arm Mode: control the left end-effector');
@@ -176,6 +264,7 @@ export function switchToHumanoidUI() {
                     ? 'cooperative'
                     : (isLeftRuledSurfacePolishingMode ? 'single' : 'none')
             );
+            updateHumanoidQuickJogControls(mode);
             const teachButtons = document.querySelectorAll('#teach-pendant-controls .teach-btn');
             teachButtons.forEach(btn => {
                 const axis = btn.dataset.axis;
@@ -307,6 +396,7 @@ export function switchToDualArmUI() {
                 window.refreshHumanoidJogMetricOptionLabels?.(mode);
             }
             setTeachPendantSurfaceLabels('none');
+            updateHumanoidQuickJogControls(mode);
             // 控制按钮显示：相对距离模式只显示 distance-/distance+
             if (teachPendantControls && distanceControls) {
                 if (mode === 'distance') {
@@ -418,6 +508,7 @@ export function switchToSingleArmUI() {
     }
 
     setTeachPendantSurfaceLabels('none');
+    updateHumanoidQuickJogControls('absolute');
     const teachButtons = document.querySelectorAll('#teach-pendant-controls .teach-btn');
     teachButtons.forEach(btn => { btn.disabled = false; });
 

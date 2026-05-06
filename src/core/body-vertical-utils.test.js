@@ -30,7 +30,7 @@ test('computeLineDirectionMismatchSquared matches the squared distance to the re
     assert.ok(Math.abs(errorScalar - 0.14) < 1e-12);
 });
 
-test('buildBodyVerticalLineTask constructs the scalar tilt residual and Jacobian row', () => {
+test('buildBodyVerticalLineTask Jacobian matches the scalar tilt residual derivative', () => {
     const rotMat = [
         [1, 0, 0.2],
         [0, 1, -0.3],
@@ -62,6 +62,33 @@ test('buildBodyVerticalLineTask constructs the scalar tilt residual and Jacobian
     assert.equal(task.Jrows.length, 1);
     assert.ok(Math.abs(task.Jrows[0][0] + 2.4) < 1e-12);
     assert.ok(Math.abs(task.Jrows[0][1] + 2.8) < 1e-12);
+});
+
+test('buildBodyVerticalLineTask step direction reduces a small body-z tilt', () => {
+    const tiltX = 0.2;
+    const rotMat = [
+        [1, 0, tiltX],
+        [0, 1, 0],
+        [0, 0, Math.sqrt(1 - tiltX * tiltX)]
+    ];
+    const lineJacobianFull = [
+        [0],
+        [-1],
+        [0],
+        [0]
+    ];
+
+    const task = buildBodyVerticalLineTask({
+        rotMat,
+        lineJacobianFull,
+        activeCount: 1
+    });
+
+    const step = task.error[0] / task.Jrows[0][0];
+    const nextTiltX = tiltX + lineJacobianFull[1][0] * step;
+
+    assert.ok(nextTiltX > 0);
+    assert.ok(nextTiltX < tiltX);
 });
 
 test('buildBodyVerticalLineTask respects the active-joint slice', () => {

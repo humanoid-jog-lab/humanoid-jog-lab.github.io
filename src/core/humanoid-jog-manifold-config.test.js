@@ -27,6 +27,87 @@ test('RobotVisualizer sets manifold reference restoration defaults', () => {
     assert.equal(visualizer.vfiConfig.manifoldReferenceDamping, 0.35);
 });
 
+test('RobotVisualizer does not create duplicate humanoid dual-arm endpoint spheres', () => {
+    const visualizer = new RobotVisualizer(null);
+    const sceneChildren = [];
+    visualizer.scene = {
+        add(object) {
+            sceneChildren.push(object);
+        },
+        remove(object) {
+            const index = sceneChildren.indexOf(object);
+            if (index >= 0) sceneChildren.splice(index, 1);
+        }
+    };
+
+    visualizer._createHumanoidDualArmVisualizations();
+    visualizer._createHumanoidEffectorSpheres();
+
+    assert.ok(visualizer.humanoidLeftArmEndEffector);
+    assert.ok(visualizer.humanoidRightArmEndEffector);
+    assert.equal(visualizer.humanoidEffectorSpheres, null);
+    assert.equal(sceneChildren.some(object => object?.name === 'HumanoidEffectorSpheres'), false);
+});
+
+test('RobotVisualizer keeps waist and head endpoint spheres in dedicated markers', () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.scene = {
+        add() {},
+        remove() {}
+    };
+
+    visualizer._createHumanoidDualArmVisualizations();
+
+    const hasSphereMesh = (object) => object?.children?.some(child => child?.isMesh && child.geometry?.type === 'SphereGeometry');
+    assert.equal(hasSphereMesh(visualizer.humanoidWaistEndEffector), true);
+    assert.equal(hasSphereMesh(visualizer.humanoidHeadEndEffector), true);
+    assert.equal(visualizer.humanoidEffectorSpheres, null);
+});
+
+test('RobotVisualizer updates humanoid dual-arm endpoint markers without legacy spheres', () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.scene = {
+        add() {},
+        remove() {}
+    };
+    visualizer._createHumanoidDualArmVisualizations();
+    visualizer.humanoidEffectorLinkNames = ['waist', 'left', 'right', 'head'];
+    visualizer.humanoidURDF = {
+        links: {
+            waist: { getWorldPosition: (target) => target.set(0, 0, 0.8) },
+            left: { getWorldPosition: (target) => target.set(0.3, 0.2, 1.1) },
+            right: { getWorldPosition: (target) => target.set(0.3, -0.2, 1.1) },
+            head: { getWorldPosition: (target) => target.set(0, 0, 1.5) }
+        }
+    };
+
+    visualizer._updateHumanoidEffectorSpheres([], { skipDQKinematics: true });
+
+    assert.equal(visualizer.humanoidEffectorSpheres, null);
+    assert.deepEqual(visualizer.humanoidLeftArmEndEffector.position.toArray(), [0.3, 0.2, 1.1]);
+    assert.deepEqual(visualizer.humanoidRightArmEndEffector.position.toArray(), [0.3, -0.2, 1.1]);
+});
+
+test('RobotVisualizer updates humanoid absolute marker from cooperative absolute pose', () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.scene = {
+        add() {},
+        remove() {}
+    };
+    visualizer.humanoidMode = true;
+    visualizer.dualArmMode = false;
+    visualizer._createHumanoidDualArmVisualizations();
+
+    visualizer.updateDualArmRelativeVisualizations(
+        { translation: [1, 0, 0, 0], rotation: [1, 0, 0, 0] },
+        { translation: [1, 10, 10, 10], rotation: [1, 0, 0, 0] },
+        { translation: [1, 2, 3, 4], rotation: [0, 0, 0, 1] }
+    );
+
+    assert.deepEqual(visualizer.humanoidAbsoluteMarker.position.toArray(), [2, 3, 4]);
+    assert.deepEqual(visualizer.humanoidAbsoluteMarker.quaternion.toArray(), [0, 0, 1, 0]);
+});
+
 test('RobotVisualizer fast wvfi secondary gradient follows indexed DQ set-point selections', () => {
     const visualizer = new RobotVisualizer(null);
     visualizer.vfiConfig = {
@@ -163,7 +244,7 @@ test('RobotVisualizer fast w secondary gradient keeps waist components out of fu
     assert.equal(captured.metric, 'w_abs_hier');
 });
 
-test('RobotVisualizer defaults ordinary w secondary gradients to forward differences', () => {
+test('RobotVisualizer defaults ordinary w secondary gradients to SPSA for TR+w speed', () => {
     const visualizer = new RobotVisualizer(null);
     visualizer.vfiConfig = {
         ...visualizer.vfiConfig,
@@ -192,7 +273,7 @@ test('RobotVisualizer defaults ordinary w secondary gradients to forward differe
 
     assert.ok(Array.isArray(gradient));
     assert.equal(gradient.length, 4);
-    assert.equal(cctsmCalls, 5);
+    assert.equal(cctsmCalls, 2);
 });
 
 test('RobotVisualizer can use SPSA for ordinary w secondary gradients', () => {
@@ -227,6 +308,39 @@ test('RobotVisualizer can use SPSA for ordinary w secondary gradients', () => {
     assert.ok(Array.isArray(gradient));
     assert.equal(gradient.length, 4);
     assert.equal(cctsmCalls, 4);
+});
+
+test('RobotVisualizer can keep ordinary w secondary gradients on forward differences', () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.vfiConfig = {
+        ...visualizer.vfiConfig,
+        manipGradWeight: 1,
+        mjRestoreWSecondaryGradientMode: 'forward_difference'
+    };
+    let cctsmCalls = 0;
+    visualizer._sliceHumanoidActiveJoints = (q, _armStart, activeCount) => q.slice(0, activeCount);
+    visualizer._writeHumanoidActiveJoints = (_q, qAct) => qAct.slice();
+    visualizer._buildManipulabilityVFIConstraints = () => [];
+    visualizer._computeModeCCTSM = (qFull) => {
+        cctsmCalls += 1;
+        return {
+            w_task_hier: qFull[0] + 2 * qFull[1] + 3 * qFull[2] + 4 * qFull[3]
+        };
+    };
+
+    const gradient = visualizer._computeProtectedManipulabilityGradient({
+        q: [0, 0, 0, 0],
+        armStart: 0,
+        activeCount: 4,
+        mode: 'absolute',
+        Jcmd: [],
+        Jinvariant: [],
+        metric: 'w_abs_hier'
+    });
+
+    assert.ok(Array.isArray(gradient));
+    assert.equal(gradient.length, 4);
+    assert.equal(cctsmCalls, 5);
 });
 
 test('RobotVisualizer can keep ordinary w secondary gradients on finite differences', () => {
@@ -351,6 +465,197 @@ test('RobotVisualizer routes ProxQP as a JS comparison solver', () => {
     assert.ok(Number.isFinite(result.stats.proxqpDualResidual));
 });
 
+test('RobotVisualizer routes ProxQP+w as a JS comparison solver with a secondary direction', () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.vfiConfig.kappaCommand = 1;
+    visualizer.vfiConfig.manipGradWeight = 1;
+
+    const result = visualizer._solveHumanoidJSComparisonCommandStep({
+        solverMode: 'proxqp_w',
+        Jcmd: [[1, 0]],
+        eCmd: [0],
+        Jinvariant: [],
+        eInvariant: [],
+        qActive: [0, 0],
+        activeLimits: null,
+        maxStep: 0.05,
+        damping: 1e-3,
+        secondaryGradient: [0, 1]
+    });
+
+    assert.ok(result);
+    assert.equal(result.stats.solver, 'proxqp_w');
+    assert.equal(result.stats.secondaryObjective, 'w_abs_hier');
+    assert.ok(Math.abs(result.dq[0]) < 1e-5);
+    assert.ok(result.dq[1] > 0.01);
+});
+
+test('RobotVisualizer routes ProxQP+w_vfi as a JS comparison solver with a secondary direction', () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.vfiConfig.kappaCommand = 1;
+    visualizer.vfiConfig.manipGradWeight = 1;
+
+    const result = visualizer._solveHumanoidJSComparisonCommandStep({
+        solverMode: 'proxqp_w_vfi',
+        Jcmd: [[1, 0]],
+        eCmd: [0],
+        Jinvariant: [],
+        eInvariant: [],
+        qActive: [0, 0],
+        activeLimits: null,
+        maxStep: 0.05,
+        damping: 1e-3,
+        secondaryGradient: [0, 1]
+    });
+
+    assert.ok(result);
+    assert.equal(result.stats.solver, 'proxqp_w_vfi');
+    assert.equal(result.stats.secondaryObjective, 'w_vfi');
+    assert.ok(Math.abs(result.dq[0]) < 1e-5);
+    assert.ok(result.dq[1] > 5e-4);
+});
+
+test('RobotVisualizer defers ProxQP secondary gradients until the primary residual is nearly held', () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.vfiConfig.kappaCommand = 1;
+    visualizer.vfiConfig.mjRestoreWVFISecondaryActivationResidual = 1e-5;
+    let secondaryCalls = 0;
+
+    const result = visualizer._solveHumanoidJSComparisonCommandStep({
+        solverMode: 'proxqp_w',
+        Jcmd: [[1, 0]],
+        eCmd: [0.02],
+        Jinvariant: [],
+        eInvariant: [],
+        qActive: [0, 0],
+        activeLimits: null,
+        maxStep: 0.05,
+        damping: 1e-3,
+        secondaryGradientGetter: () => {
+            secondaryCalls += 1;
+            return [0, 1];
+        }
+    });
+
+    assert.ok(result);
+    assert.equal(secondaryCalls, 0);
+    assert.equal(result.stats.secondaryObjective, null);
+    assert.equal(result.stats.qpMessage.includes('secondary='), false);
+});
+
+test('RobotVisualizer lets ProxQP+w_vfi bias away from medium-distance safety margins during motion', () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.vfiConfig.kappaCommand = 1;
+    visualizer.vfiConfig.mjRestoreWVFISecondaryActivationResidual = 1e-5;
+
+    const result = visualizer._solveHumanoidJSComparisonCommandStep({
+        solverMode: 'proxqp_w_vfi',
+        Jcmd: [[1, 0]],
+        eCmd: [0.02],
+        Jinvariant: [],
+        eInvariant: [],
+        qActive: [0, 0.76],
+        activeLimits: [
+            { lower: -1, upper: 1 },
+            { lower: -1, upper: 1 }
+        ],
+        maxStep: 0.05,
+        damping: 1e-3
+    });
+
+    assert.ok(result);
+    assert.equal(result.stats.secondaryObjective, 'w_vfi');
+    assert.equal(result.stats.qpMessage.includes('secondary=w_vfi'), true);
+    assert.ok(result.dq[1] < -5e-4, `expected joint 1 to move away from the upper limit, got ${result.dq[1]}`);
+});
+
+test('RobotVisualizer ProxQP+w_vfi strengthens joint-limit retreat near the edge', () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.vfiConfig.kappaCommand = 1;
+
+    const solveAt = (q1) => visualizer._solveHumanoidJSComparisonCommandStep({
+        solverMode: 'proxqp_w_vfi',
+        Jcmd: [[1, 0]],
+        eCmd: [0.02],
+        Jinvariant: [],
+        eInvariant: [],
+        qActive: [0, q1],
+        activeLimits: [
+            { lower: -1, upper: 1 },
+            { lower: -1, upper: 1 }
+        ],
+        maxStep: 0.05,
+        damping: 1e-3
+    });
+
+    const medium = solveAt(0.76);
+    const near = solveAt(0.97);
+
+    assert.ok(medium);
+    assert.ok(near);
+    assert.equal(near.stats.secondaryObjective, 'w_vfi');
+    assert.ok(
+        near.dq[1] < medium.dq[1] - 0.005,
+        `expected near-limit retreat ${near.dq[1]} to be much stronger than medium-margin retreat ${medium.dq[1]}`
+    );
+    assert.ok(near.dq[1] < -0.01, `expected near-limit retreat below -0.01 rad, got ${near.dq[1]}`);
+});
+
+test('RobotVisualizer keeps ProxQP+w_vfi secondary active instead of using the ordinary w command fallback', () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.vfiConfig.kappaCommand = 1;
+
+    const result = visualizer._solveHumanoidJSComparisonCommandStep({
+        solverMode: 'proxqp_w_vfi',
+        Jcmd: [[1, 1]],
+        eCmd: [0.001],
+        Jinvariant: [],
+        eInvariant: [],
+        qActive: [0, 0],
+        activeLimits: null,
+        maxStep: 0.05,
+        damping: 1e-3,
+        secondaryGradient: [1, -1]
+    });
+
+    assert.ok(result);
+    assert.equal(result.stats.secondaryObjective, 'w_vfi');
+    assert.equal(result.stats.qpMessage.includes('secondary=w_vfi'), true);
+    assert.equal(result.stats.qpMessage.includes('secondary_fallback=disabled_w_vfi'), false);
+    assert.ok(Math.abs(result.dq[0] - result.dq[1]) > 5e-4);
+});
+
+test('RobotVisualizer ProxQP+w_vfi uses direct safety-margin gradients instead of an expensive metric getter', () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.vfiConfig.kappaCommand = 1;
+    let getterCalls = 0;
+
+    const result = visualizer._solveHumanoidJSComparisonCommandStep({
+        solverMode: 'proxqp_w_vfi',
+        Jcmd: [[1, 0]],
+        eCmd: [0.02],
+        Jinvariant: [],
+        eInvariant: [],
+        qActive: [0, 0.76],
+        activeLimits: [
+            { lower: -1, upper: 1 },
+            { lower: -1, upper: 1 }
+        ],
+        maxStep: 0.05,
+        damping: 1e-3,
+        secondaryGradientGetter: () => {
+            getterCalls += 1;
+            return [0, 0];
+        }
+    });
+
+    assert.ok(result);
+    assert.equal(getterCalls, 0);
+    assert.equal(result.stats.secondaryObjective, 'w_vfi');
+    assert.equal(result.stats.qpMessage.includes('secondary=w_vfi'), true);
+    assert.ok(result.dq[1] < -5e-4, `expected direct safety gradient to retreat from upper limit, got ${result.dq[1]}`);
+});
+
 test('RobotVisualizer uses a one-step fair Predictive IK model for cooperative surface DQ set-points', () => {
     const visualizer = new RobotVisualizer(null);
     visualizer.vfiConfig.kappaCommand = 1;
@@ -453,6 +758,58 @@ test('RobotVisualizer can hold the body invariant row as a hard JS-comparison co
     assert.ok(result.stats.constraintRows > 4);
 });
 
+test('RobotVisualizer JS-comparison body-z target keeps the tilt-reducing residual sign', () => {
+    const visualizer = new RobotVisualizer(null);
+    const originalWindow = globalThis.window;
+    let captured = null;
+
+    globalThis.window = { humanoidQ: [0] };
+    visualizer.vfiConfig.qpOuterMaxIter = 1;
+    visualizer.vfiConfig.kappaCommand = 1;
+    visualizer.vfiConfig.kappaInvariant = 1;
+    visualizer._solveHumanoidJSComparisonCommandStep = (options) => {
+        captured = options;
+        return {
+            dq: [0],
+            stats: {
+                qpConverged: true,
+                stepNorm: 0,
+                maxViolationAfter: 0
+            }
+        };
+    };
+    visualizer._publishHumanoidJogDiagnostics = () => {};
+    visualizer._notifyHumanoidJogUnreachable = () => {};
+
+    try {
+        visualizer._updateHumanoidCustomPoseTargetJSComparison({
+            currentQ: [0],
+            solverMode: 'proxqp',
+            modeTag: 'cooperative-ruled-surface-polishing-dq-setpoint-target',
+            includeWaist: true,
+            armStart: 0,
+            activeCount: 1,
+            activeIndices: [0],
+            poseGetter: () => [0.01],
+            jacobianGetter: () => [[0]],
+            keepBodyZVertical: true,
+            bodyConstraintGetter: () => ({
+                residual: [-0.04],
+                jacobian: [[2]]
+            }),
+            hardInvariantAsConstraint: false,
+            requireConvergenceToApply: true
+        });
+
+        assert.ok(captured);
+        assert.deepEqual(captured.Jinvariant, [[2]]);
+        assert.deepEqual(captured.eInvariant, [-0.04]);
+    } finally {
+        if (originalWindow === undefined) delete globalThis.window;
+        else globalThis.window = originalWindow;
+    }
+});
+
 test('RobotVisualizer applies custom DQ set-point targets through JS comparison and QP solvers', () => {
     const originalWindow = globalThis.window;
     const visualizer = new RobotVisualizer(null);
@@ -465,7 +822,7 @@ test('RobotVisualizer applies custom DQ set-point targets through JS comparison 
     visualizer.vfiConfig.predictiveIKHorizon = 2;
 
     try {
-        for (const solverMode of ['vfi', 'hqp', 'sns', 'predictive_ik', 'proxqp']) {
+        for (const solverMode of ['vfi', 'hqp', 'sns', 'predictive_ik', 'proxqp', 'proxqp_w', 'proxqp_w_vfi']) {
             globalThis.window = {
                 humanoidQ: [0],
                 updateGlobalVariables() {},
@@ -491,6 +848,68 @@ test('RobotVisualizer applies custom DQ set-point targets through JS comparison 
             assert.ok(globalThis.window.humanoidQ[0] > 0.03, solverMode);
             assert.equal(visualizer.lastIKSolveStatus?.solver, solverMode);
             assert.notEqual(visualizer.lastIKSolveStatus?.reason, 'unsupported_solver');
+        }
+    } finally {
+        if (originalWindow === undefined) delete globalThis.window;
+        else globalThis.window = originalWindow;
+    }
+});
+
+test('RobotVisualizer custom ProxQP+w computes its configured manipulability gradient', () => {
+    const originalWindow = globalThis.window;
+    const visualizer = new RobotVisualizer(null);
+    visualizer.vfiConfig.kappaCommand = 1;
+    visualizer.vfiConfig.qpOuterMaxIter = 1;
+    visualizer.vfiConfig.maxStep = 0.1;
+    visualizer.vfiConfig.manipGradWeight = 1;
+    visualizer.vfiConfig.mjRestoreWVFISecondaryActivationResidual = 1;
+    visualizer._publishHumanoidJogDiagnostics = (payload) => {
+        visualizer.lastHumanoidJogDiagnostics = payload;
+    };
+
+    try {
+        for (const solverMode of ['proxqp_w']) {
+            let appliedQ = null;
+            let wCalls = 0;
+            let wvfiCalls = 0;
+            globalThis.window = {
+                humanoidQ: [0, 0],
+                updateGlobalVariables() {},
+                updateRobotPose() {}
+            };
+            visualizer._applyHumanoidJointSolution = (q) => {
+                appliedQ = q.slice();
+                globalThis.window.humanoidQ = q.slice();
+            };
+            visualizer._computeFastWSecondaryGradient = () => {
+                wCalls += 1;
+                return [0, 1];
+            };
+            visualizer._computeFastWVFISecondaryGradient = () => {
+                wvfiCalls += 1;
+                return [0, 1];
+            };
+
+            const applied = visualizer._updateHumanoidCustomPoseTargetJSComparison({
+                currentQ: [0, 0],
+                solverMode,
+                statusMode: 'humanoid_cooperative_ruled_surface_polishing_dq_setpoint',
+                modeTag: 'cooperative-ruled-surface-polishing-dq-setpoint-target',
+                includeWaist: false,
+                armStart: 0,
+                activeCount: 2,
+                hardLimits: [{ lower: -1, upper: 1 }, { lower: -1, upper: 1 }],
+                poseGetter: (q) => [q[0] - 0.02],
+                jacobianGetter: () => [[1, 0]],
+                keepBodyZVertical: false
+            });
+
+            assert.equal(applied, true, solverMode);
+            assert.ok(appliedQ[0] > 0.01, solverMode);
+            assert.ok(appliedQ[1] > 0.01, solverMode);
+            assert.equal(wCalls, 1, solverMode);
+            assert.equal(wvfiCalls, 0, solverMode);
+            assert.equal(visualizer.lastIKSolveStatus?.solver, solverMode);
         }
     } finally {
         if (originalWindow === undefined) delete globalThis.window;
@@ -767,6 +1186,413 @@ test('RobotVisualizer applies a progressive Predictive IK surface partial instea
         assert.equal(globalThis.window.humanoidQ[1], 0);
         assert.equal(visualizer.lastIKSolveStatus?.reason, 'safe_partial');
         assert.equal(visualizer.lastIKSolveStatus?.applied, true);
+    } finally {
+        if (originalWindow === undefined) delete globalThis.window;
+        else globalThis.window = originalWindow;
+    }
+});
+
+test('RobotVisualizer applies a progressive ProxQP surface partial instead of rolling back to zero step', () => {
+    const originalWindow = globalThis.window;
+    const visualizer = new RobotVisualizer(null);
+    let appliedSolution = null;
+    let stepCalls = 0;
+
+    visualizer.setHumanoidJoints = () => {};
+    visualizer._applyHumanoidJointSolution = (q) => {
+        appliedSolution = q.slice();
+        for (let i = 0; i < globalThis.window.humanoidQ.length && i < q.length; i += 1) {
+            globalThis.window.humanoidQ[i] = q[i];
+        }
+    };
+    visualizer._solveHumanoidJSComparisonCommandStep = (options) => {
+        assert.equal(options.solverMode, 'proxqp_w_vfi');
+        stepCalls += 1;
+        const dq = stepCalls === 1 ? [0.018, 0] : [0, 0];
+        return {
+            dq,
+            stats: {
+                solver: 'proxqp_w_vfi',
+                qpConverged: true,
+                stepNorm: Math.sqrt(dq.reduce((sum, value) => sum + value * value, 0)),
+                maxViolationAfter: 0,
+                commandRows: 1,
+                invariantRows: 1,
+                constraintRows: 0,
+                qpMessage: 'secondary=w_vfi'
+            }
+        };
+    };
+    visualizer.vfiConfig.kappaCommand = 1;
+    visualizer.vfiConfig.kappaInvariant = 1;
+    visualizer.vfiConfig.qpOuterMaxIter = 2;
+    visualizer.vfiConfig.maxStep = 0.03;
+    visualizer.vfiConfig.practicalCommandTolPose = 1e-4;
+    visualizer.vfiConfig.practicalInvariantTol = 2e-4;
+
+    try {
+        globalThis.window = {
+            humanoidQ: [0, 0],
+            updateGlobalVariables() {},
+            updateRobotPose() {}
+        };
+
+        const applied = visualizer._updateHumanoidCustomPoseTargetJSComparison({
+            currentQ: [0, 0],
+            solverMode: 'proxqp_w_vfi',
+            statusMode: 'humanoid_cooperative_ruled_surface_polishing_dq_setpoint',
+            modeTag: 'cooperative-ruled-surface-polishing-dq-setpoint-target',
+            includeWaist: true,
+            armStart: 0,
+            activeCount: 2,
+            activeIndices: [0, 1],
+            hardLimits: null,
+            poseGetter: (q) => [q[0] - 0.02],
+            jacobianGetter: () => [[1, 0]],
+            keepBodyZVertical: true,
+            bodyConstraintGetter: () => ({
+                residual: [0.07],
+                jacobian: [[0, 1]]
+            }),
+            hardInvariantAsConstraint: false,
+            allowSafePartialApply: true,
+            requireConvergenceToApply: true
+        });
+
+        assert.equal(applied, true);
+        assert.ok(appliedSolution);
+        assert.ok(Math.abs(globalThis.window.humanoidQ[0] - 0.018) < 1e-8);
+        assert.equal(globalThis.window.humanoidQ[1], 0);
+        assert.equal(visualizer.lastIKSolveStatus?.reason, 'safe_partial');
+        assert.equal(visualizer.lastIKSolveStatus?.applied, true);
+    } finally {
+        if (originalWindow === undefined) delete globalThis.window;
+        else globalThis.window = originalWindow;
+    }
+});
+
+test('RobotVisualizer applies a small feasible ProxQP surface partial instead of rolling back to zero step', () => {
+    const originalWindow = globalThis.window;
+    const visualizer = new RobotVisualizer(null);
+    let appliedSolution = null;
+
+    visualizer.setHumanoidJoints = () => {};
+    visualizer._applyHumanoidJointSolution = (q) => {
+        appliedSolution = q.slice();
+        for (let i = 0; i < globalThis.window.humanoidQ.length && i < q.length; i += 1) {
+            globalThis.window.humanoidQ[i] = q[i];
+        }
+    };
+    visualizer._solveHumanoidJSComparisonCommandStep = (options) => {
+        assert.equal(options.solverMode, 'proxqp');
+        const dq = [0.001, 0];
+        return {
+            dq,
+            stats: {
+                solver: 'proxqp',
+                qpConverged: true,
+                stepNorm: Math.sqrt(dq.reduce((sum, value) => sum + value * value, 0)),
+                maxViolationAfter: 2.06e-11,
+                commandRows: 1,
+                invariantRows: 1,
+                constraintRows: 4,
+                cmdAlignment: 1,
+                cmdAchievedNorm: 0.001,
+                qpMessage: 'prox_iter=12/41'
+            }
+        };
+    };
+    visualizer.vfiConfig.kappaCommand = 1;
+    visualizer.vfiConfig.kappaInvariant = 1;
+    visualizer.vfiConfig.qpOuterMaxIter = 2;
+    visualizer.vfiConfig.maxStep = 0.03;
+    visualizer.vfiConfig.practicalCommandTolPose = 1e-4;
+    visualizer.vfiConfig.practicalInvariantTol = 2e-4;
+
+    try {
+        globalThis.window = {
+            humanoidQ: [0, 0],
+            updateGlobalVariables() {},
+            updateRobotPose() {}
+        };
+
+        const applied = visualizer._updateHumanoidCustomPoseTargetJSComparison({
+            currentQ: [0, 0],
+            solverMode: 'proxqp',
+            statusMode: 'humanoid_cooperative_ruled_surface_polishing_dq_setpoint',
+            modeTag: 'cooperative-ruled-surface-polishing-dq-setpoint-target',
+            includeWaist: true,
+            armStart: 0,
+            activeCount: 2,
+            activeIndices: [0, 1],
+            hardLimits: null,
+            poseGetter: (q) => [q[0] - 1],
+            jacobianGetter: () => [[1, 0]],
+            keepBodyZVertical: true,
+            bodyConstraintGetter: () => ({
+                residual: [0.406],
+                jacobian: [[0, 1]]
+            }),
+            hardInvariantAsConstraint: false,
+            allowSafePartialApply: true,
+            requireConvergenceToApply: true
+        });
+
+        assert.equal(applied, true);
+        assert.ok(appliedSolution);
+        assert.ok(globalThis.window.humanoidQ[0] > 0);
+        assert.equal(globalThis.window.humanoidQ[1], 0);
+        assert.equal(visualizer.lastIKSolveStatus?.reason, 'safe_partial');
+        assert.equal(visualizer.lastIKSolveStatus?.applied, true);
+        assert.match(visualizer.lastIKSolveStatus?.qpMessage ?? '', /best_safe_partial=feasible_motion/);
+    } finally {
+        if (originalWindow === undefined) delete globalThis.window;
+        else globalThis.window = originalWindow;
+    }
+});
+
+test('RobotVisualizer applies a ProxQP+w_vfi safety-margin partial even when the surface target remains unresolved', () => {
+    const originalWindow = globalThis.window;
+    const visualizer = new RobotVisualizer(null);
+    let appliedSolution = null;
+    let stepCalls = 0;
+
+    visualizer.setHumanoidJoints = () => {};
+    visualizer._applyHumanoidJointSolution = (q) => {
+        appliedSolution = q.slice();
+        for (let i = 0; i < globalThis.window.humanoidQ.length && i < q.length; i += 1) {
+            globalThis.window.humanoidQ[i] = q[i];
+        }
+    };
+    visualizer._solveHumanoidJSComparisonCommandStep = (options) => {
+        assert.equal(options.solverMode, 'proxqp_w_vfi');
+        stepCalls += 1;
+        const dq = stepCalls === 1 ? [-0.07, 0] : [0, 0];
+        return {
+            dq,
+            stats: {
+                solver: 'proxqp_w_vfi',
+                qpConverged: true,
+                stepNorm: Math.sqrt(dq.reduce((sum, value) => sum + value * value, 0)),
+                maxViolationAfter: 0,
+                commandRows: 1,
+                invariantRows: 1,
+                constraintRows: 4,
+                secondaryObjective: 'w_vfi',
+                qpMessage: 'secondary=w_vfi'
+            }
+        };
+    };
+    visualizer.vfiConfig.kappaCommand = 1;
+    visualizer.vfiConfig.kappaInvariant = 1;
+    visualizer.vfiConfig.qpOuterMaxIter = 2;
+    visualizer.vfiConfig.maxStep = 0.08;
+    visualizer.vfiConfig.practicalCommandTolPose = 1e-4;
+    visualizer.vfiConfig.practicalInvariantTol = 2e-4;
+
+    try {
+        globalThis.window = {
+            humanoidQ: [0.97, 0],
+            updateGlobalVariables() {},
+            updateRobotPose() {}
+        };
+
+        const applied = visualizer._updateHumanoidCustomPoseTargetJSComparison({
+            currentQ: [0.97, 0],
+            solverMode: 'proxqp_w_vfi',
+            statusMode: 'humanoid_cooperative_ruled_surface_polishing_dq_setpoint',
+            modeTag: 'cooperative-ruled-surface-polishing-dq-setpoint-target',
+            includeWaist: false,
+            armStart: 0,
+            activeCount: 2,
+            activeIndices: [0, 1],
+            hardLimits: [
+                { lower: -1, upper: 1 },
+                { lower: -1, upper: 1 }
+            ],
+            poseGetter: (q) => [q[0] - 1.1],
+            jacobianGetter: () => [[1, 0]],
+            keepBodyZVertical: true,
+            bodyConstraintGetter: () => ({
+                residual: [0.35],
+                jacobian: [[0, 1]]
+            }),
+            hardInvariantAsConstraint: false,
+            allowSafePartialApply: true,
+            requireConvergenceToApply: true
+        });
+
+        assert.equal(applied, true);
+        assert.ok(appliedSolution);
+        assert.ok(Math.abs(globalThis.window.humanoidQ[0] - 0.9) < 1e-8);
+        assert.equal(globalThis.window.humanoidQ[1], 0);
+        assert.equal(visualizer.lastIKSolveStatus?.reason, 'safe_partial');
+        assert.equal(visualizer.lastIKSolveStatus?.applied, true);
+    } finally {
+        if (originalWindow === undefined) delete globalThis.window;
+        else globalThis.window = originalWindow;
+    }
+});
+
+test('RobotVisualizer falls back to a ProxQP+w_vfi safety retreat when QP steps do not improve the margin', () => {
+    const originalWindow = globalThis.window;
+    const visualizer = new RobotVisualizer(null);
+    let appliedSolution = null;
+
+    visualizer.setHumanoidJoints = () => {};
+    visualizer._applyHumanoidJointSolution = (q) => {
+        appliedSolution = q.slice();
+        for (let i = 0; i < globalThis.window.humanoidQ.length && i < q.length; i += 1) {
+            globalThis.window.humanoidQ[i] = q[i];
+        }
+    };
+    visualizer._solveHumanoidJSComparisonCommandStep = (options) => {
+        assert.equal(options.solverMode, 'proxqp_w_vfi');
+        return {
+            dq: [0, 0],
+            stats: {
+                solver: 'proxqp_w_vfi',
+                qpConverged: true,
+                stepNorm: 0,
+                maxViolationAfter: 2.57e-11,
+                commandRows: 1,
+                invariantRows: 1,
+                constraintRows: 4,
+                secondaryObjective: 'w_vfi',
+                qpMessage: 'secondary=w_vfi; secondary_vfi_min=0.026'
+            }
+        };
+    };
+    visualizer.vfiConfig.kappaCommand = 1;
+    visualizer.vfiConfig.kappaInvariant = 1;
+    visualizer.vfiConfig.qpOuterMaxIter = 2;
+    visualizer.vfiConfig.maxStep = 0.08;
+    visualizer.vfiConfig.practicalCommandTolPose = 1e-4;
+    visualizer.vfiConfig.practicalInvariantTol = 2e-4;
+
+    try {
+        globalThis.window = {
+            humanoidQ: [0.974, 0],
+            updateGlobalVariables() {},
+            updateRobotPose() {}
+        };
+
+        const applied = visualizer._updateHumanoidCustomPoseTargetJSComparison({
+            currentQ: [0.974, 0],
+            solverMode: 'proxqp_w_vfi',
+            statusMode: 'humanoid_cooperative_ruled_surface_polishing_dq_setpoint',
+            modeTag: 'cooperative-ruled-surface-polishing-dq-setpoint-target',
+            includeWaist: false,
+            armStart: 0,
+            activeCount: 2,
+            activeIndices: [0, 1],
+            hardLimits: [
+                { lower: -1, upper: 1 },
+                { lower: -1, upper: 1 }
+            ],
+            poseGetter: (q) => [q[0] - 1.1],
+            jacobianGetter: () => [[1, 0]],
+            keepBodyZVertical: true,
+            bodyConstraintGetter: () => ({
+                residual: [0.406],
+                jacobian: [[0, 1]]
+            }),
+            hardInvariantAsConstraint: false,
+            allowSafePartialApply: true,
+            requireConvergenceToApply: true
+        });
+
+        assert.equal(applied, true);
+        assert.ok(appliedSolution);
+        assert.ok(globalThis.window.humanoidQ[0] < 0.974);
+        assert.equal(globalThis.window.humanoidQ[1], 0);
+        assert.equal(visualizer.lastIKSolveStatus?.reason, 'safe_partial');
+        assert.equal(visualizer.lastIKSolveStatus?.applied, true);
+        assert.match(visualizer.lastIKSolveStatus?.qpMessage ?? '', /safety_fallback/);
+    } finally {
+        if (originalWindow === undefined) delete globalThis.window;
+        else globalThis.window = originalWindow;
+    }
+});
+
+test('RobotVisualizer prefers ProxQP+w_vfi safety retreat over an aligned feasible surface motion near a limit', () => {
+    const originalWindow = globalThis.window;
+    const visualizer = new RobotVisualizer(null);
+    let appliedSolution = null;
+
+    visualizer.setHumanoidJoints = () => {};
+    visualizer._applyHumanoidJointSolution = (q) => {
+        appliedSolution = q.slice();
+        for (let i = 0; i < globalThis.window.humanoidQ.length && i < q.length; i += 1) {
+            globalThis.window.humanoidQ[i] = q[i];
+        }
+    };
+    visualizer._solveHumanoidJSComparisonCommandStep = (options) => {
+        assert.equal(options.solverMode, 'proxqp_w_vfi');
+        const dq = [0.001, 0];
+        return {
+            dq,
+            stats: {
+                solver: 'proxqp_w_vfi',
+                qpConverged: true,
+                stepNorm: Math.sqrt(dq.reduce((sum, value) => sum + value * value, 0)),
+                maxViolationAfter: 2.57e-11,
+                commandRows: 1,
+                invariantRows: 1,
+                constraintRows: 4,
+                cmdAlignment: 1,
+                cmdAchievedNorm: 0.001,
+                secondaryObjective: 'w_vfi',
+                qpMessage: 'secondary=w_vfi; secondary_vfi_min=0.026'
+            }
+        };
+    };
+    visualizer.vfiConfig.kappaCommand = 1;
+    visualizer.vfiConfig.kappaInvariant = 1;
+    visualizer.vfiConfig.qpOuterMaxIter = 2;
+    visualizer.vfiConfig.maxStep = 0.08;
+    visualizer.vfiConfig.practicalCommandTolPose = 1e-4;
+    visualizer.vfiConfig.practicalInvariantTol = 2e-4;
+
+    try {
+        globalThis.window = {
+            humanoidQ: [0.974, 0],
+            updateGlobalVariables() {},
+            updateRobotPose() {}
+        };
+
+        const applied = visualizer._updateHumanoidCustomPoseTargetJSComparison({
+            currentQ: [0.974, 0],
+            solverMode: 'proxqp_w_vfi',
+            statusMode: 'humanoid_cooperative_ruled_surface_polishing_dq_setpoint',
+            modeTag: 'cooperative-ruled-surface-polishing-dq-setpoint-target',
+            includeWaist: false,
+            armStart: 0,
+            activeCount: 2,
+            activeIndices: [0, 1],
+            hardLimits: [
+                { lower: -1, upper: 1 },
+                { lower: -1, upper: 1 }
+            ],
+            poseGetter: (q) => [q[0] - 1.1],
+            jacobianGetter: () => [[1, 0]],
+            keepBodyZVertical: true,
+            bodyConstraintGetter: () => ({
+                residual: [0.406],
+                jacobian: [[0, 1]]
+            }),
+            hardInvariantAsConstraint: false,
+            allowSafePartialApply: true,
+            requireConvergenceToApply: true
+        });
+
+        assert.equal(applied, true);
+        assert.ok(appliedSolution);
+        assert.ok(globalThis.window.humanoidQ[0] < 0.974);
+        assert.equal(globalThis.window.humanoidQ[1], 0);
+        assert.equal(visualizer.lastIKSolveStatus?.reason, 'safe_partial');
+        assert.match(visualizer.lastIKSolveStatus?.qpMessage ?? '', /safety_fallback/);
+        assert.match(visualizer.lastIKSolveStatus?.qpMessage ?? '', /best_safe_partial=safety_margin/);
     } finally {
         if (originalWindow === undefined) delete globalThis.window;
         else globalThis.window = originalWindow;
@@ -1079,12 +1905,58 @@ test('RobotVisualizer sets TR safety push defaults', () => {
     assert.equal(visualizer.vfiConfig.mjRestoreWVFISecondaryWeight, 0.002);
     assert.equal(visualizer.vfiConfig.mjRestoreWVFISecondaryStep, 0.002);
     assert.equal(visualizer.vfiConfig.mjRestoreWVFISecondaryActivationDistance, 0.15);
+    assert.equal(visualizer.vfiConfig.proxQPWVFISecondaryActivationDistance, 0.4);
+    assert.equal(visualizer.vfiConfig.proxQPWVFISecondaryWeight, 0.000001);
+    assert.equal(visualizer.vfiConfig.proxQPWVFISecondaryNearLimitDistance, 0.15);
+    assert.equal(visualizer.vfiConfig.proxQPWVFISecondaryMaxWeight, 0.00002);
     assert.equal(visualizer.vfiConfig.mjRestoreWVFISecondaryObjective, 'log_margin');
     assert.equal(visualizer.vfiConfig.mjRestoreWVFISecondaryLogEpsilon, 1e-4);
     assert.equal(visualizer.vfiConfig.mjRestoreWVFISecondaryMaxLogWeight, 100);
-    assert.equal(visualizer.vfiConfig.mjRestoreWSecondaryGradientMode, 'forward_difference');
-    assert.equal(visualizer.vfiConfig.mjRestoreWSecondaryGradientSamples, 2);
+    assert.equal(visualizer.vfiConfig.mjRestoreWSecondaryGradientMode, 'spsa');
+    assert.equal(visualizer.vfiConfig.mjRestoreWSecondaryGradientSamples, 1);
+    assert.equal(visualizer.vfiConfig.mjRestoreWSecondaryGradientCacheEnabled, true);
+    assert.equal(visualizer.vfiConfig.mjRestoreWSecondaryGradientCacheMaxSolves, 3);
+    assert.equal(visualizer.vfiConfig.mjRestoreWSecondaryGradientCacheMaxDelta, 0.03);
     assert.equal(visualizer.vfiConfig.manipGradApproxEps, 1e-4);
+});
+
+test('RobotVisualizer TR+w secondary gradient cache expires on distance and reuse budget', () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.vfiConfig = {
+        ...visualizer.vfiConfig,
+        mjRestoreWSecondaryGradientCacheMaxDelta: 0.03,
+        mjRestoreWSecondaryGradientCacheMaxSolves: 1
+    };
+    const key = visualizer._buildHumanoidTRWSecondaryGradientCacheKey({
+        scope: 'test',
+        armStart: 0,
+        activeCount: 2,
+        activeLimits: [{ lower: -1, upper: 1 }, { lower: -1, upper: 1 }]
+    });
+
+    visualizer._storeHumanoidTRWSecondaryGradientCache({
+        key,
+        qActive: [0, 0],
+        gradient: [0, 1]
+    });
+    assert.deepEqual(visualizer._getCachedHumanoidTRWSecondaryGradient({
+        key,
+        qActive: [0.01, 0]
+    }), [0, 1]);
+    assert.equal(visualizer._getCachedHumanoidTRWSecondaryGradient({
+        key,
+        qActive: [0.01, 0]
+    }), null);
+
+    visualizer._storeHumanoidTRWSecondaryGradientCache({
+        key,
+        qActive: [0, 0],
+        gradient: [0, 1]
+    });
+    assert.equal(visualizer._getCachedHumanoidTRWSecondaryGradient({
+        key,
+        qActive: [0.04, 0]
+    }), null);
 });
 
 test('RobotVisualizer sets hierarchical VFI blend default to 1', () => {
@@ -2593,6 +3465,96 @@ test('RobotVisualizer plain new qpJ absolute-target step does not inject w secon
         } else {
             globalThis.window = originalWindow;
         }
+    }
+});
+
+test('RobotVisualizer ProxQP absolute-target keeps a hard-constraint restoration step despite axis drift', () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.humanoidMode = true;
+    visualizer.humanoidModel = {};
+    visualizer.humanoidWaistLength = 0;
+    visualizer.humanoidLeftArmLength = 2;
+    visualizer.humanoidRightArmLength = 0;
+    visualizer.humanoidJointNames = ['joint0', 'joint1'];
+    visualizer.humanoidURDF = {
+        joints: {
+            joint0: { limit: { lower: -1, upper: 1 } },
+            joint1: { limit: { lower: -1, upper: 0 } }
+        }
+    };
+    visualizer.vfiConfig.kappaCommand = 1;
+    visualizer.vfiConfig.qpOuterMaxIter = 1;
+    visualizer.vfiConfig.maxStep = 0.1;
+    visualizer.vfiConfig.jogTranslationAxisMaxOrthogonalRatio = 0.35;
+    visualizer.vfiConfig.qpMismatchTol = 1e-4;
+    visualizer.vfiConfig.qpSingleStepMismatchRequiredReduction = 0.05;
+    visualizer._getHumanoidAbsolutePose = (q) => [1, 0, 0, 0, q[0], q[1], 0, 0];
+    visualizer._getHumanoidRelativePose = () => [1, 0, 0, 0, 0, 0, 0, 0];
+    visualizer._getHumanoidAbsolutePoseJacobian = () => [
+        [0, 0], [0, 0], [0, 0], [0, 0],
+        [1, 0], [0, 1], [0, 0], [0, 0]
+    ];
+    visualizer._getHumanoidRelativePoseJacobian = () => new Array(8).fill(0).map(() => [0, 0]);
+    visualizer._getWaistXVFIRows = () => null;
+    visualizer._buildManipulabilityVFIConstraints = () => [];
+    visualizer._computeModeCCTSM = () => ({ w: 0, w_vfi: 0 });
+    visualizer._publishHumanoidJogDiagnostics = (payload) => {
+        visualizer.lastHumanoidJogDiagnostics = payload;
+    };
+    visualizer._notifyHumanoidJogUnreachable = () => {};
+    visualizer.setHumanoidJoints = () => {};
+    visualizer._solveHumanoidJSComparisonCommandStep = () => ({
+        dq: [0.005, -0.056],
+        stats: {
+            solver: 'proxqp',
+            qpConverged: true,
+            stepNorm: Math.hypot(0.005, 0.056),
+            maxViolationBefore: 0.056,
+            maxViolationAfter: 0,
+            commandRows: 8,
+            invariantRows: 8,
+            constraintRows: 8,
+            cmdTargetNorm: 0.01,
+            cmdAchievedNorm: Math.hypot(0.005, 0.056),
+            cmdResidualNorm: 0.0562,
+            cmdAlignment: 0.089,
+            qpMessage: 'prox_iter=1/1'
+        }
+    });
+
+    const originalWindow = globalThis.window;
+    globalThis.window = {
+        humanoidQ: [0, 0.056],
+        DQModule: {
+            DQWrapper: {
+                createFromArray: (array) => array,
+                getTranslation: (array) => [0, array?.[4] || 0, array?.[5] || 0, array?.[6] || 0]
+            }
+        },
+        updateGlobalVariables() {},
+        updateRobotPose() {}
+    };
+
+    try {
+        const result = visualizer._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstVFI(
+            [1, 0, 0, 0, 0.01, 0.056, 0, 0],
+            [0, 0.056],
+            true,
+            false,
+            false,
+            null,
+            { commandDelta: [0.01, 0, 0] },
+            { solverMode: 'proxqp' }
+        );
+
+        assert.equal(result, true);
+        assert.deepEqual(globalThis.window.humanoidQ, [0.005, 0]);
+        assert.equal(visualizer.lastIKSolveStatus?.reason, 'constraint_restored');
+        assert.match(visualizer.lastIKSolveStatus?.qpMessage ?? '', /constraint_restore/);
+        assert.match(visualizer.lastHumanoidJogDiagnostics?.message ?? '', /硬约束/);
+    } finally {
+        if (originalWindow === undefined) delete globalThis.window;
+        else globalThis.window = originalWindow;
     }
 });
 
@@ -4706,6 +5668,137 @@ test('RobotVisualizer cooperative ruled-surface polishing can route into the par
     }
 });
 
+test('RobotVisualizer cooperative DQ set-point ProxQP polishing routes through the DQ set-point JS command', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const originalWindow = globalThis.window;
+    const sharedSurface = {
+        position: (u, v) => [u, v, 0],
+        du: () => [1, 0, 0],
+        dv: () => [0, 1, 0]
+    };
+    const cooperativeState = {
+        modeKey: 'cooperative-ruled-surface-polishing-dq-setpoint',
+        surface: sharedSurface,
+        u: 0.35,
+        vCenter: 0.5,
+        stripSpacing: 0.24,
+        normalOffset: 0.06,
+        normalOffsetBounds: [0, 0.16],
+        stripSpacingBounds: [0.08, 0.6],
+        leftQuaternionOffset: [1, 0, 0, 0],
+        rightQuaternionOffset: [1, 0, 0, 0],
+        bounds: { u: [0, 1], v: [0, 1] }
+    };
+    let capturedArgs = null;
+
+    globalThis.window = {
+        humanoidQ: new Array(20).fill(0)
+    };
+
+    visualizer.humanoidMode = true;
+    visualizer._ensureHumanoidCooperativeRuledSurfacePolishingState = () => cooperativeState;
+    visualizer._getHumanoidCooperativeRuledSurfacePolishingControlMode = () => 'cooperative-ruled-surface-polishing-dq-setpoint';
+    visualizer._getHumanoidJogSolverMode = () => 'proxqp_w_vfi';
+    visualizer._buildHumanoidMJRestoreInternalOptions = () => ({});
+    visualizer._updateHumanoidSurfaceSlideVisualization = () => {};
+    visualizer._updateHumanoidCooperativeRuledSurfacePolishingDQSetpointJSComparison = (...args) => {
+        capturedArgs = args;
+        visualizer.lastIKSolveStatus = {
+            solver: 'proxqp_w_vfi',
+            mode: 'humanoid_cooperative_ruled_surface_polishing_dq_setpoint',
+            applied: true,
+            converged: false,
+            reason: 'safe_partial',
+            message: 'ProxQP+w_vfi 执行安全局部更新。'
+        };
+        return true;
+    };
+    visualizer._updateHumanoidCooperativeRuledSurfacePolishingDifferentialJSComparison = () => {
+        throw new Error('explicit differential JS path should not be used for ProxQP DQ set-point polishing');
+    };
+
+    try {
+        const ok = await visualizer.moveHumanoidCooperativeRuledSurfacePolishingAlongParameter('x', 'positive');
+        assert.equal(ok, true);
+        assert.ok(Array.isArray(capturedArgs));
+        assert.equal(Number(cooperativeState.u.toFixed(3)), 0.37);
+        assert.equal(Number(capturedArgs[1]?.u?.toFixed(3)), 0.37);
+        assert.equal(capturedArgs[3], true);
+        assert.equal(capturedArgs[4], true);
+        assert.equal(capturedArgs[5], true);
+        assert.equal(capturedArgs[6]?.controlModeOverride, 'cooperative-ruled-surface-polishing-dq-setpoint');
+        assert.equal(capturedArgs[6]?.statusModeOverride, 'humanoid_cooperative_ruled_surface_polishing_dq_setpoint');
+        assert.equal(capturedArgs[6]?.solverMode, 'proxqp_w_vfi');
+    } finally {
+        globalThis.window = originalWindow;
+    }
+});
+
+test('RobotVisualizer cooperative DQ set-point ProxQP polishing retries smaller u substeps after a rejected full step', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const originalWindow = globalThis.window;
+    const sharedSurface = {
+        position: (u, v) => [u, v, 0],
+        du: () => [1, 0, 0],
+        dv: () => [0, 1, 0]
+    };
+    const cooperativeState = {
+        modeKey: 'cooperative-ruled-surface-polishing-dq-setpoint',
+        surface: sharedSurface,
+        u: 0.35,
+        vCenter: 0.5,
+        stripSpacing: 0.24,
+        normalOffset: 0.06,
+        normalOffsetBounds: [0, 0.16],
+        stripSpacingBounds: [0.08, 0.6],
+        leftQuaternionOffset: [1, 0, 0, 0],
+        rightQuaternionOffset: [1, 0, 0, 0],
+        bounds: { u: [0, 1], v: [0, 1] }
+    };
+    const attemptedU = [];
+
+    globalThis.window = {
+        humanoidQ: new Array(20).fill(0)
+    };
+
+    visualizer.humanoidMode = true;
+    visualizer._ensureHumanoidCooperativeRuledSurfacePolishingState = () => cooperativeState;
+    visualizer._getHumanoidCooperativeRuledSurfacePolishingControlMode = () => 'cooperative-ruled-surface-polishing-dq-setpoint';
+    visualizer._getHumanoidJogSolverMode = () => 'proxqp_w_vfi';
+    visualizer._buildHumanoidMJRestoreInternalOptions = () => ({});
+    visualizer._updateHumanoidSurfaceSlideVisualization = () => {};
+    visualizer._getHumanoidPose1 = () => [1, 0, 0, 0, 0, 0, 0, 0];
+    visualizer._getHumanoidPose2 = () => [1, 0, 0, 0, 0, 0, 0, 0];
+    visualizer._refineHumanoidCooperativeRuledSurfacePolishingStateToCurrentHands = (state) => state;
+    visualizer._updateHumanoidCooperativeRuledSurfacePolishingDQSetpointJSComparison = (_currentState, nextState) => {
+        attemptedU.push(nextState.u);
+        const applied = attemptedU.length >= 2;
+        visualizer.lastIKSolveStatus = {
+            solver: 'proxqp_w_vfi',
+            mode: 'humanoid_cooperative_ruled_surface_polishing_dq_setpoint',
+            applied,
+            converged: false,
+            reason: applied ? 'safe_partial' : 'max_iter',
+            message: applied
+                ? 'ProxQP+w_vfi 执行安全局部更新。'
+                : 'ProxQP+w_vfi 达到最大迭代次数。'
+        };
+        return applied;
+    };
+    visualizer._updateHumanoidCooperativeRuledSurfacePolishingDifferentialJSComparison = () => {
+        throw new Error('explicit differential JS path should not be used for ProxQP DQ set-point polishing');
+    };
+
+    try {
+        const ok = await visualizer.moveHumanoidCooperativeRuledSurfacePolishingAlongParameter('x', 'positive');
+        assert.equal(ok, true);
+        assert.deepEqual(attemptedU.map((value) => Number(value.toFixed(3))), [0.37, 0.36]);
+        assert.equal(Number(cooperativeState.u.toFixed(3)), 0.36);
+    } finally {
+        globalThis.window = originalWindow;
+    }
+});
+
 test('RobotVisualizer cooperative ruled-surface polishing DQ set-point mode forwards dedicated WASM targets into the custom restore path', async () => {
     const visualizer = new RobotVisualizer(null);
     const leftTarget = new Array(8).fill(0.1);
@@ -4718,7 +5811,7 @@ test('RobotVisualizer cooperative ruled-surface polishing DQ set-point mode forw
         poseTargets: [{}, {}]
     });
     visualizer._getHumanoidJointLimits = () => new Array(20).fill(null).map(() => ({ lower: -1, upper: 1 }));
-    visualizer._humanoidSingleArmPlusWaistCoordinatedIndices = () => [0, 1, 2];
+    visualizer._humanoidCoordinatedDualArmIndices = () => [0, 1, 2];
     visualizer._updateHumanoidCustomPoseTargetMJRestore = async (options) => {
         observedOptions = options;
         return true;
@@ -4750,7 +5843,7 @@ test('RobotVisualizer cooperative ruled-surface polishing DQ set-point JS compar
         poseTargets: [{}, {}]
     });
     visualizer._getHumanoidJointLimits = () => new Array(20).fill(null).map(() => ({ lower: -1, upper: 1 }));
-    visualizer._humanoidSingleArmPlusWaistCoordinatedIndices = () => [0, 1, 2];
+    visualizer._humanoidCoordinatedDualArmIndices = () => [0, 1, 2];
     visualizer._updateHumanoidCustomPoseTargetJSComparison = (options) => {
         observedOptions = options;
         return false;
@@ -4763,14 +5856,277 @@ test('RobotVisualizer cooperative ruled-surface polishing DQ set-point JS compar
         true,
         true,
         true,
-        { solverMode: 'hqp' }
+        { solverMode: 'proxqp' }
     );
 
     assert.equal(ok, false);
     assert.ok(observedOptions);
-    assert.equal(observedOptions.solverMode, 'hqp');
+    assert.equal(observedOptions.solverMode, 'proxqp');
     assert.equal(observedOptions.requireConvergenceToApply, true);
     assert.equal(typeof observedOptions.predictiveScaledTargetGetter, 'function');
+});
+
+test('RobotVisualizer cooperative DQ set-point ProxQP+w_vfi keeps joint limits active when the UI toggle is off', () => {
+    const visualizer = new RobotVisualizer(null);
+    let observedOptions = null;
+
+    visualizer._buildHumanoidCooperativeRuledSurfacePolishingDQSetpointTargets = () => ({
+        leftDQTargetArray: new Array(8).fill(0.1),
+        rightDQTargetArray: new Array(8).fill(-0.1),
+        poseTargets: [{}, {}]
+    });
+    visualizer._getHumanoidJointLimits = () => new Array(20).fill(null).map(() => ({ lower: -1, upper: 1 }));
+    visualizer._humanoidCoordinatedDualArmIndices = () => [0, 1, 2];
+    visualizer._updateHumanoidCustomPoseTargetJSComparison = (options) => {
+        observedOptions = options;
+        return false;
+    };
+
+    const ok = visualizer._updateHumanoidCooperativeRuledSurfacePolishingDQSetpointJSComparison(
+        { modeKey: 'cooperative-ruled-surface-polishing-dq-setpoint' },
+        { modeKey: 'cooperative-ruled-surface-polishing-dq-setpoint' },
+        new Array(20).fill(0),
+        false,
+        true,
+        true,
+        { solverMode: 'proxqp_w_vfi' }
+    );
+
+    assert.equal(ok, false);
+    assert.ok(observedOptions);
+    assert.equal(observedOptions.solverMode, 'proxqp_w_vfi');
+    assert.equal(observedOptions.hardLimits?.length, 3);
+    assert.deepEqual(observedOptions.hardLimits?.[0], { lower: -1, upper: 1 });
+});
+
+test('RobotVisualizer cooperative DQ set-point ProxQP keeps body-z as a soft JS invariant', () => {
+    const visualizer = new RobotVisualizer(null);
+    let observedOptions = null;
+
+    visualizer._buildHumanoidCooperativeRuledSurfacePolishingDQSetpointTargets = () => ({
+        leftDQTargetArray: new Array(8).fill(0.1),
+        rightDQTargetArray: new Array(8).fill(-0.1),
+        poseTargets: [{}, {}]
+    });
+    visualizer._getHumanoidJointLimits = () => new Array(20).fill(null).map(() => ({ lower: -1, upper: 1 }));
+    visualizer._humanoidCoordinatedDualArmIndices = () => [0, 1, 2];
+    visualizer._updateHumanoidCustomPoseTargetJSComparison = (options) => {
+        observedOptions = options;
+        return false;
+    };
+
+    const ok = visualizer._updateHumanoidCooperativeRuledSurfacePolishingDQSetpointJSComparison(
+        { modeKey: 'cooperative-ruled-surface-polishing-dq-setpoint' },
+        { modeKey: 'cooperative-ruled-surface-polishing-dq-setpoint' },
+        new Array(20).fill(0),
+        true,
+        true,
+        true,
+        { solverMode: 'proxqp' }
+    );
+
+    assert.equal(ok, false);
+    assert.ok(observedOptions);
+    assert.equal(observedOptions.keepBodyZVertical, true);
+    assert.equal(typeof observedOptions.bodyConstraintGetter, 'function');
+});
+
+test('RobotVisualizer cooperative DQ set-point ProxQP retries smaller surface targets before failing', () => {
+    const visualizer = new RobotVisualizer(null);
+    const builtScales = [];
+    const solveScales = [];
+
+    visualizer._buildHumanoidCooperativeRuledSurfacePolishingDQSetpointTargets = (state) => {
+        builtScales.push(Number.isFinite(state?.taskScale) ? state.taskScale : 1);
+        return {
+            leftDQTargetArray: new Array(8).fill(0.1),
+            rightDQTargetArray: new Array(8).fill(-0.1),
+            poseTargets: [{}, {}]
+        };
+    };
+    visualizer._interpolateHumanoidCooperativeRuledSurfacePolishingStateForTaskScale = (_current, next, scale) => ({
+        ...next,
+        taskScale: scale
+    });
+    visualizer._getHumanoidJointLimits = () => new Array(20).fill(null).map(() => ({ lower: -1, upper: 1 }));
+    visualizer._humanoidCoordinatedDualArmIndices = () => [0, 1, 2];
+    visualizer._updateHumanoidCustomPoseTargetJSComparison = () => {
+        solveScales.push(builtScales[builtScales.length - 1]);
+        return solveScales.length >= 2;
+    };
+
+    const ok = visualizer._updateHumanoidCooperativeRuledSurfacePolishingDQSetpointJSComparison(
+        { modeKey: 'cooperative-ruled-surface-polishing-dq-setpoint' },
+        { modeKey: 'cooperative-ruled-surface-polishing-dq-setpoint', taskScale: 1 },
+        new Array(20).fill(0),
+        true,
+        true,
+        true,
+        { solverMode: 'proxqp' }
+    );
+
+    assert.equal(ok, true);
+    assert.deepEqual(solveScales, [1, 0.5]);
+});
+
+test('RobotVisualizer cooperative DQ set-point JS comparison uses matched 6D twist residuals and Jacobians', () => {
+    const visualizer = new RobotVisualizer(null);
+    const originalWindow = globalThis.window;
+    let observedOptions = null;
+
+    const multiplyQuaternion = (left, right) => {
+        const [lw, lx, ly, lz] = left;
+        const [rw, rx, ry, rz] = right;
+        return [
+            lw * rw - lx * rx - ly * ry - lz * rz,
+            lw * rx + lx * rw + ly * rz - lz * ry,
+            lw * ry - lx * rz + ly * rw + lz * rx,
+            lw * rz + lx * ry - ly * rx + lz * rw
+        ];
+    };
+    const addQuaternion = (left, right) => left.map((value, index) => value + right[index]);
+    const conjugateDQ = (dq) => [
+        dq[0], -dq[1], -dq[2], -dq[3],
+        dq[4], -dq[5], -dq[6], -dq[7]
+    ];
+    const multiplyDQ = (left, right) => {
+        const leftPrimal = left.slice(0, 4);
+        const leftDual = left.slice(4, 8);
+        const rightPrimal = right.slice(0, 4);
+        const rightDual = right.slice(4, 8);
+        const primal = multiplyQuaternion(leftPrimal, rightPrimal);
+        const dual = addQuaternion(
+            multiplyQuaternion(leftPrimal, rightDual),
+            multiplyQuaternion(leftDual, rightPrimal)
+        );
+        return primal.concat(dual);
+    };
+
+    const leftPose = [1, 0, 0, 0, 0, 0, 0, 0];
+    const rightPose = [1, 0, 0, 0, 0, 0, 0, 0];
+    const leftTarget = [Math.SQRT1_2, 0, 0, Math.SQRT1_2, 0, 0.03, 0.01, 0.02];
+    const rightTarget = [Math.SQRT1_2, 0, Math.SQRT1_2, 0, 0, -0.02, 0.04, 0.01];
+    const leftJ = Array.from({ length: 8 }, (_, row) =>
+        Array.from({ length: 4 }, (_, col) => (row + 1) * 0.01 + col * 0.001)
+    );
+    const rightJ = Array.from({ length: 8 }, (_, row) =>
+        Array.from({ length: 4 }, (_, col) => -((row + 1) * 0.02 + col * 0.002))
+    );
+
+    globalThis.window = {
+        DQModule: {
+            DQWrapper: {
+                createFromArray: (value) => value,
+                conjugate: conjugateDQ,
+                multiply: multiplyDQ,
+                toArray: (value) => value
+            }
+        }
+    };
+
+    visualizer._buildHumanoidCooperativeRuledSurfacePolishingDQSetpointTargets = () => ({
+        leftDQTargetArray: leftTarget.slice(),
+        rightDQTargetArray: rightTarget.slice(),
+        poseTargets: [{}, {}]
+    });
+    visualizer._humanoidCoordinatedDualArmIndices = () => [0, 1, 2, 3];
+    visualizer._getHumanoidJointLimits = () => new Array(4).fill(null).map(() => ({ lower: -1, upper: 1 }));
+    visualizer._getHumanoidPose1 = () => leftPose.slice();
+    visualizer._getHumanoidPose2 = () => rightPose.slice();
+    visualizer._getHumanoidSingleArmPoseJacobian = (_q, armIndex) =>
+        (armIndex === 1 ? leftJ : rightJ).map((row) => row.slice());
+    visualizer._getHumanoidBodyVerticalState = () => ({ residual: [0], jacobian: [[0, 0, 0, 0]] });
+    visualizer._updateHumanoidCustomPoseTargetJSComparison = (options) => {
+        observedOptions = options;
+        return false;
+    };
+
+    try {
+        visualizer._updateHumanoidCooperativeRuledSurfacePolishingDQSetpointJSComparison(
+            { modeKey: 'cooperative-ruled-surface-polishing-dq-setpoint' },
+            { modeKey: 'cooperative-ruled-surface-polishing-dq-setpoint' },
+            new Array(4).fill(0),
+            true,
+            true,
+            true,
+            { solverMode: 'proxqp' }
+        );
+
+        assert.ok(observedOptions);
+        const residual = observedOptions.poseGetter(new Array(4).fill(0));
+        const jacobian = observedOptions.jacobianGetter(new Array(4).fill(0));
+        assert.equal(residual.length, 12);
+        assert.equal(jacobian.length, 12);
+        const leftModel = visualizer._buildHumanoidDQSetpointErrorModel(leftPose, leftTarget, leftJ);
+        const rightModel = visualizer._buildHumanoidDQSetpointErrorModel(rightPose, rightTarget, rightJ);
+        assert.deepEqual(residual, [...leftModel.twistError, ...rightModel.twistError]);
+        assert.deepEqual(jacobian, [...leftModel.twistJacobian, ...rightModel.twistJacobian]);
+    } finally {
+        if (originalWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = originalWindow;
+        }
+    }
+});
+
+test('RobotVisualizer cooperative ruled-surface polishing DQ set-point ProxQP modes do not fall back to removed TR controllers', async () => {
+    const modes = ['proxqp', 'proxqp_w', 'proxqp_w_vfi'];
+
+    for (const solverMode of modes) {
+        const visualizer = new RobotVisualizer(null);
+        let observedJSOptions = null;
+        let fallbackCalls = 0;
+
+        visualizer._buildHumanoidCooperativeRuledSurfacePolishingDQSetpointTargets = () => ({
+            leftDQTargetArray: new Array(8).fill(0.1),
+            rightDQTargetArray: new Array(8).fill(-0.1),
+            poseTargets: [{}, {}]
+        });
+        visualizer._getHumanoidJointLimits = () => new Array(20).fill(null).map(() => ({ lower: -1, upper: 1 }));
+        visualizer._humanoidSingleArmPlusWaistCoordinatedIndices = () => [0, 1, 2];
+        visualizer._updateHumanoidCustomPoseTargetJSComparison = (options) => {
+            observedJSOptions = options;
+            visualizer.lastIKSolveStatus = {
+                solver: solverMode,
+                mode: 'humanoid_cooperative_ruled_surface_polishing_dq_setpoint',
+                applied: false,
+                converged: false,
+                reason: 'max_iter',
+                message: 'ProxQP reached max iterations.'
+            };
+            return false;
+        };
+        visualizer._updateHumanoidCooperativeRuledSurfacePolishingDQSetpointMJRestore = async (...args) => {
+            fallbackCalls += 1;
+            visualizer.lastIKSolveStatus = {
+                solver: 'mj_restore_tr',
+                mode: 'humanoid_cooperative_ruled_surface_polishing_dq_setpoint',
+                applied: true,
+                converged: true,
+                reason: 'converged',
+                message: 'fallback converged'
+            };
+            return true;
+        };
+
+        const ok = await visualizer._updateHumanoidCooperativeRuledSurfacePolishingDQSetpointJSComparison(
+            { modeKey: 'cooperative-ruled-surface-polishing-dq-setpoint' },
+            { modeKey: 'cooperative-ruled-surface-polishing-dq-setpoint' },
+            new Array(20).fill(0),
+            true,
+            true,
+            true,
+            { solverMode }
+        );
+
+        assert.equal(ok, false);
+        assert.equal(observedJSOptions?.solverMode, solverMode);
+        assert.equal(fallbackCalls, 0);
+        assert.equal(visualizer.lastIKSolveStatus?.solver, solverMode);
+        assert.equal(visualizer.lastIKSolveStatus?.fallbackSolver, undefined);
+        assert.equal(visualizer.lastIKSolveStatus?.fallbackReason, undefined);
+    }
 });
 
 test('RobotVisualizer cooperative ruled-surface polishing arm-only DQ set-point mode disables waist and body-z in the custom restore path', async () => {
@@ -7546,6 +8902,239 @@ test('RobotVisualizer absolute mj_restore_tr local path does not throw when buil
 
         assert.equal(typeof result, 'boolean');
         assert.equal(visualizer.lastIKSolveStatus?.solver, 'mj_restore_tr');
+    } finally {
+        globalThis.document = originalDocument;
+        if (originalWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = originalWindow;
+        }
+    }
+});
+
+test('RobotVisualizer absolute TR+w keeps ordinary w CCTSM out of repeated restore evaluations', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const currentQ = [0, 0, 0];
+    const absTarget = [1, 0, 0, 0, 5e-6, 0, 0, 0];
+    const relCurrent = [1, 0, 0, 0, 0, 0, 0, 0];
+    const originalWindow = globalThis.window;
+    const originalDocument = globalThis.document;
+    let cctsmCalls = 0;
+
+    globalThis.window = {
+        humanoidQ: currentQ.slice(),
+        updateGlobalVariables: () => {},
+        updateRobotPose: () => {},
+        DQModule: { DQWrapper: {} }
+    };
+    globalThis.document = {
+        getElementById: () => null
+    };
+
+    visualizer.humanoidModel = {};
+    visualizer.humanoidWaistLength = 0;
+    visualizer.humanoidLeftArmLength = 3;
+    visualizer.humanoidRightArmLength = 0;
+    visualizer.vfiConfig = {
+        ...visualizer.vfiConfig,
+        mjRestoreWVFISecondaryActivationResidual: 1e-5,
+        mjRestoreMaxIter: 3,
+        mjRestoreTrustRegionSyncBudgetMs: 1000
+    };
+    visualizer._canUseHumanoidJogMJRestoreWorker = () => false;
+    visualizer._getHumanoidAbsolutePose = (q) => [1, 0, 0, 0, q[0] ?? 0, 0, 0, 0];
+    visualizer._getHumanoidRelativePose = () => relCurrent.slice();
+    visualizer._getHumanoidAbsolutePoseJacobian = () => [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [1, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]];
+    visualizer._getHumanoidRelativePoseJacobian = () => Array.from({ length: 8 }, () => [0, 0, 0]);
+    visualizer._buildManipulabilityVFIConstraints = () => [];
+    visualizer._computeModeCCTSM = () => {
+        cctsmCalls += 1;
+        return {
+            w_abs_hier_vfi: 1,
+            w_abs_arm_vfi: 1,
+            w_abs_vfi: 1,
+            w_abs_hier: 1,
+            w_abs_arm: 1,
+            w_abs: 1,
+            w: 1,
+            w_vfi: 1
+        };
+    };
+    visualizer._computeFastWSecondaryGradient = () => [0, 1, 0];
+    visualizer._extractHumanoidWVFIConstraintDiagnostics = () => ({});
+    visualizer._extractHumanoidWaistXCorridorDiagnostics = () => ({});
+    visualizer._publishHumanoidJogDiagnostics = () => {};
+    visualizer._notifyHumanoidJogUnreachable = () => {};
+    visualizer._applyHumanoidJointSolution = () => true;
+    visualizer._getHumanoidJointLimits = () => [{ lower: -1, upper: 1 }, { lower: -1, upper: 1 }, { lower: -1, upper: 1 }];
+    visualizer._sliceHumanoidActiveJoints = (_q, start, count) => currentQ.slice(start, start + count);
+    visualizer._writeHumanoidActiveJoints = (_qInitial, qActive) => qActive.slice();
+    visualizer._buildHumanoidManifoldWaistXCorridor = () => ({ enabled: false, violation: 0 });
+
+    try {
+        const result = await visualizer._updateHumanoidJointsFromAbsolutePoseTargetRelativeFirstManifold(
+            absTarget.slice(),
+            currentQ.slice(),
+            true,
+            false,
+            false,
+            relCurrent.slice(),
+            { solverMode: 'mj_restore_tr_w', preferWorker: false, jogMetricOverride: 'none' }
+        );
+
+        assert.equal(typeof result, 'boolean');
+        assert.equal(visualizer.lastIKSolveStatus?.solver, 'mj_restore_tr_w');
+        assert.ok(cctsmCalls <= 1);
+    } finally {
+        globalThis.document = originalDocument;
+        if (originalWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = originalWindow;
+        }
+    }
+});
+
+test('RobotVisualizer custom TR+w restore reuses the w secondary gradient within one solve', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const currentQ = [0, 0];
+    const originalWindow = globalThis.window;
+    const originalDocument = globalThis.document;
+    let appliedQ = null;
+    let fastWCalls = 0;
+
+    globalThis.window = {
+        humanoidQ: currentQ.slice(),
+        updateGlobalVariables: () => {},
+        updateRobotPose: () => {}
+    };
+    globalThis.document = {
+        getElementById: () => null
+    };
+
+    visualizer.humanoidModel = {};
+    visualizer.humanoidWaistLength = 0;
+    visualizer.vfiConfig = {
+        ...visualizer.vfiConfig,
+        hardCommandTolPose: 1e-9,
+        hardInvariantTol: 1e-9,
+        practicalCommandTolPose: 1e-9,
+        practicalInvariantTol: 1e-9,
+        mjRestoreWVFISecondaryActivationResidual: 1e-5,
+        mjRestoreMaxIter: 3,
+        mjRestoreTrustRegionSyncBudgetMs: 1000
+    };
+    visualizer._computeFastWSecondaryGradient = () => {
+        fastWCalls += 1;
+        return [0, 1];
+    };
+    visualizer._extractHumanoidWVFIConstraintDiagnostics = () => ({});
+    visualizer._extractHumanoidWaistXCorridorDiagnostics = () => ({});
+    visualizer._publishHumanoidJogDiagnostics = () => {};
+    visualizer._notifyHumanoidJogUnreachable = () => {};
+    visualizer._applyHumanoidJointSolution = (qSolved) => {
+        appliedQ = qSolved.slice();
+        return true;
+    };
+    visualizer._buildHumanoidManifoldWaistXCorridor = () => ({ enabled: false, violation: 0, vfiRows: [], rhs: [] });
+    const poseGetter = (q) => [1, 0, 0, 0, q[0] ?? 0, 0, 0, 0];
+    const jacobianGetter = () => [[0, 0], [0, 0], [0, 0], [0, 0], [1, 0], [0, 0], [0, 0], [0, 0]];
+
+    try {
+        const result = await visualizer._updateHumanoidCustomPoseTargetMJRestore({
+            dqTargetArray: [1, 0, 0, 0, 5e-6, 0, 0, 0],
+            currentQ: currentQ.slice(),
+            solverMode: 'mj_restore_tr_w',
+            statusMode: 'test',
+            modeTag: 'test-target',
+            includeWaist: false,
+            armStart: 0,
+            activeCount: 2,
+            hardLimits: [{ lower: -1, upper: 1 }, { lower: -1, upper: 1 }],
+            poseGetter,
+            jacobianGetter,
+            invariantWeight: 0,
+            keepBodyZVertical: false
+        });
+
+        assert.equal(result, true);
+        assert.ok(Array.isArray(appliedQ));
+        assert.ok(appliedQ[0] > 0);
+        assert.equal(fastWCalls, 1);
+    } finally {
+        globalThis.document = originalDocument;
+        if (originalWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = originalWindow;
+        }
+    }
+});
+
+test('RobotVisualizer custom TR+w restore reuses the w secondary gradient across nearby solves', async () => {
+    const visualizer = new RobotVisualizer(null);
+    const originalWindow = globalThis.window;
+    const originalDocument = globalThis.document;
+    let fastWCalls = 0;
+
+    globalThis.window = {
+        humanoidQ: [0, 0],
+        updateGlobalVariables: () => {},
+        updateRobotPose: () => {}
+    };
+    globalThis.document = {
+        getElementById: () => null
+    };
+
+    visualizer.humanoidModel = {};
+    visualizer.humanoidWaistLength = 0;
+    visualizer.vfiConfig = {
+        ...visualizer.vfiConfig,
+        hardCommandTolPose: 1e-9,
+        hardInvariantTol: 1e-9,
+        practicalCommandTolPose: 1e-9,
+        practicalInvariantTol: 1e-9,
+        mjRestoreWVFISecondaryActivationResidual: 1e-5,
+        mjRestoreWSecondaryGradientCacheMaxSolves: 3,
+        mjRestoreWSecondaryGradientCacheMaxDelta: 0.03,
+        mjRestoreMaxIter: 3,
+        mjRestoreTrustRegionSyncBudgetMs: 1000
+    };
+    visualizer._computeFastWSecondaryGradient = () => {
+        fastWCalls += 1;
+        return [0, 1];
+    };
+    visualizer._extractHumanoidWVFIConstraintDiagnostics = () => ({});
+    visualizer._extractHumanoidWaistXCorridorDiagnostics = () => ({});
+    visualizer._publishHumanoidJogDiagnostics = () => {};
+    visualizer._notifyHumanoidJogUnreachable = () => {};
+    visualizer._applyHumanoidJointSolution = (qSolved) => {
+        for (let i = 0; i < qSolved.length; i += 1) window.humanoidQ[i] = qSolved[i];
+        return true;
+    };
+    visualizer._buildHumanoidManifoldWaistXCorridor = () => ({ enabled: false, violation: 0, vfiRows: [], rhs: [] });
+    const poseGetter = (q) => [1, 0, 0, 0, q[0] ?? 0, 0, 0, 0];
+    const jacobianGetter = () => [[0, 0], [0, 0], [0, 0], [0, 0], [1, 0], [0, 0], [0, 0], [0, 0]];
+    const runSolve = async (currentQ) => visualizer._updateHumanoidCustomPoseTargetMJRestore({
+        dqTargetArray: [1, 0, 0, 0, 5e-6, 0, 0, 0],
+        currentQ: currentQ.slice(),
+        solverMode: 'mj_restore_tr_w',
+        statusMode: 'test',
+        modeTag: 'test-target',
+        includeWaist: false,
+        armStart: 0,
+        activeCount: 2,
+        hardLimits: [{ lower: -1, upper: 1 }, { lower: -1, upper: 1 }],
+        poseGetter,
+        jacobianGetter,
+        invariantWeight: 0,
+        keepBodyZVertical: false
+    });
+
+    try {
+        assert.equal(await runSolve([0, 0]), true);
+        assert.equal(await runSolve([0.001, 0]), true);
+        assert.equal(fastWCalls, 1);
     } finally {
         globalThis.document = originalDocument;
         if (originalWindow === undefined) {

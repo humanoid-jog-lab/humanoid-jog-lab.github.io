@@ -6,6 +6,8 @@ export function normalizeHumanoidJogSolverMode(modeRaw) {
         || modeRaw === 'sns'
         || modeRaw === 'predictive_ik'
         || modeRaw === 'proxqp'
+        || modeRaw === 'proxqp_w'
+        || modeRaw === 'proxqp_w_vfi'
         || modeRaw === 'mj_restore'
         || modeRaw === 'mj_restore_tr'
         || modeRaw === 'mj_restore_tr_safe'
@@ -22,6 +24,8 @@ export function getHumanoidJogSolverDisplayName(mode) {
     if (mode === 'sns') return 'SNS';
     if (mode === 'predictive_ik') return 'Predictive IK';
     if (mode === 'proxqp') return 'ProxQP';
+    if (mode === 'proxqp_w') return 'ProxQP+w';
+    if (mode === 'proxqp_w_vfi') return 'ProxQP+w_vfi';
     if (mode === 'mj_restore') return t('Restore (LS)');
     if (mode === 'mj_restore_tr') return t('Recovery Optimization (TR)');
     if (mode === 'mj_restore_tr_safe') return t('Recovery Optimization (TR+Safety Bias)');

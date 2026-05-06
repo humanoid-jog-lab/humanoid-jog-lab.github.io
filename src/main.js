@@ -23,6 +23,7 @@ import { registerPanelManagerCallbacks } from './ui/panel-manager.js';
 import { registerModeSwitcherCallbacks } from './ui/mode-switcher.js';
 import { registerEventHandlersCallbacks } from './ui/event-handlers.js';
 import { setupEventListeners } from './ui/event-handlers.js';
+import { applySlideDemoStorageDefaults } from './ui/slide-demo-defaults.js';
 
 // ── 功能模块 ──────────────────────────────────
 import { registerIKControllerCallbacks } from './features/ik-controller.js';
@@ -68,6 +69,7 @@ function registerAllCallbacks() {
 
 async function init() {
     try {
+        applySlideDemoStorageDefaults();
         initializeI18n();
 
         // 1. 初始化 WASM 模块（DQ Robotics）

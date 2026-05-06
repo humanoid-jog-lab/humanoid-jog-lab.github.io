@@ -58,8 +58,8 @@ function createMockSelect(initialValue = '') {
     return element;
 }
 
-test('index.html exposes current quaternion and current position buttons in the DQ calculator creator section', () => {
-    const html = readFileSync(resolve(ROOT, 'index.html'), 'utf8');
+test('app.html exposes current quaternion and current position buttons in the DQ calculator creator section', () => {
+    const html = readFileSync(resolve(ROOT, 'app.html'), 'utf8');
 
     assert.match(html, /id="dq-calculator-load-current-quaternion"/);
     assert.match(html, /id="dq-calculator-load-current-position"/);

@@ -6,14 +6,14 @@ import { resolve } from 'node:path';
 const ROOT = resolve(import.meta.dirname, '../..');
 
 test('old surface-slide and plain cooperative polishing control modes stay removed while DQ polishing modes remain available', () => {
-    const indexHtml = readFileSync(resolve(ROOT, 'index.html'), 'utf8');
-    assert.doesNotMatch(indexHtml, /value="surface-slide"/);
-    assert.doesNotMatch(indexHtml, /value="surface-slide-absolute"/);
-    assert.doesNotMatch(indexHtml, /value="dual-independent-surface-slide"/);
-    assert.match(indexHtml, /value="left-ruled-surface-polishing"/);
-    assert.doesNotMatch(indexHtml, /value="cooperative-ruled-surface-polishing"/);
-    assert.match(indexHtml, /value="cooperative-ruled-surface-polishing-dq-setpoint"/);
-    assert.match(indexHtml, /value="cooperative-ruled-surface-polishing-dq-setpoint-arm-only"/);
+    const appHtml = readFileSync(resolve(ROOT, 'app.html'), 'utf8');
+    assert.doesNotMatch(appHtml, /value="surface-slide"/);
+    assert.doesNotMatch(appHtml, /value="surface-slide-absolute"/);
+    assert.doesNotMatch(appHtml, /value="dual-independent-surface-slide"/);
+    assert.match(appHtml, /value="left-ruled-surface-polishing"/);
+    assert.doesNotMatch(appHtml, /value="cooperative-ruled-surface-polishing"/);
+    assert.match(appHtml, /value="cooperative-ruled-surface-polishing-dq-setpoint"/);
+    assert.match(appHtml, /value="cooperative-ruled-surface-polishing-dq-setpoint-arm-only"/);
 
     const modeSwitcherJs = readFileSync(resolve(ROOT, 'src/ui/mode-switcher.js'), 'utf8');
     assert.doesNotMatch(modeSwitcherJs, /Surface Slide/);

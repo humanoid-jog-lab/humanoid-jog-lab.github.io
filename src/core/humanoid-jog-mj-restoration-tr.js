@@ -700,9 +700,23 @@ export function restoreHumanoidJogMJTrustRegion({
         hasSolveBudget &&
         solveClock() - solveStartMs >= solveBudgetMs
     );
+    const evaluateCurrentProblem = (qValue) => evaluateProblem(qValue.slice(), {
+        evaluationRole: 'current',
+        computeWVFISecondary: true
+    });
+    const evaluateTrialProblem = (qValue) => evaluateProblem(qValue.slice(), {
+        evaluationRole: 'trial',
+        computeWVFISecondary: false,
+        computeManipData: false
+    });
+    const hasTrialSecondaryStatus = (problem = {}) => {
+        const objective = problem?.secondaryObjective;
+        return objective?.enabled === true ||
+            (Array.isArray(objective?.residual) && objective.residual.length > 0);
+    };
 
     let qCurrent = qStart.slice();
-    let currentProblem = evaluateProblem(qCurrent.slice());
+    let currentProblem = evaluateCurrentProblem(qCurrent);
     if (!currentProblem || typeof currentProblem !== 'object') {
         result.reason = 'problem_eval_failed';
         return result;
@@ -838,7 +852,7 @@ export function restoreHumanoidJogMJTrustRegion({
                 const clippedStep = clipStepToTrustRegion(dq, candidateRadius);
                 if (clippedStep.stepNorm <= 1e-18) break;
                 const qTrial = projectStateToBounds(addScaledStep(qCurrent, clippedStep.dq, 1), currentProblem?.bounds);
-                const trialProblem = evaluateProblem(qTrial.slice());
+                const trialProblem = evaluateTrialProblem(qTrial);
                 if (!trialProblem || typeof trialProblem !== 'object') {
                     candidateRadius = Math.max(minRadius, candidateRadius * shrinkFactor);
                     continue;
@@ -880,7 +894,8 @@ export function restoreHumanoidJogMJTrustRegion({
                     thetaTolerance
                 });
                 const safetyImproved = trialSafety + safetyResidualTolerance < currentSafety;
-                const secondaryImproved = trialSecondary + secondaryResidualTolerance < currentSecondary;
+                const secondaryImproved = hasTrialSecondaryStatus(trialProblem) &&
+                    trialSecondary + secondaryResidualTolerance < currentSecondary;
                 const safetyAccepted = (
                     safetyActiveThisIteration &&
                     isPrimaryHeldForSafety(currentPhi, currentTheta) &&
@@ -972,13 +987,16 @@ export function restoreHumanoidJogMJTrustRegion({
         }
 
         qCurrent = acceptedTrial.qTrial.slice();
-        currentProblem = acceptedTrial.trialProblem;
-        currentPhi = acceptedTrial.trialPhi;
-        currentTheta = acceptedTrial.trialTheta;
-        currentSafety = acceptedTrial.trialSafety;
-        currentSecondary = acceptedTrial.trialSecondary;
+        currentProblem = evaluateCurrentProblem(qCurrent);
+        if (!currentProblem || typeof currentProblem !== 'object') {
+            currentProblem = acceptedTrial.trialProblem;
+        }
+        currentPhi = getActiveResidualNorm(currentProblem);
+        currentTheta = computeConstraintViolation(currentProblem);
+        currentSafety = getSafetyResidualNorm(currentProblem);
+        currentSecondary = getSecondaryResidualNorm(currentProblem);
         currentPenalty = Math.max(currentPenalty, currentPhi + 1);
-        currentMerit = acceptedTrial.trialMerit;
+        currentMerit = computeRestorationMerit(currentPhi, currentTheta, currentPenalty);
         qAccepted = qCurrent.slice();
         acceptedProblem = currentProblem;
         acceptedPhi = currentPhi;
