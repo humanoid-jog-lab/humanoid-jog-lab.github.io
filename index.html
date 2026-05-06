@@ -104,10 +104,9 @@
                     task spaces, we introduce a
                     twist-extracted manipulability measure and a vector-field-inequality-aware extension
                     that attenuates motion directions approaching joint-limit and waist-corridor boundaries.
-                    The resulting manipulability signal is then used in a safeguarded ProxQP-based
-                    local optimizer, where commanded and preserved quantities remain primary and the
-                    regularized vector-field-inequality-aware manipulability acts only as a low-priority
-                    posture-quality objective. Simulations and hardware demonstrations validate the resulting
+                    The resulting manipulability signal is then used as a low-priority
+                    posture-quality objective in a safeguarded local update, where commanded and preserved
+                    quantities remain primary. Simulations and hardware demonstrations validate the resulting
                     semantic preservation, constraint handling, and boundary-aware manipulability behavior.
                 </p>
             </div>
