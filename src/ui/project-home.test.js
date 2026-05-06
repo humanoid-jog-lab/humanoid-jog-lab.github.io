@@ -67,6 +67,8 @@ test('index.html is a scrollable project homepage that embeds the app', () => {
     assert.match(html, /Constrained Cooperative Task-Space Manipulability for Semantic-Preserving Humanoid Jog Teaching/);
     assert.match(html, /This paper studies humanoid upper-body cooperative jog teaching from the viewpoint of\s+constraint-aware manipulability and semantic-preserving local control\./);
     assert.match(html, /Simulations and hardware demonstrations validate the resulting\s+semantic preservation, constraint handling, and boundary-aware manipulability behavior\./);
+    assert.ok(html.indexOf('id="abstract"') < html.indexOf('id="project-video"'));
+    assert.ok(html.indexOf('id="project-video"') < html.indexOf('id="interactive-demo"'));
     assert.doesNotMatch(html, /id="results"/);
     assert.doesNotMatch(html, /Experiment Hooks/);
     assert.doesNotMatch(html, />Results</);
