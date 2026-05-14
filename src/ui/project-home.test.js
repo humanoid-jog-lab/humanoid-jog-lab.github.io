@@ -10,7 +10,7 @@ test('index.html is a scrollable project homepage that embeds the app', () => {
     const css = readFileSync(resolve(ROOT, 'src/project-home.css'), 'utf8');
     const js = readFileSync(resolve(ROOT, 'src/project-home.js'), 'utf8');
 
-    assert.match(html, /<title>Humanoid Jog Lab<\/title>/);
+    assert.match(html, /<title>Semantic Mode Contracts and VFI-Aware Manipulability for Humanoid Cooperative Jog Teaching<\/title>/);
     assert.match(html, /<link rel="stylesheet" href="\/src\/project-home.css">/);
     assert.match(html, /class="hero"/);
     assert.match(html, /class="publication-title"/);
@@ -64,7 +64,8 @@ test('index.html is a scrollable project homepage that embeds the app', () => {
     assert.doesNotMatch(abstractSection, /<h2>/);
     assert.doesNotMatch(abstractSection, /Paper Abstract/);
     assert.equal((abstractSection.match(/<p(?:\s|>)/g) || []).length, 2);
-    assert.match(html, /Constrained Cooperative Task-Space Manipulability for Semantic-Preserving Humanoid Jog Teaching/);
+    assert.match(html, /Semantic Mode Contracts and VFI-Aware Manipulability for Humanoid Cooperative Jog Teaching/);
+    assert.doesNotMatch(html, /<h1 class="publication-title">[^<]*Semantic-Preserving[^<]*<\/h1>/);
     assert.match(html, /This paper studies humanoid upper-body cooperative jog teaching from the viewpoint of\s+constraint-aware manipulability and semantic-preserving local control\./);
     assert.match(abstractSection, /The resulting manipulability signal is then used as a low-priority\s+posture-quality objective in a safeguarded local update/);
     assert.doesNotMatch(abstractSection, /\b(?:ProxQP|QP|quadratic programming)\b/i);
