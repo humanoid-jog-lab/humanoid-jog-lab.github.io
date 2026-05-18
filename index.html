@@ -18,7 +18,6 @@
             <div class="link-block" aria-label="Project links">
                 <span class="link-block-disabled" aria-disabled="true">Paper</span>
                 <a href="https://youtu.be/48x7dkDqff4" target="_blank" rel="noopener noreferrer">Video</a>
-                <a href="#data-artifacts">Data</a>
                 <span class="link-block-disabled" aria-disabled="true">Code (coming soon)</span>
                 <a href="#interactive-demo">Interactive Demo</a>
             </div>
@@ -91,111 +90,6 @@
             </div>
         </section>
 
-        <section class="section evidence-section" id="hardware-log-summary">
-            <div class="section-heading">
-                <p class="section-kicker">Closed-Loop Evidence</p>
-                <h2>Hardware Log and Task Demo Summary</h2>
-                <p>
-                    Quantitative rows are exported from Sailor R1 Pro closed-loop controller logs; the
-                    videos above are supplementary task-completion visualizations rather than replacements
-                    for the log metrics.
-                </p>
-            </div>
-
-            <div class="log-table-shell" aria-label="Closed-loop hardware log summary">
-                <table class="log-table">
-                    <thead>
-                        <tr>
-                            <th>Mode Contract</th>
-                            <th>Controller</th>
-                            <th>Avg. Task / Invariant Error</th>
-                            <th>Clearance Avg. / Final</th>
-                            <th>Final w / w<sub>vfi</sub></th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <tr>
-                            <td>No-waist absolute pose</td>
-                            <td>TR+<span class="metric-symbol">w<sub>vfi</sub></span></td>
-                            <td>1.31e-9 / 1.55e-9</td>
-                            <td>joint 0.116 / 0.1486 rad</td>
-                            <td>3.009e-3 / 7.908e-4</td>
-                        </tr>
-                        <tr>
-                            <td>Waist absolute pose</td>
-                            <td>TR+<span class="metric-symbol">w<sub>vfi</sub></span></td>
-                            <td>5.95e-8 / 2.46e-8</td>
-                            <td>joint 0.130 / 0.1498 rad; waist 0.161 / 0.1395 m</td>
-                            <td>3.018e-1 / 6.702e-2</td>
-                        </tr>
-                        <tr>
-                            <td>Waist relative distance</td>
-                            <td>TR+<span class="metric-symbol">w<sub>vfi</sub></span></td>
-                            <td>2.46e-9 / 2.52e-8</td>
-                            <td>joint 0.093 / 0.1502 rad; waist 0.188 / 0.1742 m</td>
-                            <td>3.178e-1 / 2.764e-1</td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
-
-            <div class="demo-summary-grid" aria-label="Task demonstration summary">
-                <article class="demo-summary-item">
-                    <span class="demo-summary-label">video1.mp4</span>
-                    <strong>Box grasping</strong>
-                    <p>Closed-loop cooperative arm motion with the commanded mode semantics preserved during grasp approach and closure.</p>
-                </article>
-                <article class="demo-summary-item">
-                    <span class="demo-summary-label">video3.mp4</span>
-                    <strong>Box carrying</strong>
-                    <p>Object transport while maintaining the grasped-object relation and respecting local joint-limit and feasibility constraints.</p>
-                </article>
-                <article class="demo-summary-item">
-                    <span class="demo-summary-label">video2.mp4</span>
-                    <strong>Curved-surface polishing</strong>
-                    <p>Surface-following bimanual contact demo; the associated log advances &Delta;u = 0.300 and records zero joint or waist violation.</p>
-                </article>
-            </div>
-        </section>
-
-        <section class="section data-section" id="data-artifacts">
-            <div class="section-heading">
-                <p class="section-kicker">Reproducibility Export</p>
-                <h2>Closed-Loop Log Artifacts</h2>
-                <p>
-                    The table rows above are generated from the exported controller-log bundle. It keeps task,
-                    clearance, manipulability, and provenance fields for the paper evidence export.
-                </p>
-            </div>
-
-            <div class="artifact-grid" aria-label="Controller-log data artifacts">
-                <a class="artifact-item" href="/artifacts/paper-evidence/closed_loop_hardware_log_summary.csv">
-                    <span>CSV</span>
-                    <strong>Closed-loop hardware log summary</strong>
-                </a>
-                <a class="artifact-item" href="/artifacts/paper-evidence/closed_loop_hardware_log_summary.json">
-                    <span>JSON</span>
-                    <strong>Closed-loop hardware log summary</strong>
-                </a>
-                <a class="artifact-item" href="/artifacts/paper-evidence/closed_loop_hardware_log_summary_latex.tex">
-                    <span>LaTeX</span>
-                    <strong>Generated RA-L table rows</strong>
-                </a>
-                <a class="artifact-item" href="/artifacts/paper-evidence/task_demo_summary.csv">
-                    <span>CSV</span>
-                    <strong>Task demo evidence summary</strong>
-                </a>
-                <a class="artifact-item" href="/artifacts/paper-evidence/task_demo_summary.json">
-                    <span>JSON</span>
-                    <strong>Task demo evidence summary</strong>
-                </a>
-                <a class="artifact-item" href="/artifacts/paper-evidence/paper_evidence_manifest.json">
-                    <span>Manifest</span>
-                    <strong>Source artifact map</strong>
-                </a>
-            </div>
-        </section>
-
         <section class="section abstract-section" id="abstract">
             <div class="narrow-copy">
                 <p class="section-kicker">Abstract</p>
@@ -212,7 +106,7 @@
                     that attenuates motion directions approaching joint-limit and waist-corridor boundaries.
                     The resulting manipulability signal is then used as a low-priority
                     posture-quality objective in a safeguarded local update, where commanded and preserved
-                    quantities remain primary. Real-robot closed-loop controller logs and task demonstrations evaluate the resulting
+                    quantities remain primary. Simulations and hardware demonstrations validate the resulting
                     semantic preservation, constraint handling, and boundary-aware manipulability behavior.
                 </p>
             </div>
