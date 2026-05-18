@@ -477,6 +477,8 @@ export class RobotVisualizer {
             mjRestoreCooperativeSurfacePolishingPracticalCommandTolPose: 5e-6,
             mjRestoreCooperativeSurfacePolishingHardInvariantTol: 1e-6,
             mjRestoreCooperativeSurfacePolishingPracticalInvariantTol: 1e-6,
+            cooperativeSurfacePolishingConvergenceConstraintEnabled: true,
+            cooperativeSurfacePolishingConvergenceConstraintShrink: 0.5,
             mjRestoreCooperativeSurfacePolishingPolishActivationResidual: 1,
             mjRestoreCooperativeSurfacePolishingPolishMaxIter: 240,
             mjRestoreCooperativeSurfacePolishingPolishDamping: 1e-8,
@@ -4145,6 +4147,52 @@ export class RobotVisualizer {
             counts.hardInvariantRows = hardInvariantRows;
             counts.totalRows += 2 * hardInvariantRows;
         }
+        const isCooperativeSurfacePolishingMode = typeof modeTag === 'string' &&
+            modeTag.includes('cooperative-ruled-surface-polishing');
+        const convergenceConstraintsEnabled = isCooperativeSurfacePolishingMode &&
+            cfg.cooperativeSurfacePolishingConvergenceConstraintEnabled !== false;
+        const convergenceShrink = Number.isFinite(cfg.cooperativeSurfacePolishingConvergenceConstraintShrink)
+            ? Math.max(0, Math.min(1, cfg.cooperativeSurfacePolishingConvergenceConstraintShrink))
+            : 0.5;
+        const commandConvergenceTolerance = isCooperativeSurfacePolishingMode &&
+            Number.isFinite(cfg.mjRestoreCooperativeSurfacePolishingPracticalCommandTolPose)
+            ? Math.max(0, cfg.mjRestoreCooperativeSurfacePolishingPracticalCommandTolPose)
+            : (Number.isFinite(cfg.practicalCommandTolPose) ? Math.max(0, cfg.practicalCommandTolPose) : 1e-4);
+        const invariantConvergenceTolerance = isCooperativeSurfacePolishingMode &&
+            Number.isFinite(cfg.mjRestoreCooperativeSurfacePolishingPracticalInvariantTol)
+            ? Math.max(0, cfg.mjRestoreCooperativeSurfacePolishingPracticalInvariantTol)
+            : (Number.isFinite(cfg.practicalInvariantTol) ? Math.max(0, cfg.practicalInvariantTol) : 2.5e-4);
+        const appendTaskResidualConvergenceRows = (rows, target, finalNormTolerance) => {
+            if (!convergenceConstraintsEnabled) return 0;
+            if (!Array.isArray(rows) || rows.length === 0 || !Array.isArray(target)) return 0;
+            const rowCount = Math.min(rows.length, target.length);
+            if (rowCount <= 0 || !Number.isFinite(finalNormTolerance)) return 0;
+            const finalComponentTolerance = finalNormTolerance / Math.sqrt(rowCount);
+            let added = 0;
+            for (let rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
+                const rowSrc = Array.isArray(rows[rowIndex]) ? rows[rowIndex] : [];
+                if (rowSrc.length !== n) continue;
+                const targetValue = Number.isFinite(target[rowIndex]) ? target[rowIndex] : 0;
+                const componentTolerance = Math.max(
+                    finalComponentTolerance,
+                    convergenceShrink * Math.abs(targetValue)
+                );
+                const row = rowSrc.slice();
+                hardConstraints.A.push(row);
+                hardConstraints.b.push(targetValue + componentTolerance);
+                hardConstraints.A.push(row.map((value) => -(value || 0)));
+                hardConstraints.b.push(componentTolerance - targetValue);
+                added += 2;
+            }
+            return added;
+        };
+        const convergenceRows =
+            appendTaskResidualConvergenceRows(Jcmd, eCmd, commandConvergenceTolerance) +
+            appendTaskResidualConvergenceRows(Jinvariant, eInvariant, invariantConvergenceTolerance);
+        if (convergenceRows > 0) {
+            counts.convergenceRows = convergenceRows;
+            counts.totalRows += convergenceRows;
+        }
         const qpOptions = buildQPNumericSolveOptions(cfg);
         const commonOptions = {
             taskBlocks,
@@ -4496,6 +4544,7 @@ export class RobotVisualizer {
                 invariantConstraintRows: 0,
                 equalityRows: counts.hardInvariantRows || 0,
                 hardInvariantRows: counts.hardInvariantRows || 0,
+                convergenceRows: counts.convergenceRows || 0,
                 componentRows: counts.componentRows,
                 jointLimitRows: counts.jointLimitRows,
                 constraintRows: counts.totalRows,

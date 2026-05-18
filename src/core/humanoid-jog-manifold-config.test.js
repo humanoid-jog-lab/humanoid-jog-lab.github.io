@@ -418,6 +418,53 @@ test('RobotVisualizer routes HQP command before invariant as separate priority l
     assert.ok(result.stats.cmdResidualNorm < 1e-5);
 });
 
+test('RobotVisualizer constrains polishing QP command error to shrink inside the optimizer', () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.vfiConfig.kappaCommand = 0.2;
+    visualizer.vfiConfig.cooperativeSurfacePolishingConvergenceConstraintShrink = 0.5;
+
+    const result = visualizer._solveHumanoidJSComparisonCommandStep({
+        solverMode: 'hqp',
+        Jcmd: [[1]],
+        eCmd: [-0.01],
+        Jinvariant: [],
+        eInvariant: [],
+        qActive: [0],
+        activeLimits: null,
+        maxStep: 0.1,
+        damping: 1e-9,
+        modeTag: 'cooperative-ruled-surface-polishing-dq-setpoint-target'
+    });
+
+    assert.ok(result);
+    assert.ok(Math.abs(0.01 + result.dq[0]) <= 0.005 + 1e-8);
+    assert.ok(result.stats.convergenceRows >= 2);
+});
+
+test('RobotVisualizer constrains polishing QP invariant error to shrink inside the optimizer', () => {
+    const visualizer = new RobotVisualizer(null);
+    visualizer.vfiConfig.kappaCommand = 1;
+    visualizer.vfiConfig.kappaInvariant = 0.2;
+    visualizer.vfiConfig.cooperativeSurfacePolishingConvergenceConstraintShrink = 0.5;
+
+    const result = visualizer._solveHumanoidJSComparisonCommandStep({
+        solverMode: 'hqp',
+        Jcmd: [[0]],
+        eCmd: [0],
+        Jinvariant: [[1]],
+        eInvariant: [0.01],
+        qActive: [0],
+        activeLimits: null,
+        maxStep: 0.1,
+        damping: 1e-9,
+        modeTag: 'cooperative-ruled-surface-polishing-dq-setpoint-target'
+    });
+
+    assert.ok(result);
+    assert.ok(Math.abs(result.dq[0] - 0.01) <= 0.005 + 1e-8);
+    assert.ok(result.stats.convergenceRows >= 2);
+});
+
 test('RobotVisualizer routes Predictive IK with task scaling as a JS comparison solver', () => {
     const visualizer = new RobotVisualizer(null);
     visualizer.vfiConfig.kappaCommand = 1;
@@ -707,7 +754,7 @@ test('RobotVisualizer lets surface Predictive IK task scaling dominate the scale
     assert.ok(result.stats.predictiveTrackingNorm < 1e-3);
 });
 
-test('RobotVisualizer keeps surface Predictive IK command primary over a conflicting soft invariant', () => {
+test('RobotVisualizer rejects conflicting polishing convergence constraints instead of forcing command motion', () => {
     const visualizer = new RobotVisualizer(null);
     visualizer.vfiConfig.kappaCommand = 1;
     visualizer.vfiConfig.kappaInvariant = 1;
@@ -726,8 +773,9 @@ test('RobotVisualizer keeps surface Predictive IK command primary over a conflic
     });
 
     assert.ok(result);
-    assert.ok(result.dq[0] > 0.015);
-    assert.ok(result.stats.predictiveTaskScale > 0.9);
+    assert.equal(result.stats.qpConverged, false);
+    assert.ok(result.stats.maxViolationAfter > 1e-3);
+    assert.ok(result.stats.convergenceRows >= 4);
 });
 
 test('RobotVisualizer can hold the body invariant row as a hard JS-comparison constraint', () => {
@@ -967,7 +1015,7 @@ test('RobotVisualizer can reject nonconverged JS-comparison DQ set-point steps b
     }
 });
 
-test('RobotVisualizer can apply a safe partial JS-comparison DQ set-point step when soft invariants do not drift', () => {
+test('RobotVisualizer rejects a polishing DQ set-point partial when the invariant cannot shrink', () => {
     const originalWindow = globalThis.window;
     const visualizer = new RobotVisualizer(null);
     let appliedSolution = null;
@@ -1015,11 +1063,11 @@ test('RobotVisualizer can apply a safe partial JS-comparison DQ set-point step w
             requireConvergenceToApply: true
         });
 
-        assert.equal(applied, true);
-        assert.ok(appliedSolution);
-        assert.ok(Math.abs(globalThis.window.humanoidQ[0] - 0.06) < 1e-4);
-        assert.equal(visualizer.lastIKSolveStatus?.reason, 'safe_partial');
-        assert.equal(visualizer.lastIKSolveStatus?.applied, true);
+        assert.equal(applied, false);
+        assert.equal(appliedSolution, null);
+        assert.equal(globalThis.window.humanoidQ[0], 0);
+        assert.equal(visualizer.lastIKSolveStatus?.reason, 'qp_not_converged');
+        assert.equal(visualizer.lastIKSolveStatus?.applied, false);
         assert.equal(visualizer.lastIKSolveStatus?.converged, false);
     } finally {
         if (originalWindow === undefined) delete globalThis.window;
