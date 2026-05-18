@@ -10,6 +10,7 @@
     "benchmark:humanoid-jog": "node tools/run-humanoid-jog-benchmark.mjs",
     "sample:humanoid-jog": "node tools/run-humanoid-jog-offline-sampler.mjs",
     "plot:humanoid-jog": "node tools/plot-humanoid-jog-data.mjs",
+    "collect:ral-evidence": "node tools/collect-ral-paper-evidence.mjs",
     "build:wasm": "./build.sh",
     "ros2-backend": "node server/ros2-backend.js",
     "dev:full": "concurrently \"npm run dev\" \"npm run ros2-backend\""

@@ -1,0 +1,41 @@
+[
+  {
+    "demo": "Box grasping",
+    "evidence_type": "task-video",
+    "mean_command_residual": null,
+    "max_command_residual": null,
+    "mean_invariant_residual": null,
+    "max_invariant_residual": null,
+    "max_violation": null,
+    "min_joint_clearance_rad": null,
+    "min_waist_clearance_m": null,
+    "applied_ticks": null,
+    "source_artifact": "videos/video1.mp4"
+  },
+  {
+    "demo": "Box carrying",
+    "evidence_type": "task-video",
+    "mean_command_residual": null,
+    "max_command_residual": null,
+    "mean_invariant_residual": null,
+    "max_invariant_residual": null,
+    "max_violation": null,
+    "min_joint_clearance_rad": null,
+    "min_waist_clearance_m": null,
+    "applied_ticks": null,
+    "source_artifact": "videos/video3.mp4"
+  },
+  {
+    "demo": "Curved-surface polishing",
+    "evidence_type": "controller-log",
+    "mean_command_residual": 1.0237972797071591e-7,
+    "max_command_residual": 1.927681531538231e-7,
+    "mean_invariant_residual": 9.846850860258944e-7,
+    "max_invariant_residual": 0.000002045817296302766,
+    "max_violation": 0,
+    "min_joint_clearance_rad": 0.003284860073351936,
+    "min_waist_clearance_m": 0.2673732408598428,
+    "applied_ticks": 30,
+    "source_artifact": "artifacts/humanoid-surface-polishing/cooperative_surface_dq_setpoint_waist_cylinder_capture_30ticks_tr_waistcorridor_m0p5_0p2_current.json"
+  }
+]

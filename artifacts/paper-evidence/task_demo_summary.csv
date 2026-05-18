@@ -1,0 +1,4 @@
+Demo,Evidence type,Mean command residual,Max command residual,Mean invariant residual,Max invariant residual,Max violation,Min joint clearance (rad),Min waist clearance (m),Applied ticks,Source artifact
+Box grasping,task-video,,,,,,,,,videos/video1.mp4
+Box carrying,task-video,,,,,,,,,videos/video3.mp4
+Curved-surface polishing,controller-log,1.0237972797071591e-7,1.927681531538231e-7,9.846850860258944e-7,0.000002045817296302766,0,0.003284860073351936,0.2673732408598428,30,artifacts/humanoid-surface-polishing/cooperative_surface_dq_setpoint_waist_cylinder_capture_30ticks_tr_waistcorridor_m0p5_0p2_current.json
