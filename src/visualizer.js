@@ -25000,13 +25000,28 @@ export class RobotVisualizer {
                 : 1.0
         });
         const damping = Number.isFinite(cfg.damping) ? cfg.damping : 1e-3;
-        const hardCommandTol = Number.isFinite(cfg.hardCommandTolPose) ? cfg.hardCommandTolPose : 1e-6;
+        const isCooperativeSurfacePolishingMode = typeof modeTag === 'string' &&
+            modeTag.includes('cooperative-ruled-surface-polishing');
+        const hardCommandTol = isCooperativeSurfacePolishingMode &&
+            Number.isFinite(cfg.mjRestoreCooperativeSurfacePolishingHardCommandTolPose)
+            ? cfg.mjRestoreCooperativeSurfacePolishingHardCommandTolPose
+            : (Number.isFinite(cfg.hardCommandTolPose) ? cfg.hardCommandTolPose : 1e-6);
+        const baseHardInvariantTol = isCooperativeSurfacePolishingMode &&
+            Number.isFinite(cfg.mjRestoreCooperativeSurfacePolishingHardInvariantTol)
+            ? cfg.mjRestoreCooperativeSurfacePolishingHardInvariantTol
+            : (Number.isFinite(cfg.hardInvariantTol) ? cfg.hardInvariantTol : 5e-5);
         const hardInvariantTol = Math.max(
-            Number.isFinite(cfg.hardInvariantTol) ? cfg.hardInvariantTol : 5e-5,
+            baseHardInvariantTol,
             Number.isFinite(bodyEqualityTolerance) ? bodyEqualityTolerance : 0
         );
-        const practicalCommandTol = Number.isFinite(cfg.practicalCommandTolPose) ? cfg.practicalCommandTolPose : 1e-4;
-        const practicalInvariantTol = Number.isFinite(cfg.practicalInvariantTol) ? cfg.practicalInvariantTol : 2.5e-4;
+        const practicalCommandTol = isCooperativeSurfacePolishingMode &&
+            Number.isFinite(cfg.mjRestoreCooperativeSurfacePolishingPracticalCommandTolPose)
+            ? cfg.mjRestoreCooperativeSurfacePolishingPracticalCommandTolPose
+            : (Number.isFinite(cfg.practicalCommandTolPose) ? cfg.practicalCommandTolPose : 1e-4);
+        const practicalInvariantTol = isCooperativeSurfacePolishingMode &&
+            Number.isFinite(cfg.mjRestoreCooperativeSurfacePolishingPracticalInvariantTol)
+            ? cfg.mjRestoreCooperativeSurfacePolishingPracticalInvariantTol
+            : (Number.isFinite(cfg.practicalInvariantTol) ? cfg.practicalInvariantTol : 2.5e-4);
         const practicalStepTol = Number.isFinite(cfg.practicalStepTol) ? cfg.practicalStepTol : 2e-5;
         const practicalViolationTol = Number.isFinite(cfg.qpFeasibleAcceptanceTol) ? Math.max(0, cfg.qpFeasibleAcceptanceTol) : 1e-8;
         const safePartialInvariantDriftTol = Number.isFinite(cfg.jsComparisonSafePartialInvariantDriftTol)

@@ -1027,6 +1027,72 @@ test('RobotVisualizer can apply a safe partial JS-comparison DQ set-point step w
     }
 });
 
+test('RobotVisualizer rejects JS-comparison polishing DQ set-point partial above polishing tolerances', () => {
+    const originalWindow = globalThis.window;
+    const visualizer = new RobotVisualizer(null);
+    let appliedSolution = null;
+
+    visualizer.setHumanoidJoints = () => {};
+    visualizer._applyHumanoidJointSolution = (q) => {
+        appliedSolution = q.slice();
+        for (let i = 0; i < globalThis.window.humanoidQ.length && i < q.length; i += 1) {
+            globalThis.window.humanoidQ[i] = q[i];
+        }
+    };
+    visualizer._solveHumanoidJSComparisonCommandStep = () => ({
+        dq: [0.001],
+        stats: {
+            solver: 'hqp',
+            qpConverged: true,
+            stepNorm: 0.001,
+            maxViolationAfter: 0,
+            commandRows: 1,
+            invariantRows: 1,
+            constraintRows: 0
+        }
+    });
+    visualizer.vfiConfig.qpOuterMaxIter = 1;
+
+    try {
+        globalThis.window = {
+            humanoidQ: [0],
+            updateGlobalVariables() {},
+            updateRobotPose() {}
+        };
+
+        const applied = visualizer._updateHumanoidCustomPoseTargetJSComparison({
+            currentQ: [0],
+            solverMode: 'hqp',
+            statusMode: 'humanoid_cooperative_ruled_surface_polishing_dq_setpoint',
+            modeTag: 'cooperative-ruled-surface-polishing-dq-setpoint-target',
+            includeWaist: true,
+            armStart: 0,
+            activeCount: 1,
+            activeIndices: [0],
+            hardLimits: null,
+            poseGetter: () => [1.38e-5],
+            jacobianGetter: () => [[1]],
+            keepBodyZVertical: true,
+            bodyConstraintGetter: () => ({
+                residual: [1.58e-4],
+                jacobian: [[0]]
+            }),
+            hardInvariantAsConstraint: false,
+            allowSafePartialApply: true,
+            requireConvergenceToApply: true
+        });
+
+        assert.equal(applied, false);
+        assert.equal(appliedSolution, null);
+        assert.equal(globalThis.window.humanoidQ[0], 0);
+        assert.equal(visualizer.lastIKSolveStatus?.applied, false);
+        assert.equal(visualizer.lastIKSolveStatus?.converged, false);
+    } finally {
+        if (originalWindow === undefined) delete globalThis.window;
+        else globalThis.window = originalWindow;
+    }
+});
+
 test('RobotVisualizer keeps the best safe partial Predictive IK DQ set-point step when later iterations drift', () => {
     const originalWindow = globalThis.window;
     const visualizer = new RobotVisualizer(null);
