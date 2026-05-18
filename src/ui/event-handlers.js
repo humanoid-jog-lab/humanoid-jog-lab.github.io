@@ -34,17 +34,27 @@ function isHumanoidPolishingControlMode(mode) {
     );
 }
 
+function resolveCurrentHumanoidPolishingFlipNormal() {
+    const flipNormalToggle = typeof document !== 'undefined'
+        ? document.getElementById('humanoid-cooperative-polishing-object-flip-normal-toggle')
+        : null;
+    if (flipNormalToggle && typeof flipNormalToggle.checked === 'boolean') {
+        return Boolean(flipNormalToggle.checked);
+    }
+    const existingPose = (typeof window !== 'undefined' ? window.humanoidCooperativeRuledSurfaceObjectPose : null)
+        ?? appState.humanoidCooperativePolishingObjectPose
+        ?? null;
+    return Boolean(existingPose?.flipNormal);
+}
+
 function refreshHumanoidPolishingReferenceForCurrentHands(mode) {
     if (!isHumanoidPolishingControlMode(mode)) return null;
     const visualizer = appState.visualizer;
     if (!visualizer || typeof visualizer.captureHumanoidCooperativeRuledSurfaceObjectPoseFromCurrentHands !== 'function') {
         return null;
     }
-    const existingPose = (typeof window !== 'undefined' ? window.humanoidCooperativeRuledSurfaceObjectPose : null)
-        ?? appState.humanoidCooperativePolishingObjectPose
-        ?? null;
     const capturedPose = visualizer.captureHumanoidCooperativeRuledSurfaceObjectPoseFromCurrentHands({
-        flipNormal: Boolean(existingPose?.flipNormal)
+        flipNormal: resolveCurrentHumanoidPolishingFlipNormal()
     });
     visualizer.refreshHumanoidSurfaceSlideVisualization?.();
     return capturedPose;

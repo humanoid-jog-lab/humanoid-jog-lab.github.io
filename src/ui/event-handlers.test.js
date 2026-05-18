@@ -252,6 +252,90 @@ test('setupJogOptionBarControls applies the polishing default pose from the ligh
     }
 });
 
+test('setupJogOptionBarControls honors the checked flip-normal toggle on the first lightweight polishing switch', async () => {
+    const originalDocument = globalThis.document;
+    const originalWindow = globalThis.window;
+    const originalHumanoidMode = appState.humanoidMode;
+    const originalHumanoidJointNames = appState.humanoidJointNames;
+    const originalHumanoidQ = appState.humanoidQ;
+    const originalObjectPose = appState.humanoidCooperativePolishingObjectPose;
+    const originalVisualizer = appState.visualizer;
+    const originalUpdateGlobalVariables = callbacks.updateGlobalVariables;
+    const originalUpdateRobotPose = callbacks.updateRobotPose;
+
+    const quickControlModeSelect = createMockSelect('absolute', [
+        'absolute',
+        'cooperative-ruled-surface-polishing-dq-setpoint'
+    ]);
+    const controlModeSelect = createMockSelect('absolute', [
+        'absolute',
+        'cooperative-ruled-surface-polishing-dq-setpoint'
+    ]);
+    const quickJogSolverSelect = createMockSelect('proxqp_w_vfi', ['proxqp_w_vfi']);
+    const jogSolverSelect = createMockSelect('proxqp_w_vfi', ['proxqp_w_vfi']);
+    const flipNormalToggle = createMockElement('');
+    const captureCalls = [];
+    flipNormalToggle.checked = true;
+    controlModeSelect.dispatchEvent = () => true;
+    jogSolverSelect.dispatchEvent = () => true;
+
+    appState.humanoidMode = true;
+    appState.humanoidJointNames = new Array(20).fill(0).map((_, index) => `joint_${index}`);
+    appState.humanoidQ = new Array(20).fill(0);
+    appState.humanoidCooperativePolishingObjectPose = null;
+    appState.visualizer = {
+        resetHumanoidSurfaceSlideReference() {},
+        captureHumanoidCooperativeRuledSurfaceObjectPoseFromCurrentHands(options) {
+            captureCalls.push(options);
+            return {
+                position: [0.2, 0, 0.8],
+                quaternion: [0, 0, 1, 0],
+                flipNormal: Boolean(options?.flipNormal),
+                normalFlipApplied: Boolean(options?.flipNormal)
+            };
+        },
+        refreshHumanoidSurfaceSlideVisualization() {}
+    };
+    callbacks.updateGlobalVariables = () => {};
+    callbacks.updateRobotPose = () => {};
+    globalThis.window = {
+        humanoidCooperativeRuledSurfaceObjectPose: null
+    };
+    globalThis.document = {
+        getElementById(id) {
+            if (id === 'quick-control-mode-select') return quickControlModeSelect;
+            if (id === 'dual-arm-control-mode-select') return controlModeSelect;
+            if (id === 'quick-jog-solver-select') return quickJogSolverSelect;
+            if (id === 'humanoid-jog-solver-select') return jogSolverSelect;
+            if (id === 'humanoid-cooperative-polishing-object-flip-normal-toggle') return flipNormalToggle;
+            return null;
+        }
+    };
+
+    try {
+        setupJogOptionBarControls();
+
+        quickControlModeSelect.value = 'cooperative-ruled-surface-polishing-dq-setpoint';
+        quickControlModeSelect.trigger('change', 'cooperative-ruled-surface-polishing-dq-setpoint');
+        await Promise.resolve();
+
+        assert.equal(captureCalls.length, 1);
+        assert.equal(captureCalls[0]?.flipNormal, true);
+    } finally {
+        if (originalDocument === undefined) delete globalThis.document;
+        else globalThis.document = originalDocument;
+        if (originalWindow === undefined) delete globalThis.window;
+        else globalThis.window = originalWindow;
+        appState.humanoidMode = originalHumanoidMode;
+        appState.humanoidJointNames = originalHumanoidJointNames;
+        appState.humanoidQ = originalHumanoidQ;
+        appState.humanoidCooperativePolishingObjectPose = originalObjectPose;
+        appState.visualizer = originalVisualizer;
+        callbacks.updateGlobalVariables = originalUpdateGlobalVariables;
+        callbacks.updateRobotPose = originalUpdateRobotPose;
+    }
+});
+
 function multiplyQuaternions(a, b) {
     const [aw, ax, ay, az] = a;
     const [bw, bx, by, bz] = b;
