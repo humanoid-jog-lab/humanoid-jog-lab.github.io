@@ -89,13 +89,25 @@ export function resetHumanoidJointsForControlMode(mode) {
     return applied;
 }
 
+let pendingHumanoidControlModeJointResetMode = null;
+
 function scheduleHumanoidControlModeJointReset(mode) {
+    pendingHumanoidControlModeJointResetMode = mode;
     const reset = () => resetHumanoidJointsForControlMode(mode);
+    if (pendingHumanoidControlModeJointResetMode !== mode) return;
     if (typeof queueMicrotask === 'function') {
-        queueMicrotask(reset);
+        queueMicrotask(() => {
+            if (pendingHumanoidControlModeJointResetMode !== mode) return;
+            pendingHumanoidControlModeJointResetMode = null;
+            reset();
+        });
         return;
     }
-    Promise.resolve().then(reset);
+    Promise.resolve().then(() => {
+        if (pendingHumanoidControlModeJointResetMode !== mode) return;
+        pendingHumanoidControlModeJointResetMode = null;
+        reset();
+    });
 }
 
 export function setupHumanoidDefaultPoseControls() {
@@ -1269,7 +1281,7 @@ export function setupJogOptionBarControls() {
         select.dispatchEvent(new EventCtor('change', { bubbles: true }));
     };
 
-    const bindMirroredSelect = (proxyId, targetId) => {
+    const bindMirroredSelect = (proxyId, targetId, onMirroredChange = null) => {
         const proxy = document.getElementById(proxyId);
         const target = document.getElementById(targetId);
         if (!proxy || !target) return;
@@ -1285,12 +1297,19 @@ export function setupJogOptionBarControls() {
             if (!optionExists(target, nextValue)) return;
             target.value = nextValue;
             dispatchChange(target);
+            if (typeof onMirroredChange === 'function') {
+                onMirroredChange(nextValue);
+            }
         });
         target.addEventListener('change', syncProxyFromTarget);
         syncProxyFromTarget();
     };
 
-    bindMirroredSelect('quick-control-mode-select', 'dual-arm-control-mode-select');
+    bindMirroredSelect(
+        'quick-control-mode-select',
+        'dual-arm-control-mode-select',
+        scheduleHumanoidControlModeJointReset
+    );
     bindMirroredSelect('quick-jog-solver-select', 'humanoid-jog-solver-select');
 }
 

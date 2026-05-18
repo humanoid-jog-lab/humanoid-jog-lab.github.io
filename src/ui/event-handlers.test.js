@@ -177,6 +177,81 @@ test('setupJogOptionBarControls mirrors lightweight controls into the real app s
     }
 });
 
+test('setupJogOptionBarControls applies the polishing default pose from the lightweight control even if mirrored change listeners are missed', async () => {
+    const originalDocument = globalThis.document;
+    const originalWindow = globalThis.window;
+    const originalHumanoidMode = appState.humanoidMode;
+    const originalHumanoidJointNames = appState.humanoidJointNames;
+    const originalHumanoidQ = appState.humanoidQ;
+    const originalVisualizer = appState.visualizer;
+    const originalUpdateGlobalVariables = callbacks.updateGlobalVariables;
+    const originalUpdateRobotPose = callbacks.updateRobotPose;
+
+    const quickControlModeSelect = createMockSelect('absolute', [
+        'absolute',
+        'cooperative-ruled-surface-polishing-dq-setpoint'
+    ]);
+    const controlModeSelect = createMockSelect('absolute', [
+        'absolute',
+        'cooperative-ruled-surface-polishing-dq-setpoint'
+    ]);
+    const quickJogSolverSelect = createMockSelect('proxqp_w_vfi', ['proxqp_w_vfi']);
+    const jogSolverSelect = createMockSelect('proxqp_w_vfi', ['proxqp_w_vfi']);
+    controlModeSelect.dispatchEvent = () => true;
+    jogSolverSelect.dispatchEvent = () => true;
+
+    const updateGlobalVariablesCalls = [];
+    const updateRobotPoseCalls = [];
+    appState.humanoidMode = true;
+    appState.humanoidJointNames = new Array(20).fill(0).map((_, index) => `joint_${index}`);
+    appState.humanoidQ = new Array(20).fill(0);
+    appState.visualizer = {
+        resetHumanoidSurfaceSlideReference() {}
+    };
+    callbacks.updateGlobalVariables = () => {
+        updateGlobalVariablesCalls.push(appState.humanoidQ.slice());
+    };
+    callbacks.updateRobotPose = () => {
+        updateRobotPoseCalls.push(appState.humanoidQ.slice());
+    };
+    globalThis.window = {};
+    globalThis.document = {
+        getElementById(id) {
+            if (id === 'quick-control-mode-select') return quickControlModeSelect;
+            if (id === 'dual-arm-control-mode-select') return controlModeSelect;
+            if (id === 'quick-jog-solver-select') return quickJogSolverSelect;
+            if (id === 'humanoid-jog-solver-select') return jogSolverSelect;
+            return null;
+        }
+    };
+
+    try {
+        setupJogOptionBarControls();
+
+        quickControlModeSelect.value = 'cooperative-ruled-surface-polishing-dq-setpoint';
+        quickControlModeSelect.trigger('change', 'cooperative-ruled-surface-polishing-dq-setpoint');
+        await Promise.resolve();
+
+        assert.deepEqual(appState.humanoidQ.slice(0, 8), [
+            -0.3, 0.9, -0.6, 0,
+            -0.51865, 0.66105, 0.90855, -1.5711
+        ]);
+        assert.equal(updateGlobalVariablesCalls.length, 1);
+        assert.equal(updateRobotPoseCalls.length, 1);
+    } finally {
+        if (originalDocument === undefined) delete globalThis.document;
+        else globalThis.document = originalDocument;
+        if (originalWindow === undefined) delete globalThis.window;
+        else globalThis.window = originalWindow;
+        appState.humanoidMode = originalHumanoidMode;
+        appState.humanoidJointNames = originalHumanoidJointNames;
+        appState.humanoidQ = originalHumanoidQ;
+        appState.visualizer = originalVisualizer;
+        callbacks.updateGlobalVariables = originalUpdateGlobalVariables;
+        callbacks.updateRobotPose = originalUpdateRobotPose;
+    }
+});
+
 function multiplyQuaternions(a, b) {
     const [aw, ax, ay, az] = a;
     const [bw, bx, by, bz] = b;
