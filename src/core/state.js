@@ -230,6 +230,7 @@ export function updateWindowGlobals() {
     window.updateGlobalVariables = callbacks.updateGlobalVariables;
     window.clampJointAngles = callbacks.clampJointAngles;
     window.updateRobotPose = callbacks.updateRobotPose;
+    window.__humanoidJogAppState = appState;
 
     // 双臂相关
     window.dualArmSystem = appState.dualArmSystem;

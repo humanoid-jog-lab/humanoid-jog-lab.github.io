@@ -31,6 +31,7 @@ const ARM_ONLY_ABSOLUTE_TARGET_METERS = 0.075;
 const ARM_ONLY_ABSOLUTE_TICK_TARGET_METERS = 0.005;
 const WAIST_DISTANCE_TARGET_METERS = 0.075;
 const TARGET_REACH_TOLERANCE = 5e-4;
+const DEFAULT_COMPARISON_SEEDS = Object.freeze([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
 export const DEFAULT_TASK_VALID_DEVIATION_TOLERANCE = 1e-6;
 
 function asFiniteNumber(value) {
@@ -129,10 +130,127 @@ function cleanNumber(value) {
     return Number.isFinite(numeric) ? Number(numeric.toPrecision(12)) : Number.NaN;
 }
 
+function sanitizeTrialKey(value = '') {
+    return String(value || 'unknown').trim().replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'unknown';
+}
+
+function finiteValues(items = [], selector = (value) => value) {
+    const values = [];
+    for (const item of items) {
+        const value = asFiniteNumber(selector(item));
+        if (Number.isFinite(value)) values.push(value);
+    }
+    return values;
+}
+
+function sampleStdOfValues(values = []) {
+    const finite = values.filter(Number.isFinite);
+    if (finite.length === 0) return Number.NaN;
+    if (finite.length === 1) return 0;
+    const mean = finite.reduce((sum, value) => sum + value, 0) / finite.length;
+    const variance = finite.reduce((sum, value) => sum + (value - mean) ** 2, 0) / (finite.length - 1);
+    return Math.sqrt(Math.max(0, variance));
+}
+
+function formatFixedMeanStd(values = [], digits = 3) {
+    const finite = values.filter(Number.isFinite);
+    if (finite.length === 0) return 'n/a';
+    const mean = finite.reduce((sum, value) => sum + value, 0) / finite.length;
+    const std = sampleStdOfValues(finite);
+    return `${mean.toFixed(digits)} +/- ${std.toFixed(digits)}`;
+}
+
+function formatSciMeanStd(values = [], digits = 3) {
+    const finite = values.filter(Number.isFinite);
+    if (finite.length === 0) return 'n/a';
+    const mean = finite.reduce((sum, value) => sum + value, 0) / finite.length;
+    const std = sampleStdOfValues(finite);
+    return `${mean.toExponential(digits)} +/- ${std.toExponential(digits)}`;
+}
+
+function terminalReasonSummary(results = []) {
+    const counts = new Map();
+    for (const result of results) {
+        const reason = typeof result?.terminalReason === 'string' && result.terminalReason.trim().length > 0
+            ? result.terminalReason.trim()
+            : 'unknown';
+        counts.set(reason, (counts.get(reason) || 0) + 1);
+    }
+    return Array.from(counts.entries()).map(([reason, count]) => `${reason}:${count}`).join('; ');
+}
+
+function resultFinalStep(result = {}) {
+    const steps = Array.isArray(result?.steps) ? result.steps : [];
+    return steps[steps.length - 1] || {};
+}
+
+function resultProgress(result = {}) {
+    const rawProgress = Number.isFinite(asFiniteNumber(result?.finalDistanceProgress))
+        ? asFiniteNumber(result.finalDistanceProgress)
+        : asFiniteNumber(result?.finalXProgress);
+    const targetProgress = asFiniteNumber(result?.targetXMeters);
+    const fixedTickRun = result?.fixedTicks === true
+        || String(result?.terminalReason || '').startsWith('fixed_ticks');
+    return fixedTickRun !== true
+        && result?.completed === true
+        && Number.isFinite(rawProgress)
+        && Number.isFinite(targetProgress)
+        ? Math.min(rawProgress, targetProgress)
+        : rawProgress;
+}
+
+function resultFinalValue(result = {}, resultKey = '', stepKey = '') {
+    const explicit = asFiniteNumber(result?.[resultKey]);
+    if (Number.isFinite(explicit)) return explicit;
+    return asFiniteNumber(resultFinalStep(result)?.[stepKey]);
+}
+
+function resultMinStepValue(result = {}, stepKey = '') {
+    return finiteMin((Array.isArray(result?.steps) ? result.steps : []).map((step) => step?.[stepKey]));
+}
+
 export function resolveHumanoidControllerComparisonSpeedPercent(value = DEFAULT_TEACH_SPEED_PERCENT) {
     const numeric = asFiniteNumber(value);
     if (!Number.isFinite(numeric)) return DEFAULT_TEACH_SPEED_PERCENT;
     return Math.max(1, Math.min(100, Math.round(numeric)));
+}
+
+export function resolveHumanoidControllerComparisonSeeds(value = '', options = {}) {
+    const fallbackSeeds = Array.isArray(options.fallbackSeeds) && options.fallbackSeeds.length > 0
+        ? options.fallbackSeeds
+        : DEFAULT_COMPARISON_SEEDS;
+    const normalize = (items) => {
+        const seeds = [];
+        const seen = new Set();
+        for (const item of Array.isArray(items) ? items : []) {
+            const seed = Number(item);
+            if (!Number.isFinite(seed)) continue;
+            const normalized = Math.floor(seed);
+            if (seen.has(normalized)) continue;
+            seen.add(normalized);
+            seeds.push(normalized);
+        }
+        return seeds;
+    };
+
+    if (Array.isArray(value)) {
+        const parsed = normalize(value);
+        return parsed.length > 0 ? parsed : fallbackSeeds.slice();
+    }
+
+    const text = String(value ?? '').trim();
+    if (!text) return fallbackSeeds.slice();
+
+    try {
+        const parsed = JSON.parse(text);
+        if (Array.isArray(parsed)) {
+            const seeds = normalize(parsed);
+            if (seeds.length > 0) return seeds;
+        }
+    } catch (_) {}
+
+    const seeds = normalize(text.split(',').map((part) => part.trim()));
+    return seeds.length > 0 ? seeds : fallbackSeeds.slice();
 }
 
 export function resolveHumanoidControllerComparisonDefaultMaxTicks(speedPercent = DEFAULT_TEACH_SPEED_PERCENT) {
@@ -219,6 +337,28 @@ export function buildHumanoidControllerComparisonTasks() {
         }
     }
     return tasks;
+}
+
+export function expandHumanoidControllerComparisonTasksForSeeds(tasks = [], seeds = DEFAULT_COMPARISON_SEEDS) {
+    const safeTasks = Array.isArray(tasks) ? tasks : [];
+    const safeSeeds = resolveHumanoidControllerComparisonSeeds(seeds);
+    const expanded = [];
+    for (const seed of safeSeeds) {
+        for (const task of safeTasks) {
+            const modeKey = sanitizeTrialKey(task?.mode);
+            const controllerKey = sanitizeTrialKey(task?.key || task?.solverMode || 'controller');
+            expanded.push({
+                ...task,
+                profile: 'near-limit',
+                profileKey: 'near-limit',
+                seed,
+                nearLimitSeed: seed,
+                trialId: `${modeKey}-${controllerKey}-seed${seed}`,
+                scenarioLabel: `${t(task?.label || task?.mode || 'unknown')} | ${t('near-limit')} | ${t(task?.label || task?.solverMode || 'controller')} | seed ${seed}`
+            });
+        }
+    }
+    return expanded;
 }
 
 export function resolveHumanoidControllerComparisonControllerOptions({
@@ -431,6 +571,79 @@ export function summarizeHumanoidControllerComparisonRows(results = [], options 
     });
 }
 
+export function summarizeHumanoidControllerComparisonAggregateRows(results = []) {
+    const safeResults = Array.isArray(results) ? results : [];
+    const grouped = new Map();
+    for (const result of safeResults) {
+        const mode = typeof result?.mode === 'string' ? result.mode : 'unknown';
+        const controllerKey = typeof result?.controllerKey === 'string'
+            ? result.controllerKey
+            : (typeof result?.solverMode === 'string' ? result.solverMode : 'unknown');
+        const groupKey = `${mode}||${controllerKey}`;
+        if (!grouped.has(groupKey)) {
+            grouped.set(groupKey, {
+                mode,
+                controllerKey,
+                controller: controllerLabelFor(controllerKey, result?.controllerLabel),
+                results: []
+            });
+        }
+        grouped.get(groupKey).results.push(result);
+    }
+
+    return Array.from(grouped.values()).map((group) => {
+        const items = group.results;
+        const n = items.length;
+        const successCount = items.filter((result) => result?.completed === true).length;
+        const meanSolveValues = finiteValues(items, (result) => result?.meanSolveMs);
+        const p95SolveValues = finiteValues(items, (result) => result?.p95SolveMs);
+        const finalWaistValues = finiteValues(items, (result) => resultFinalValue(result, 'finalWaistClearanceMin', 'waistClearanceMin'));
+        const minWaistValues = finiteValues(items, (result) => resultMinStepValue(result, 'waistClearanceMin'));
+
+        return {
+            scenario: group.mode,
+            controller: group.controller,
+            n,
+            success_rate: n > 0 ? successCount / n : Number.NaN,
+            progress_m: formatFixedMeanStd(finiteValues(items, resultProgress), 3),
+            final_joint_clearance_rad: formatFixedMeanStd(
+                finiteValues(items, (result) => resultFinalValue(result, 'finalJointClearanceMin', 'jointClearanceMin')),
+                4
+            ),
+            min_joint_clearance_rad: formatFixedMeanStd(
+                finiteValues(items, (result) => resultMinStepValue(result, 'jointClearanceMin')),
+                4
+            ),
+            final_waist_clearance_m: formatFixedMeanStd(finalWaistValues, 4),
+            min_waist_clearance_m: formatFixedMeanStd(minWaistValues, 4),
+            final_w: formatSciMeanStd(
+                finiteValues(items, (result) => resultFinalValue(result, 'finalCCTSMW', 'cctsmW')),
+                3
+            ),
+            final_w_vfi: formatSciMeanStd(
+                finiteValues(items, (result) => resultFinalValue(result, 'finalCCTSMWvfi', 'cctsmWvfi')),
+                3
+            ),
+            final_task_deviation: formatSciMeanStd(
+                finiteValues(items, (result) => resultFinalValue(result, 'finalCommandError', 'commandError')),
+                3
+            ),
+            final_invariant_deviation: formatSciMeanStd(
+                finiteValues(items, (result) => {
+                    if (result?.mode === 'decoupled-upright') {
+                        const relative = asFiniteNumber(result?.finalRelativePoseChange);
+                        if (Number.isFinite(relative)) return relative;
+                    }
+                    return resultFinalValue(result, 'finalInvariantError', 'invariantError');
+                }),
+                3
+            ),
+            mean_p95_solve_ms: `${formatFixedMeanStd(meanSolveValues, 1)} / ${formatFixedMeanStd(p95SolveValues, 1)}`,
+            terminal_reasons: terminalReasonSummary(items)
+        };
+    });
+}
+
 export function getHumanoidControllerComparisonColumns() {
     return [
         { key: 'scenario', label: 'Scenario' },
@@ -443,5 +656,25 @@ export function getHumanoidControllerComparisonColumns() {
         { key: 'avg_joint_clearance_rad', label: 'Avg. joint-limit clearance (rad)', digits: 3 },
         { key: 'avg_waist_clearance_m', label: 'Avg. waist-corridor clearance (m)', digits: 3 },
         { key: 'mean_p95_solve_ms', label: 'Mean / P95 solve time (ms)' }
+    ];
+}
+
+export function getHumanoidControllerComparisonAggregateColumns() {
+    return [
+        { key: 'scenario', label: 'Scenario' },
+        { key: 'controller', label: 'Controller' },
+        { key: 'n', label: 'N' },
+        { key: 'success_rate', label: 'Success rate', format: 'percent', digits: 1 },
+        { key: 'progress_m', label: 'Progress (m)' },
+        { key: 'final_joint_clearance_rad', label: 'Final joint clr. (rad)' },
+        { key: 'min_joint_clearance_rad', label: 'Min joint clr. (rad)' },
+        { key: 'final_waist_clearance_m', label: 'Final waist clr. (m)' },
+        { key: 'min_waist_clearance_m', label: 'Min waist clr. (m)' },
+        { key: 'final_w', label: 'Final w' },
+        { key: 'final_w_vfi', label: 'Final w_vfi' },
+        { key: 'final_task_deviation', label: 'Final task dev.' },
+        { key: 'final_invariant_deviation', label: 'Final inv. dev.' },
+        { key: 'mean_p95_solve_ms', label: 'Mean / P95 solve time (ms)' },
+        { key: 'terminal_reasons', label: 'Terminal reasons' }
     ];
 }

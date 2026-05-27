@@ -200,6 +200,7 @@ const HUMANOID_COOPERATIVE_CYLINDRICAL_PATCH_GEOMETRY = Object.freeze((() => {
         arcLength: radius * angleSpan
     };
 })());
+const DEFAULT_HUMANOID_COOPERATIVE_POLISHING_FLIP_NORMAL = true;
 
 /** Local finite-value helper (used by predictive cert and CCTSM wiring) */
 function asFinite(v, fb = 0) { return Number.isFinite(v) ? v : fb; }
@@ -535,6 +536,7 @@ export class RobotVisualizer {
             mjRestoreSafetyPushWaistCorridorMaxDistanceStep: 0.001,
             mjRestoreSafetyPushWaistCorridorWeightScale: 0.25,
             mjRestoreWVFISecondaryWeight: 0.002,
+            proxQPWSecondaryWeight: 0.000001,
             mjRestoreWVFISecondaryStep: 0.002,
             mjRestoreWVFISecondaryActivationDistance: 0.15,
             proxQPWVFISecondaryActivationDistance: 0.4,
@@ -1148,7 +1150,9 @@ export class RobotVisualizer {
         if (!currentPose && !leftPose && !rightPose) return null;
         const currentObjectPose = this._getHumanoidCooperativeRuledSurfaceObjectPose();
         const requestedFlipNormal = Boolean(
-            options?.flipNormal ?? currentObjectPose?.flipNormal
+            options?.flipNormal
+            ?? currentObjectPose?.flipNormal
+            ?? DEFAULT_HUMANOID_COOPERATIVE_POLISHING_FLIP_NORMAL
         );
         const surfaceAnchorPose = this._getHumanoidCooperativeRuledSurfaceAnchorPose(
             leftPose,
@@ -4100,10 +4104,15 @@ export class RobotVisualizer {
             : 1e-5;
         const secondaryResidualNorm = Math.hypot(normOf(eCmd), normOf(eInvariant));
         const isWVFIProxQPSecondary = normalizedSolver === 'proxqp_w_vfi';
+        const isProjectedWProxQPSecondary = normalizedSolver === 'proxqp_w';
         const shouldAttemptSecondaryObjective = Boolean(
             secondaryObjective &&
             Number.isFinite(secondaryResidualNorm) &&
-            (isWVFIProxQPSecondary || secondaryResidualNorm <= secondaryActivationResidual)
+            (
+                isWVFIProxQPSecondary ||
+                isProjectedWProxQPSecondary ||
+                secondaryResidualNorm <= secondaryActivationResidual
+            )
         );
         const invariantRows = Array.isArray(Jinvariant) ? Jinvariant.length : 0;
         const hardInvariantRows = Math.max(
@@ -4316,9 +4325,9 @@ export class RobotVisualizer {
                 ? (Number.isFinite(cfg.proxQPWVFISecondaryWeight)
                     ? Math.max(0, cfg.proxQPWVFISecondaryWeight)
                     : 0.000001)
-                : (Number.isFinite(cfg.mjRestoreWVFISecondaryWeight)
-                    ? Math.max(0, cfg.mjRestoreWVFISecondaryWeight)
-                    : 0.002);
+                : (Number.isFinite(cfg.proxQPWSecondaryWeight)
+                    ? Math.max(0, cfg.proxQPWSecondaryWeight)
+                    : 0.000001);
             if (isWVFIProxQPSecondary && Array.isArray(resolvedSecondaryGradient)) {
                 const baseWeight = secondaryWeight;
                 const nearLimitDistance = Number.isFinite(cfg.proxQPWVFISecondaryNearLimitDistance)
@@ -11897,7 +11906,8 @@ export class RobotVisualizer {
         const applied = this._applyHumanoidJointSolution(qRecommended);
         if (applied) {
             this.captureHumanoidCooperativeRuledSurfaceObjectPoseFromCurrentHands({
-                flipNormal: Boolean(existingObjectPose?.flipNormal)
+                flipNormal: existingObjectPose?.flipNormal
+                    ?? DEFAULT_HUMANOID_COOPERATIVE_POLISHING_FLIP_NORMAL
             });
             this._ensureHumanoidCooperativeRuledSurfacePolishingState();
             this._updateHumanoidSurfaceSlideVisualization();
@@ -12410,6 +12420,14 @@ export class RobotVisualizer {
                 }
                 : this._normalizeHumanoidCooperativeRuledSurfaceObjectPose(currentPose);
             if (surfacePlacementPose) {
+                surfacePlacementPose = this._resolveHumanoidCooperativeRuledSurfacePlacementPose(
+                    {
+                        ...surfacePlacementPose,
+                        flipNormal: DEFAULT_HUMANOID_COOPERATIVE_POLISHING_FLIP_NORMAL,
+                        normalFlipApplied: false
+                    },
+                    DEFAULT_HUMANOID_COOPERATIVE_POLISHING_FLIP_NORMAL
+                );
                 surfacePlacementPose = this._fitHumanoidCooperativeRuledSurfacePlacementPoseToCurrentHands(
                     surfacePlacementPose,
                     leftPose,

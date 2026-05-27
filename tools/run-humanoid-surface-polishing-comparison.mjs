@@ -126,9 +126,13 @@ function buildCsv(runs) {
         'Task-valid ticks',
         'Progress (u)',
         'Avg. task deviation',
+        'Final task deviation',
         'Avg. invariant deviation',
+        'Final invariant deviation',
         'Avg. joint clearance',
+        'Final joint clearance',
         'Avg. waist clearance',
+        'Final waist clearance',
         'Min joint clearance',
         'Min waist clearance',
         'Max violation',
@@ -143,9 +147,13 @@ function buildCsv(runs) {
         summary.taskValidTicks,
         summary.uProgress,
         summary.avgTaskDeviation,
+        summary.finalTaskDeviation,
         summary.avgInvariantDeviation,
+        summary.finalInvariantDeviation,
         summary.avgJointLimitClearance,
+        summary.finalJointLimitClearance,
         summary.avgWaistCorridorClearance,
+        summary.finalWaistCorridorClearance,
         summary.minJointLimitClearance,
         summary.minWaistCorridorClearance,
         summary.maxViolation,
@@ -223,6 +231,14 @@ try {
                 const finite = values.filter((value) => Number.isFinite(value));
                 if (finite.length === 0) return Number.NaN;
                 return finite.reduce((sum, value) => sum + value, 0) / finite.length;
+            };
+            const minOf = (values = []) => {
+                const finite = values.filter((value) => Number.isFinite(value));
+                return finite.length > 0 ? Math.min(...finite) : Number.NaN;
+            };
+            const maxOf = (values = []) => {
+                const finite = values.filter((value) => Number.isFinite(value));
+                return finite.length > 0 ? Math.max(...finite) : Number.NaN;
             };
             const percentileOf = (values = [], percentile = 0.95) => {
                 const finite = values.filter((value) => Number.isFinite(value)).sort((left, right) => left - right);
@@ -334,15 +350,23 @@ try {
                 viz.setHumanoidWaistXCorridorMax?.(0.2);
                 await Promise.resolve(viz.setHumanoidCooperativeRuledSurfaceSurfaceSource?.('cylindrical-patch'));
                 window.humanoidCooperativeRuledSurfaceSource = 'cylindrical-patch';
-                for (let index = 0; index < Math.min(window.humanoidQ.length, initialQ.length); index += 1) {
-                    window.humanoidQ[index] = Number(initialQ[index]) || 0;
+                const jointCount = Array.isArray(window.humanoidQ) && window.humanoidQ.length > 0
+                    ? window.humanoidQ.length
+                    : initialQ.length;
+                const nextQ = initialQ.slice(0, jointCount).map((value) => Number(value) || 0);
+                window.humanoidQ = nextQ;
+                if (window.__humanoidJogAppState && typeof window.__humanoidJogAppState === 'object') {
+                    window.__humanoidJogAppState.humanoidQ = nextQ;
                 }
                 viz.setHumanoidJoints(window.humanoidQ);
-                window.updateGlobalVariables?.();
-                window.updateRobotPose?.();
                 viz.humanoidCooperativeRuledSurfacePolishingState = null;
                 viz.resetHumanoidSurfaceSlideReference?.();
                 await sleep(150);
+                window.humanoidQ = nextQ;
+                if (window.__humanoidJogAppState && typeof window.__humanoidJogAppState === 'object') {
+                    window.__humanoidJogAppState.humanoidQ = nextQ;
+                }
+                viz.setHumanoidJoints(window.humanoidQ);
                 const capturedPose = await Promise.resolve(
                     viz.captureHumanoidCooperativeRuledSurfaceObjectPoseFromCurrentHands?.({ flipNormal: false })
                 );
@@ -473,12 +497,18 @@ try {
                     taskValidTicks: formatTaskValidTicks(steps),
                     uProgress: Number.isFinite(finalStep.uProgress) ? finalStep.uProgress : 0,
                     avgTaskDeviation: meanOf(steps.map((step) => step.commandError)),
+                    finalTaskDeviation: Number.isFinite(finalStep.commandError) ? finalStep.commandError : Number.NaN,
                     avgInvariantDeviation: meanOf(steps.map((step) => step.invariantError)),
+                    finalInvariantDeviation: Number.isFinite(finalStep.invariantError) ? finalStep.invariantError : Number.NaN,
                     avgJointLimitClearance: meanOf(steps.map((step) => step.jointClearanceMin)),
+                    finalJointLimitClearance: Number.isFinite(finalStep.jointClearanceMin) ? finalStep.jointClearanceMin : Number.NaN,
                     avgWaistCorridorClearance: meanOf(steps.map((step) => step.waistClearanceMin)),
-                    minJointLimitClearance: Math.min(...steps.map((step) => step.jointClearanceMin).filter(Number.isFinite)),
-                    minWaistCorridorClearance: Math.min(...steps.map((step) => step.waistClearanceMin).filter(Number.isFinite)),
-                    maxViolation: Math.max(0, ...steps.map((step) => step.maxViolation).filter(Number.isFinite)),
+                    finalWaistCorridorClearance: Number.isFinite(finalStep.waistClearanceMin) ? finalStep.waistClearanceMin : Number.NaN,
+                    minJointLimitClearance: minOf(steps.map((step) => step.jointClearanceMin)),
+                    minWaistCorridorClearance: minOf(steps.map((step) => step.waistClearanceMin)),
+                    maxViolation: Number.isFinite(maxOf(steps.map((step) => step.maxViolation)))
+                        ? Math.max(0, maxOf(steps.map((step) => step.maxViolation)))
+                        : 0,
                     meanSolveMs: meanOf(steps.map((step) => step.runtimeMs)),
                     p95SolveMs: percentileOf(steps.map((step) => step.runtimeMs), 0.95),
                     terminalReason,
@@ -499,7 +529,12 @@ try {
                             u: finalStep.u,
                             vCenter: finalStep.vCenter,
                             stripSpacing: finalStep.stripSpacing,
-                            normalOffset: finalStep.normalOffset
+                            normalOffset: finalStep.normalOffset,
+                            commandError: finalStep.commandError,
+                            invariantError: finalStep.invariantError,
+                            jointClearanceMin: finalStep.jointClearanceMin,
+                            waistClearanceMin: finalStep.waistClearanceMin,
+                            maxViolation: finalStep.maxViolation
                         },
                         startWaistX: start.waistX,
                         finalWaistX: finalStep.waistX,

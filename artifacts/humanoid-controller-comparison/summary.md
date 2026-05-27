@@ -1,20 +1,11 @@
-| Scenario | Controller | Success / ticks | Task-valid ticks | Progress (m) | Avg. task deviation | Avg. invariant deviation | Avg. joint-limit clearance (rad) | Avg. waist-corridor clearance (m) | Mean / P95 solve time (ms) |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| absolute | QP | yes / 30 | 18 / 30 | 0.075 | 4.04\times 10^{-6} | 2.43\times 10^{-3} | 0.038 | n/a | 31.5 / 28.2 |
-| absolute | HQP | yes / 30 | 10 / 30 | 0.075 | 1.54\times 10^{-6} | 1.04\times 10^{-6} | 0.000 | n/a | 27.2 / 33.0 |
-| absolute | SNS | yes / 30 | 10 / 30 | 0.075 | 1.54\times 10^{-6} | 1.04\times 10^{-6} | 0.000 | n/a | 25.8 / 29.2 |
-| absolute | Predictive IK | yes / 30 | 30 / 30 | 0.075 | 8.25\times 10^{-7} | 1.99\times 10^{-6} | 0.000 | n/a | 37.4 / 49.1 |
-| absolute | Recovery Optimization (TR) | yes / 30 | 30 / 30 | 0.075 | 8.83\times 10^{-9} | 1.09\times 10^{-9} | 0.000 | n/a | 34.3 / 39.3 |
-| absolute | Recovery Optimization (TR+Safety Bias) | yes / 30 | 30 / 30 | 0.075 | 4.73\times 10^{-9} | 7.54\times 10^{-9} | 0.037 | n/a | 48.6 / 52.6 |
-| decoupled-upright | QP | no / n/a | 4 / 120 | 0.242 | 4.02\times 10^{-5} | 5.09\times 10^{-8} | 0.000 | 0.078 | 28.0 / 36.8 |
-| decoupled-upright | HQP | no / n/a | 105 / 120 | 0.300 | 8.43\times 10^{-7} | 8.47\times 10^{-3} | 0.004 | 0.078 | 40.8 / 98.9 |
-| decoupled-upright | SNS | no / n/a | 108 / 120 | 0.300 | 7.61\times 10^{-7} | 9.55\times 10^{-3} | 0.004 | 0.078 | 39.4 / 97.2 |
-| decoupled-upright | Predictive IK | no / n/a | 19 / 120 | 0.298 | 6.41\times 10^{-6} | 2.33\times 10^{-4} | 0.000 | 0.078 | 56.0 / 64.2 |
-| decoupled-upright | Recovery Optimization (TR) | no / n/a | 113 / 116 | 0.282 | 3.95\times 10^{-8} | 3.92\times 10^{-8} | 0.000 | 0.097 | 38.7 / 57.3 |
-| decoupled-upright | Recovery Optimization (TR+Safety Bias) | yes / 120 | 120 / 120 | 0.300 | 1.32\times 10^{-8} | 1.29\times 10^{-8} | 0.037 | 0.092 | 93.9 / 144.3 |
-| waist-distance | QP | yes / 30 | 0 / 30 | 0.075 | 1.65\times 10^{-6} | 5.25\times 10^{-9} | 0.000 | 0.197 | 25.2 / 30.3 |
-| waist-distance | HQP | yes / 30 | 0 / 30 | 0.075 | 1.78\times 10^{-6} | 3.79\times 10^{-8} | 0.000 | 0.197 | 25.5 / 27.8 |
-| waist-distance | SNS | yes / 30 | 0 / 30 | 0.075 | 1.78\times 10^{-6} | 3.79\times 10^{-8} | 0.000 | 0.197 | 25.1 / 28.7 |
-| waist-distance | Predictive IK | yes / 30 | 0 / 30 | 0.075 | 1.65\times 10^{-6} | 5.51\times 10^{-9} | 0.000 | 0.197 | 53.7 / 58.7 |
-| waist-distance | Recovery Optimization (TR) | yes / 30 | 30 / 30 | 0.075 | 1.39\times 10^{-10} | 8.90\times 10^{-9} | 0.000 | 0.197 | 53.9 / 60.5 |
-| waist-distance | Recovery Optimization (TR+Safety Bias) | yes / 30 | 30 / 30 | 0.075 | 9.30\times 10^{-11} | 8.97\times 10^{-9} | 0.035 | 0.195 | 51.9 / 55.4 |
+| Scenario | Controller | N | Success rate | Progress (m) | Final joint clr. (rad) | Min joint clr. (rad) | Final waist clr. (m) | Min waist clr. (m) | Final w | Final w_vfi | Final task dev. | Final inv. dev. | Mean / P95 solve time (ms) | Terminal reasons |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| absolute | ProxQP | 10.000 | 0.0% | 0.038 +/- 0.000 | 0.0000 +/- 0.0000 | 0.0000 +/- 0.0000 | n/a | n/a | 5.596e-3 +/- 9.143e-19 | 1.663e-4 +/- 2.857e-20 | 6.870e-6 +/- 8.929e-22 | 2.065e-4 +/- 0.000e+0 | 20.4 +/- 0.2 / 22.8 +/- 1.2 | max_iter:10 |
+| absolute | ProxQP+w | 10.000 | 0.0% | 0.037 +/- 0.000 | 0.0000 +/- 0.0000 | 0.0000 +/- 0.0000 | n/a | n/a | 5.610e-3 +/- 0.000e+0 | 1.672e-4 +/- 0.000e+0 | 6.056e-6 +/- 0.000e+0 | 2.699e-5 +/- 3.571e-21 | 26.0 +/- 0.4 / 28.4 +/- 0.7 | max_iter:10 |
+| absolute | ProxQP+w_vfi | 10.000 | 0.0% | 0.037 +/- 0.000 | 0.1062 +/- 0.0000 | 0.0159 +/- 0.0000 | n/a | n/a | 5.497e-3 +/- 0.000e+0 | 1.389e-3 +/- 2.286e-19 | 1.505e-5 +/- 3.571e-21 | 1.676e-5 +/- 3.571e-21 | 21.3 +/- 0.3 / 23.6 +/- 0.6 | max_iter:10 |
+| decoupled-upright | ProxQP | 10.000 | 0.0% | 0.300 +/- 0.000 | 0.1210 +/- 0.0328 | 0.1209 +/- 0.0327 | 0.0002 +/- 0.0002 | 0.0002 +/- 0.0002 | 2.432e-1 +/- 1.011e-2 | 1.222e-2 +/- 1.295e-3 | 1.156e-6 +/- 4.573e-8 | 9.502e-6 +/- 8.511e-7 | 31.1 +/- 0.6 / 46.8 +/- 1.4 | target_not_converged:10 |
+| decoupled-upright | ProxQP+w | 10.000 | 0.0% | 0.300 +/- 0.000 | 0.0046 +/- 0.0146 | 0.0000 +/- 0.0000 | 0.0003 +/- 0.0001 | 0.0001 +/- 0.0001 | 2.683e-1 +/- 8.806e-3 | 4.098e-3 +/- 2.080e-3 | 1.078e-6 +/- 1.013e-7 | 4.260e-5 +/- 1.402e-5 | 34.3 +/- 0.9 / 51.8 +/- 2.0 | target_not_converged:10 |
+| decoupled-upright | ProxQP+w_vfi | 10.000 | 0.0% | 0.296 +/- 0.000 | 0.2929 +/- 0.0182 | 0.2409 +/- 0.0269 | 0.0505 +/- 0.0025 | 0.0505 +/- 0.0025 | 3.384e-1 +/- 7.179e-3 | 6.632e-2 +/- 1.407e-3 | 4.056e-5 +/- 1.945e-6 | 1.782e-4 +/- 5.952e-5 | 45.7 +/- 1.2 / 54.4 +/- 2.3 | max_iter:10 |
+| waist-distance | ProxQP | 10.000 | 100.0% | 0.075 +/- 0.000 | 0.2138 +/- 0.0269 | 0.2138 +/- 0.0269 | 0.2014 +/- 0.0005 | 0.2001 +/- 0.0000 | 4.344e-1 +/- 3.813e-2 | 3.947e-1 +/- 3.562e-2 | 2.022e-6 +/- 8.552e-7 | 1.957e-8 +/- 6.513e-9 | 21.9 +/- 0.3 / 24.2 +/- 0.9 | completed:10 |
+| waist-distance | ProxQP+w | 10.000 | 100.0% | 0.075 +/- 0.000 | 0.3445 +/- 0.0291 | 0.2425 +/- 0.0271 | 0.2018 +/- 0.0005 | 0.2001 +/- 0.0000 | 4.418e-1 +/- 3.929e-2 | 3.990e-1 +/- 3.643e-2 | 8.850e-8 +/- 2.536e-9 | 1.756e-7 +/- 4.572e-9 | 26.9 +/- 0.5 / 29.9 +/- 0.8 | completed:10 |
+| waist-distance | ProxQP+w_vfi | 10.000 | 100.0% | 0.075 +/- 0.000 | 0.2964 +/- 0.0144 | 0.2421 +/- 0.0262 | 0.2049 +/- 0.0014 | 0.2001 +/- 0.0001 | 4.461e-1 +/- 3.910e-2 | 4.046e-1 +/- 3.648e-2 | 4.668e-7 +/- 8.127e-8 | 8.486e-7 +/- 2.510e-8 | 26.3 +/- 0.4 / 29.2 +/- 0.6 | completed:10 |

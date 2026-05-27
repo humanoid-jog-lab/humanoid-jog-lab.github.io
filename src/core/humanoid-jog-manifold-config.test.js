@@ -515,7 +515,7 @@ test('RobotVisualizer routes ProxQP as a JS comparison solver', () => {
 test('RobotVisualizer routes ProxQP+w as a JS comparison solver with a secondary direction', () => {
     const visualizer = new RobotVisualizer(null);
     visualizer.vfiConfig.kappaCommand = 1;
-    visualizer.vfiConfig.manipGradWeight = 1;
+    visualizer.vfiConfig.proxQPWSecondaryWeight = 0.002;
 
     const result = visualizer._solveHumanoidJSComparisonCommandStep({
         solverMode: 'proxqp_w',
@@ -562,10 +562,11 @@ test('RobotVisualizer routes ProxQP+w_vfi as a JS comparison solver with a secon
     assert.ok(result.dq[1] > 5e-4);
 });
 
-test('RobotVisualizer defers ProxQP secondary gradients until the primary residual is nearly held', () => {
+test('RobotVisualizer keeps ProxQP+w secondary active as a projected motion bias', () => {
     const visualizer = new RobotVisualizer(null);
     visualizer.vfiConfig.kappaCommand = 1;
     visualizer.vfiConfig.mjRestoreWVFISecondaryActivationResidual = 1e-5;
+    visualizer.vfiConfig.proxQPWSecondaryWeight = 0.002;
     let secondaryCalls = 0;
 
     const result = visualizer._solveHumanoidJSComparisonCommandStep({
@@ -585,9 +586,11 @@ test('RobotVisualizer defers ProxQP secondary gradients until the primary residu
     });
 
     assert.ok(result);
-    assert.equal(secondaryCalls, 0);
-    assert.equal(result.stats.secondaryObjective, null);
-    assert.equal(result.stats.qpMessage.includes('secondary='), false);
+    assert.equal(secondaryCalls, 1);
+    assert.equal(result.stats.secondaryObjective, 'w_abs_hier');
+    assert.equal(result.stats.qpMessage.includes('secondary=w_abs_hier'), true);
+    assert.ok(Math.abs(result.dq[0] - 0.02) < 5e-5);
+    assert.ok(result.dq[1] > 0.01);
 });
 
 test('RobotVisualizer lets ProxQP+w_vfi bias away from medium-distance safety margins during motion', () => {
@@ -909,7 +912,7 @@ test('RobotVisualizer custom ProxQP+w computes its configured manipulability gra
     visualizer.vfiConfig.kappaCommand = 1;
     visualizer.vfiConfig.qpOuterMaxIter = 1;
     visualizer.vfiConfig.maxStep = 0.1;
-    visualizer.vfiConfig.manipGradWeight = 1;
+    visualizer.vfiConfig.proxQPWSecondaryWeight = 0.002;
     visualizer.vfiConfig.mjRestoreWVFISecondaryActivationResidual = 1;
     visualizer._publishHumanoidJogDiagnostics = (payload) => {
         visualizer.lastHumanoidJogDiagnostics = payload;
@@ -2017,6 +2020,7 @@ test('RobotVisualizer sets TR safety push defaults', () => {
     assert.equal(visualizer.vfiConfig.mjRestoreSafetyRefineJointActivationDistance, 0.15);
     assert.equal(visualizer.vfiConfig.mjRestoreSafetyRefineWaistActivationDistance, 0.08);
     assert.equal(visualizer.vfiConfig.mjRestoreWVFISecondaryWeight, 0.002);
+    assert.equal(visualizer.vfiConfig.proxQPWSecondaryWeight, 0.000001);
     assert.equal(visualizer.vfiConfig.mjRestoreWVFISecondaryStep, 0.002);
     assert.equal(visualizer.vfiConfig.mjRestoreWVFISecondaryActivationDistance, 0.15);
     assert.equal(visualizer.vfiConfig.proxQPWVFISecondaryActivationDistance, 0.4);
@@ -4672,6 +4676,68 @@ test('RobotVisualizer cooperative ruled-surface polishing uses a fixed object po
     }
 });
 
+test('RobotVisualizer cooperative ruled-surface polishing creates a flipped default object pose when none is set', () => {
+    const visualizer = new RobotVisualizer(null);
+    const originalWindow = globalThis.window;
+    let capturedSurfacePlacementPose = null;
+    const planeSurface = {
+        position: (u, v) => [u, v, 0],
+        du: () => [1, 0, 0],
+        dv: () => [0, 1, 0],
+        lineAt: (u) => ({
+            kind: 'plucker_line',
+            direction: [0, 1, 0],
+            moment: [0, 0, u],
+            closestPoint: [u, 0, 0],
+            referenceCoordinate: 0,
+            pointAtCoordinate: (coordinate) => [u, coordinate, 0]
+        }),
+        tubeAt: (u, radius) => ({
+            kind: 'plucker_tube',
+            line: {
+                kind: 'plucker_line',
+                direction: [0, 1, 0],
+                moment: [0, 0, u],
+                closestPoint: [u, 0, 0],
+                referenceCoordinate: 0,
+                pointAtCoordinate: (coordinate) => [u, coordinate, 0]
+            },
+            radius,
+            radiusSquared: radius * radius
+        })
+    };
+
+    globalThis.window = {
+        humanoidQ: new Array(20).fill(0)
+    };
+
+    visualizer.humanoidMode = true;
+    visualizer._getHumanoidCooperativeRuledSurfacePolishingControlMode = () => 'cooperative-ruled-surface-polishing';
+    visualizer._getHumanoidAbsolutePose = () => [1, 0, 0, 0, 0.32, 0.5, 0.06, 0];
+    visualizer._getHumanoidPose1 = () => [1, 0, 0, 0, 0.32, 0.38, 0.06, 0];
+    visualizer._getHumanoidPose2 = () => [1, 0, 0, 0, 0.32, 0.62, 0.06, 0];
+    visualizer._getHumanoidCooperativeRuledSurfaceAnchorPose = () => ({
+        position: [0.11, -0.22, -0.33],
+        quaternion: [1, 0, 0, 0]
+    });
+    visualizer._createHumanoidCooperativeRuledSurfaceDemoSurfaceFromPose = (poseLike) => {
+        capturedSurfacePlacementPose = poseLike;
+        return planeSurface;
+    };
+
+    try {
+        const state = visualizer._ensureHumanoidCooperativeRuledSurfacePolishingState();
+
+        assert.ok(state);
+        assert.equal(capturedSurfacePlacementPose.flipNormal, true);
+        assert.equal(capturedSurfacePlacementPose.normalFlipApplied, true);
+        assert.equal(globalThis.window.humanoidCooperativeRuledSurfaceObjectPose.flipNormal, true);
+        assert.equal(globalThis.window.humanoidCooperativeRuledSurfaceObjectPose.normalFlipApplied, true);
+    } finally {
+        globalThis.window = originalWindow;
+    }
+});
+
 test('RobotVisualizer cooperative ruled-surface polishing forwards fixed object-pose normal flipping into demo surface creation', () => {
     const visualizer = new RobotVisualizer(null);
     const originalWindow = globalThis.window;
@@ -4763,6 +4829,33 @@ test('RobotVisualizer cooperative ruled-surface polishing capture applies a requ
         assert.equal(capturedPose.flipNormal, true);
         assert.equal(capturedPose.normalFlipApplied, true);
         assert.deepEqual(globalThis.window.humanoidCooperativeRuledSurfaceObjectPose, capturedPose);
+    } finally {
+        globalThis.window = originalWindow;
+    }
+});
+
+test('RobotVisualizer cooperative ruled-surface polishing capture defaults to the flipped workpiece side', () => {
+    const visualizer = new RobotVisualizer(null);
+    const originalWindow = globalThis.window;
+
+    globalThis.window = {
+        humanoidQ: new Array(20).fill(0)
+    };
+
+    visualizer._getHumanoidAbsolutePose = () => [1, 0, 0, 0, 0.32, 0.5, 0.06, 0];
+    visualizer._getHumanoidPose1 = () => [1, 0, 0, 0, 0.32, 0.38, 0.06, 0];
+    visualizer._getHumanoidPose2 = () => [1, 0, 0, 0, 0.32, 0.62, 0.06, 0];
+    visualizer._getHumanoidCooperativeRuledSurfaceAnchorPose = () => ({
+        position: [0.11, -0.22, -0.33],
+        quaternion: [1, 0, 0, 0]
+    });
+
+    try {
+        const capturedPose = visualizer.captureHumanoidCooperativeRuledSurfaceObjectPoseFromCurrentHands();
+
+        assert.equal(capturedPose.flipNormal, true);
+        assert.equal(capturedPose.normalFlipApplied, true);
+        assert.deepEqual(capturedPose.quaternion, [0, 0, 1, 0]);
     } finally {
         globalThis.window = originalWindow;
     }
@@ -5373,11 +5466,15 @@ test('RobotVisualizer cooperative ruled-surface polishing keeps its initial cont
         const targetPoses = visualizer._buildHumanoidCooperativeRuledSurfacePolishingPoseTargets(state);
         const leftFrame = buildSurfaceAttachedFrame(evaluateSurfacePatch(state.surface, leftArmState.u, leftArmState.v));
         const rightFrame = buildSurfaceAttachedFrame(evaluateSurfacePatch(state.surface, rightArmState.u, rightArmState.v));
+        const dot3 = (a, b) => ((a[0] || 0) * (b[0] || 0)) + ((a[1] || 0) * (b[1] || 0)) + ((a[2] || 0) * (b[2] || 0));
+        const sub3 = (a, b) => [(a[0] || 0) - (b[0] || 0), (a[1] || 0) - (b[1] || 0), (a[2] || 0) - (b[2] || 0)];
+        const leftSignedOffset = dot3(sub3(targetPoses.left.position, leftFrame.position), leftFrame.normal);
+        const rightSignedOffset = dot3(sub3(targetPoses.right.position, rightFrame.position), rightFrame.normal);
 
         assert.ok(leftArmState.normalOffset > 0.01, `expected left contact offset to stay on the hand-facing side, got ${leftArmState.normalOffset}`);
         assert.ok(rightArmState.normalOffset > 0.01, `expected right contact offset to stay on the hand-facing side, got ${rightArmState.normalOffset}`);
-        assert.ok(targetPoses.left.position[2] > leftFrame.position[2], 'expected left target to sit above the curved surface');
-        assert.ok(targetPoses.right.position[2] > rightFrame.position[2], 'expected right target to sit above the curved surface');
+        assert.equal(Math.sign(leftSignedOffset), state.normalOffsetSign);
+        assert.equal(Math.sign(rightSignedOffset), state.normalOffsetSign);
     } finally {
         globalThis.window = originalWindow;
     }

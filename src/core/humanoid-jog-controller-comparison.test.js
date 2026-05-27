@@ -3,14 +3,18 @@ import assert from 'node:assert/strict';
 
 import {
     buildHumanoidControllerComparisonTasks,
+    expandHumanoidControllerComparisonTasksForSeeds,
     evaluateHumanoidControllerComparisonRelativePoseChange,
     evaluateHumanoidControllerComparisonCompletion,
     evaluateHumanoidControllerComparisonStep,
+    getHumanoidControllerComparisonAggregateColumns,
     resolveHumanoidControllerComparisonControllerOptions,
     resolveHumanoidControllerComparisonDefaultMaxTicks,
+    resolveHumanoidControllerComparisonSeeds,
     resolveHumanoidControllerComparisonSpeedPercent,
     resolveHumanoidControllerComparisonTaskValidTolerance,
     getHumanoidControllerComparisonColumns,
+    summarizeHumanoidControllerComparisonAggregateRows,
     summarizeHumanoidControllerComparisonRows
 } from './humanoid-jog-controller-comparison.js';
 
@@ -51,6 +55,121 @@ test('buildHumanoidControllerComparisonTasks returns the 9 ProxQP-only compariso
     assert.equal(tasks.at(-1).controlMode, 'distance-fullbody');
     assert.equal(tasks.at(-1).jogDirection, 'negative');
     assert.equal(tasks.at(-1).progressKind, 'relative-distance');
+});
+
+test('resolveHumanoidControllerComparisonSeeds parses seed lists and defaults to ten seeds', () => {
+    assert.deepEqual(resolveHumanoidControllerComparisonSeeds('1, 2, 5'), [1, 2, 5]);
+    assert.deepEqual(resolveHumanoidControllerComparisonSeeds('[3,4]'), [3, 4]);
+    assert.deepEqual(resolveHumanoidControllerComparisonSeeds(''), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+});
+
+test('expandHumanoidControllerComparisonTasksForSeeds produces near-limit trials for every seed', () => {
+    const tasks = expandHumanoidControllerComparisonTasksForSeeds(
+        buildHumanoidControllerComparisonTasks(),
+        [1, 2]
+    );
+
+    assert.equal(tasks.length, 18);
+    assert.deepEqual(
+        tasks.slice(0, 4).map((task) => ({
+            mode: task.mode,
+            solverMode: task.solverMode,
+            seed: task.seed,
+            trialId: task.trialId,
+            profile: task.profile
+        })),
+        [
+            { mode: 'absolute', solverMode: 'proxqp', seed: 1, trialId: 'absolute-proxqp-seed1', profile: 'near-limit' },
+            { mode: 'absolute', solverMode: 'proxqp_w', seed: 1, trialId: 'absolute-proxqp_w-seed1', profile: 'near-limit' },
+            { mode: 'absolute', solverMode: 'proxqp_w_vfi', seed: 1, trialId: 'absolute-proxqp_w_vfi-seed1', profile: 'near-limit' },
+            { mode: 'decoupled-upright', solverMode: 'proxqp', seed: 1, trialId: 'decoupled_upright-proxqp-seed1', profile: 'near-limit' }
+        ]
+    );
+    assert.equal(tasks.at(-1).trialId, 'waist_distance-proxqp_w_vfi-seed2');
+});
+
+test('summarizeHumanoidControllerComparisonAggregateRows computes cross-seed statistics', () => {
+    const rows = summarizeHumanoidControllerComparisonAggregateRows([
+        {
+            mode: 'absolute',
+            controllerKey: 'proxqp_w_vfi',
+            controllerLabel: 'ProxQP+w_vfi',
+            seed: 1,
+            completed: true,
+            finalXProgress: 0.075,
+            finalCommandError: 1e-7,
+            finalInvariantError: 2e-7,
+            finalJointClearanceMin: 0.10,
+            finalCCTSMW: 1e-3,
+            finalCCTSMWvfi: 5e-4,
+            meanSolveMs: 10,
+            p95SolveMs: 12,
+            terminalReason: 'completed',
+            steps: [
+                { jointClearanceMin: 0.08, cctsmW: 1.1e-3, cctsmWvfi: 4e-4, tickSolveMs: 9 }
+            ]
+        },
+        {
+            mode: 'absolute',
+            controllerKey: 'proxqp_w_vfi',
+            controllerLabel: 'ProxQP+w_vfi',
+            seed: 2,
+            completed: false,
+            finalXProgress: 0.065,
+            finalCommandError: 3e-7,
+            finalInvariantError: 4e-7,
+            finalJointClearanceMin: 0.20,
+            finalCCTSMW: 3e-3,
+            finalCCTSMWvfi: 1.5e-3,
+            meanSolveMs: 20,
+            p95SolveMs: 25,
+            terminalReason: 'stall',
+            steps: [
+                { jointClearanceMin: 0.12, cctsmW: 3.1e-3, cctsmWvfi: 1.4e-3, tickSolveMs: 19 }
+            ]
+        }
+    ]);
+
+    assert.deepEqual(rows, [
+        {
+            scenario: 'absolute',
+            controller: 'ProxQP+w_vfi',
+            n: 2,
+            success_rate: 0.5,
+            progress_m: '0.070 +/- 0.007',
+            final_joint_clearance_rad: '0.1500 +/- 0.0707',
+            min_joint_clearance_rad: '0.1000 +/- 0.0283',
+            final_waist_clearance_m: 'n/a',
+            min_waist_clearance_m: 'n/a',
+            final_w: '2.000e-3 +/- 1.414e-3',
+            final_w_vfi: '1.000e-3 +/- 7.071e-4',
+            final_task_deviation: '2.000e-7 +/- 1.414e-7',
+            final_invariant_deviation: '3.000e-7 +/- 1.414e-7',
+            mean_p95_solve_ms: '15.0 +/- 7.1 / 18.5 +/- 9.2',
+            terminal_reasons: 'completed:1; stall:1'
+        }
+    ]);
+
+    assert.deepEqual(
+        getHumanoidControllerComparisonAggregateColumns().map((column) => column.key),
+        [
+            'scenario',
+            'controller',
+            'n',
+            'success_rate',
+            'progress_m',
+            'final_joint_clearance_rad',
+            'min_joint_clearance_rad',
+            'final_waist_clearance_m',
+            'min_waist_clearance_m',
+            'final_w',
+            'final_w_vfi',
+            'final_task_deviation',
+            'final_invariant_deviation',
+            'mean_p95_solve_ms',
+            'terminal_reasons'
+        ]
+    );
 });
 
 test('summarizeHumanoidControllerComparisonRows reports long-form table metrics by scenario and controller', () => {

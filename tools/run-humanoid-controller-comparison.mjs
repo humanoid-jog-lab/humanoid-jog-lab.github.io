@@ -14,18 +14,26 @@ import {
 } from '../src/core/humanoid-jog-benchmark-metrics.js';
 import {
     buildHumanoidControllerComparisonTasks,
+    expandHumanoidControllerComparisonTasksForSeeds,
+    getHumanoidControllerComparisonAggregateColumns,
     getHumanoidControllerComparisonColumns,
     resolveHumanoidControllerComparisonControllerOptions,
     resolveHumanoidControllerComparisonDefaultMaxTicks,
+    resolveHumanoidControllerComparisonSeeds,
     resolveHumanoidControllerComparisonSpeedPercent,
     resolveHumanoidControllerComparisonTaskValidTolerance,
+    summarizeHumanoidControllerComparisonAggregateRows,
     summarizeHumanoidControllerComparisonRows
 } from '../src/core/humanoid-jog-controller-comparison.js';
+import {
+    DEFAULT_HUMANOID_INITIAL_Q,
+    DEFAULT_HUMANOID_INITIAL_Q_PROFILE_2
+} from '../src/core/humanoid-default-q-profiles.js';
 
 const REPO_ROOT = process.env.COMPARISON_REPO_ROOT || process.cwd();
 const OUTPUT_DIR = process.env.COMPARISON_OUTPUT_DIR
     || path.join(REPO_ROOT, 'artifacts', 'humanoid-controller-comparison');
-const BASE_URL = process.env.BASE_URL || 'http://127.0.0.1:4173';
+const BASE_URL = process.env.BASE_URL || 'http://127.0.0.1:4173/app.html';
 const OUTPUT_JSON = process.env.COMPARISON_JSON
     || path.join(OUTPUT_DIR, 'controller_comparison_x30cm.json');
 const OUTPUT_MD = process.env.COMPARISON_MD
@@ -34,6 +42,12 @@ const OUTPUT_CSV = process.env.COMPARISON_CSV
     || path.join(OUTPUT_DIR, 'summary.csv');
 const OUTPUT_LATEX = process.env.COMPARISON_LATEX
     || path.join(OUTPUT_DIR, 'summary_latex.tex');
+const OUTPUT_TRIAL_MD = process.env.COMPARISON_TRIAL_MD
+    || path.join(OUTPUT_DIR, 'summary_trials.md');
+const OUTPUT_TRIAL_CSV = process.env.COMPARISON_TRIAL_CSV
+    || path.join(OUTPUT_DIR, 'summary_trials.csv');
+const OUTPUT_TRIAL_LATEX = process.env.COMPARISON_TRIAL_LATEX
+    || path.join(OUTPUT_DIR, 'summary_trials_latex.tex');
 const TARGET_X_METERS = Number.isFinite(Number(process.env.COMPARISON_TARGET_X_METERS))
     ? Math.max(0.01, Number(process.env.COMPARISON_TARGET_X_METERS))
     : 0.30;
@@ -76,6 +90,11 @@ const WAIST_CORRIDOR_FORWARD_MARGIN = Number.isFinite(Number(process.env.COMPARI
 const NEAR_LIMIT_SEED = Number.isFinite(Number(process.env.COMPARISON_NEAR_LIMIT_SEED))
     ? Math.floor(Number(process.env.COMPARISON_NEAR_LIMIT_SEED))
     : 7;
+const COMPARISON_SEEDS = resolveHumanoidControllerComparisonSeeds(process.env.COMPARISON_SEEDS, {
+    fallbackSeeds: process.env.COMPARISON_NEAR_LIMIT_SEED !== undefined
+        ? [NEAR_LIMIT_SEED]
+        : undefined
+});
 const MODE_FILTER = new Set(
     String(process.env.COMPARISON_MODE_FILTER || '')
         .split(',')
@@ -115,6 +134,10 @@ function parseNumberArrayEnv(valueRaw = '') {
 }
 
 const WAIST_DISTANCE_INITIAL_Q = parseNumberArrayEnv(process.env.COMPARISON_WAIST_DISTANCE_INITIAL_Q);
+const ARM_ONLY_INITIAL_Q = parseNumberArrayEnv(process.env.COMPARISON_ARM_ONLY_INITIAL_Q)
+    || DEFAULT_HUMANOID_INITIAL_Q.slice();
+const NEAR_LIMIT_BASE_Q = parseNumberArrayEnv(process.env.COMPARISON_NEAR_LIMIT_BASE_Q)
+    || DEFAULT_HUMANOID_INITIAL_Q_PROFILE_2.slice();
 
 async function waitForHttp(url, timeoutMs = 120000) {
     const start = Date.now();
@@ -187,31 +210,31 @@ async function ensureHumanoidPageReady(page) {
     );
 }
 
-function buildMarkdownRows(summaryRows = []) {
-    return formatBenchmarkMarkdownTable(summaryRows, {
-        columns: getHumanoidControllerComparisonColumns()
-    });
+function buildMarkdownRows(rows = [], columns = getHumanoidControllerComparisonColumns()) {
+    return formatBenchmarkMarkdownTable(rows, { columns });
 }
 
-function buildCsvRows(summaryRows = []) {
-    return formatBenchmarkCsvTable(summaryRows, {
-        columns: getHumanoidControllerComparisonColumns()
-    });
+function buildCsvRows(rows = [], columns = getHumanoidControllerComparisonColumns()) {
+    return formatBenchmarkCsvTable(rows, { columns });
 }
 
-function buildLatexRows(summaryRows = []) {
-    return formatBenchmarkLatexTable(summaryRows, {
-        columns: getHumanoidControllerComparisonColumns()
-    });
+function buildLatexRows(rows = [], columns = getHumanoidControllerComparisonColumns()) {
+    return formatBenchmarkLatexTable(rows, { columns });
 }
 
 async function writeBenchmarkOutputs(resultRuns) {
-    const summaryRows = summarizeHumanoidControllerComparisonRows(resultRuns, {
+    const trialRows = summarizeHumanoidControllerComparisonRows(resultRuns, {
         taskValidTolerance: TASK_VALID_TOLERANCE
     });
-    const markdown = buildMarkdownRows(summaryRows);
-    const csv = buildCsvRows(summaryRows);
-    const latex = buildLatexRows(summaryRows);
+    const summaryRows = summarizeHumanoidControllerComparisonAggregateRows(resultRuns);
+    const summaryColumns = getHumanoidControllerComparisonAggregateColumns();
+    const trialColumns = getHumanoidControllerComparisonColumns();
+    const markdown = buildMarkdownRows(summaryRows, summaryColumns);
+    const csv = buildCsvRows(summaryRows, summaryColumns);
+    const latex = buildLatexRows(summaryRows, summaryColumns);
+    const trialMarkdown = buildMarkdownRows(trialRows, trialColumns);
+    const trialCsv = buildCsvRows(trialRows, trialColumns);
+    const trialLatex = buildLatexRows(trialRows, trialColumns);
     await fs.mkdir(path.dirname(OUTPUT_JSON), { recursive: true });
     await fs.writeFile(OUTPUT_JSON, JSON.stringify({
         meta: {
@@ -227,6 +250,9 @@ async function writeBenchmarkOutputs(resultRuns) {
             waistCorridorBackwardMargin: WAIST_CORRIDOR_BACKWARD_MARGIN,
             waistCorridorForwardMargin: WAIST_CORRIDOR_FORWARD_MARGIN,
             nearLimitSeed: NEAR_LIMIT_SEED,
+            comparisonSeeds: COMPARISON_SEEDS,
+            nearLimitBaseQ: NEAR_LIMIT_BASE_Q,
+            armOnlyInitialQ: ARM_ONLY_INITIAL_Q,
             forceJointLimitAvoidance: FORCE_JOINT_LIMIT_AVOIDANCE,
             waistDistanceInitialQ: WAIST_DISTANCE_INITIAL_Q,
             scenarioTargets: {
@@ -241,6 +267,7 @@ async function writeBenchmarkOutputs(resultRuns) {
             }
         },
         rows: summaryRows,
+        trialRows,
         runs: resultRuns
     }, null, 2));
     await fs.mkdir(path.dirname(OUTPUT_MD), { recursive: true });
@@ -249,7 +276,13 @@ async function writeBenchmarkOutputs(resultRuns) {
     await fs.writeFile(OUTPUT_CSV, csv);
     await fs.mkdir(path.dirname(OUTPUT_LATEX), { recursive: true });
     await fs.writeFile(OUTPUT_LATEX, `${latex}\n`);
-    return { summaryRows, markdown, csv, latex };
+    await fs.mkdir(path.dirname(OUTPUT_TRIAL_MD), { recursive: true });
+    await fs.writeFile(OUTPUT_TRIAL_MD, `${trialMarkdown}\n`);
+    await fs.mkdir(path.dirname(OUTPUT_TRIAL_CSV), { recursive: true });
+    await fs.writeFile(OUTPUT_TRIAL_CSV, trialCsv);
+    await fs.mkdir(path.dirname(OUTPUT_TRIAL_LATEX), { recursive: true });
+    await fs.writeFile(OUTPUT_TRIAL_LATEX, `${trialLatex}\n`);
+    return { summaryRows, trialRows, markdown, csv, latex, trialMarkdown, trialCsv, trialLatex };
 }
 
 const browser = await chromium.launch({
@@ -268,12 +301,13 @@ try {
     });
     await ensureHumanoidPageReady(page);
 
-    const tasks = buildHumanoidControllerComparisonTasks().filter((task) => {
+    const baseTasks = buildHumanoidControllerComparisonTasks().filter((task) => {
         if (MODE_FILTER.size > 0 && !MODE_FILTER.has(task.mode)) return false;
         if (PROFILE_FILTER.size > 0 && !PROFILE_FILTER.has(task.profile)) return false;
         if (SOLVER_FILTER.size > 0 && !SOLVER_FILTER.has(task.solverMode)) return false;
         return true;
-    }).map((task) => {
+    });
+    const tasks = expandHumanoidControllerComparisonTasksForSeeds(baseTasks, COMPARISON_SEEDS).map((task) => {
         const comparisonOptions = resolveHumanoidControllerComparisonControllerOptions({
             controllerKey: task.key,
             mode: task.mode,
@@ -301,9 +335,11 @@ try {
         }
         return {
             ...task,
-            initialQOverride: task.mode === 'waist-distance' && Array.isArray(WAIST_DISTANCE_INITIAL_Q)
-                ? WAIST_DISTANCE_INITIAL_Q
-                : null,
+            initialQOverride: task.mode === 'absolute' && task.includeWaist !== true && Array.isArray(ARM_ONLY_INITIAL_Q)
+                ? ARM_ONLY_INITIAL_Q
+                : (task.mode === 'waist-distance' && Array.isArray(WAIST_DISTANCE_INITIAL_Q)
+                    ? WAIST_DISTANCE_INITIAL_Q
+                    : null),
             comparisonOptions
         };
     });
@@ -323,7 +359,8 @@ try {
             fixedTicks,
             waistCorridorBackwardMargin,
             waistCorridorForwardMargin,
-            nearLimitSeed
+            nearLimitSeed,
+            nearLimitBaseQ
         }) => {
             const viz = window.visualizer;
             const DQ = window.DQModule?.DQWrapper;
@@ -462,7 +499,7 @@ try {
             };
 
             const createRng = (seed) => {
-                let state = (seed >>> 0) || 1;
+                let state = (Math.imul((seed >>> 0) || 1, 0x9e3779b9) >>> 0) || 1;
                 return () => {
                     state = (1664525 * state + 1013904223) >>> 0;
                     return state / 0x100000000;
@@ -476,38 +513,65 @@ try {
 
             const getJointLimits = () => viz._getHumanoidJointLimits?.() || [];
 
-            const resetHumanoidState = async (profile = 'near-limit', initialQOverride = null) => {
-                const initial = Array.isArray(initialQOverride) && initialQOverride.length > 0
+            const resetHumanoidState = async (profile = 'near-limit', initialQOverride = null, seed = nearLimitSeed) => {
+                const hasInitialOverride = Array.isArray(initialQOverride) && initialQOverride.length > 0;
+                const useNearLimitBase = profile === 'near-limit'
+                    && !hasInitialOverride
+                    && Array.isArray(nearLimitBaseQ)
+                    && nearLimitBaseQ.length > 0;
+                const initial = hasInitialOverride
                     ? initialQOverride.slice()
-                    : (Array.isArray(window.customRobotConfig?.initial_q)
+                    : (useNearLimitBase
+                        ? nearLimitBaseQ.slice()
+                        : (Array.isArray(window.customRobotConfig?.initial_q)
                     ? window.customRobotConfig.initial_q.slice()
-                    : window.humanoidQ.slice());
-                if (profile === 'near-limit') {
+                    : window.humanoidQ.slice()));
+                if (!hasInitialOverride && (profile === 'near-limit' || Number.isFinite(Number(seed)))) {
                     const limits = getJointLimits();
-                    const rng = createRng(nearLimitSeed + 1);
-                    const waistCount = viz.humanoidWaistLength || 0;
-                    const leftCount = viz.humanoidLeftArmLength || 0;
-                    const rightCount = viz.humanoidRightArmLength || 0;
-                    const armEnd = waistCount + leftCount + rightCount;
+                    const rng = createRng(Number(seed) + 1);
+                    let waistCount = Math.max(0, Math.floor(Number(viz.humanoidWaistLength) || 0));
+                    const leftCount = Math.max(0, Math.floor(Number(viz.humanoidLeftArmLength) || 0));
+                    const rightCount = Math.max(0, Math.floor(Number(viz.humanoidRightArmLength) || 0));
+                    let armEnd = waistCount + leftCount + rightCount;
+                    if (armEnd <= waistCount || armEnd > initial.length) {
+                        waistCount = initial.length >= 20 ? 4 : 0;
+                        armEnd = initial.length >= 20
+                            ? Math.max(waistCount, initial.length - 2)
+                            : initial.length;
+                    }
+                    const seedValue = Math.floor(Number(seed) || 0);
                     for (let index = waistCount; index < armEnd; index += 1) {
-                        const [lower, upper] = getLimitBounds(limits[index]);
+                        let [lower, upper] = getLimitBounds(limits[index]);
+                        if (!Number.isFinite(lower) || !Number.isFinite(upper) || upper <= lower) {
+                            lower = -Math.PI;
+                            upper = Math.PI;
+                        }
                         if (!Number.isFinite(lower) || !Number.isFinite(upper) || upper <= lower) continue;
                         const range = upper - lower;
-                        if (rng() < 0.45) {
-                            const band = 0.05 + 0.10 * rng();
-                            initial[index] = rng() < 0.5
-                                ? lower + range * band
-                                : upper - range * band;
+                        const forcedSeedJoint = ((index - waistCount + seedValue) % 7) === 0;
+                        if (forcedSeedJoint || rng() < 0.45) {
+                            const jitter = (rng() - 0.5) * 0.16;
+                            const minValue = lower + Math.max(0.02, 0.01 * range);
+                            const maxValue = upper - Math.max(0.02, 0.01 * range);
+                            initial[index] = Math.max(minValue, Math.min(maxValue, Number(initial[index] || 0) + jitter));
                         }
                     }
                 }
-                for (let index = 0; index < Math.min(window.humanoidQ.length, initial.length); index += 1) {
-                    window.humanoidQ[index] = initial[index];
+                const jointCount = Array.isArray(window.humanoidQ) && window.humanoidQ.length > 0
+                    ? window.humanoidQ.length
+                    : initial.length;
+                const nextQ = initial.slice(0, jointCount);
+                window.humanoidQ = nextQ;
+                if (window.__humanoidJogAppState && typeof window.__humanoidJogAppState === 'object') {
+                    window.__humanoidJogAppState.humanoidQ = nextQ;
                 }
                 viz.setHumanoidJoints(window.humanoidQ);
-                window.updateGlobalVariables?.();
-                window.updateRobotPose?.();
                 await sleep(120);
+                window.humanoidQ = nextQ;
+                if (window.__humanoidJogAppState && typeof window.__humanoidJogAppState === 'object') {
+                    window.__humanoidJogAppState.humanoidQ = nextQ;
+                }
+                viz.setHumanoidJoints(window.humanoidQ);
             };
 
             const dqTranslation = (dqArray) => {
@@ -723,7 +787,7 @@ try {
                 if (viz.vfiConfig) {
                     viz.vfiConfig.qpUseInvariantEquality = controllerOptions.qpUseInvariantEquality !== false;
                 }
-                await resetHumanoidState(task.profile, task.initialQOverride);
+                await resetHumanoidState(task.profile, task.initialQOverride, task.seed);
                 const waistCorridor = configureBenchmarkWaistCorridor(task);
                 await sleep(50);
                 const initialQ = Array.isArray(window.humanoidQ) ? window.humanoidQ.slice() : [];
@@ -907,6 +971,7 @@ try {
                         solver: typeof status.solver === 'string' ? status.solver : task.solverMode,
                         reason: stepEvaluation.reason,
                         message: typeof status.message === 'string' ? status.message : '',
+                        qpMessage: typeof status.qpMessage === 'string' ? status.qpMessage : '',
                         diagnosticLabel: typeof diagnostics.diagnosticLabel === 'string' ? diagnostics.diagnosticLabel : '',
                         converged: status.converged !== false
                     });
@@ -933,11 +998,14 @@ try {
                 }
 
                 const finalStep = steps[steps.length - 1] || {};
+                const finalQ = Array.isArray(window.humanoidQ) ? window.humanoidQ.slice() : [];
                 const meanSolveMs = meanOf(steps.map((step) => Number(step.tickSolveMs)));
                 const p95SolveMs = percentileOf(steps.map((step) => Number(step.tickSolveMs)), 0.95);
                 runs.push({
                     mode: task.mode,
                     profile: task.profile,
+                    seed: Number.isFinite(Number(task.seed)) ? Number(task.seed) : Number.NaN,
+                    trialId: task.trialId || '',
                     controllerLabel: task.label,
                     controllerKey: task.key,
                     solverMode: task.solverMode,
@@ -945,6 +1013,7 @@ try {
                     progressKind: task.progressKind || 'absolute-x',
                     jogDirection: task.jogDirection || 'positive',
                     initialQ,
+                    finalQ,
                     initialWaistX,
                     initialRelativeDistance: Number.isFinite(startRelativeDistance) ? startRelativeDistance : Number.NaN,
                     sustainableTicks,
@@ -984,7 +1053,7 @@ try {
                     steps
                 });
                 console.log(
-                    `[scenario] ${task.label} | ${task.profile} | ${task.label} | ${task.solverMode} `
+                    `[scenario] ${task.trialId || task.label} | ${task.profile} | ${task.label} | ${task.solverMode} `
                     + `completed=${completed ? 'yes' : 'no'} progress=${((Number.isFinite(finalStep.progressValue) ? finalStep.progressValue : 0)).toFixed(4)}`
                 );
             }
@@ -1003,7 +1072,8 @@ try {
             fixedTicks: FIXED_TICKS,
             waistCorridorBackwardMargin: WAIST_CORRIDOR_BACKWARD_MARGIN,
             waistCorridorForwardMargin: WAIST_CORRIDOR_FORWARD_MARGIN,
-            nearLimitSeed: NEAR_LIMIT_SEED
+            nearLimitSeed: NEAR_LIMIT_SEED,
+            nearLimitBaseQ: NEAR_LIMIT_BASE_Q
         }
     );
 
@@ -1012,7 +1082,7 @@ try {
             ? Number(run.finalDistanceProgress)
             : Number(run.finalXProgress);
         console.log(
-            `[done] ${run.mode} | ${run.profile} | ${run.controllerLabel} `
+            `[done] ${run.trialId || run.mode} | ${run.profile} | ${run.controllerLabel} `
             + `completed=${run.completed ? 'yes' : 'no'} progress=${(Number.isFinite(progress) ? progress : 0).toFixed(4)}`
         );
     }
@@ -1024,6 +1094,9 @@ try {
     console.log(`Saved Markdown to ${OUTPUT_MD}`);
     console.log(`Saved CSV to ${OUTPUT_CSV}`);
     console.log(`Saved LaTeX to ${OUTPUT_LATEX}`);
+    console.log(`Saved trial Markdown to ${OUTPUT_TRIAL_MD}`);
+    console.log(`Saved trial CSV to ${OUTPUT_TRIAL_CSV}`);
+    console.log(`Saved trial LaTeX to ${OUTPUT_TRIAL_LATEX}`);
 } finally {
     await browser.close();
     await stopServer(server);

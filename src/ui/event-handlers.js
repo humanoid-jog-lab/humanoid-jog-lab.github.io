@@ -25,6 +25,7 @@ import { onLanguageChange, t } from '../i18n.js';
 const TEACH_MULTIPLICATION_ORDER_STORAGE_KEY = 'teach-multiply-order-delta-first';
 const HUMANOID_W_METRIC_HOLD_DELAY_MS = 250;
 const HUMANOID_W_METRIC_REPEAT_INTERVAL_MS = 100;
+const DEFAULT_HUMANOID_COOPERATIVE_POLISHING_FLIP_NORMAL = true;
 
 function isHumanoidPolishingControlMode(mode) {
     return (
@@ -99,9 +100,35 @@ export function resetHumanoidJointsForControlMode(mode) {
     return applied;
 }
 
+function updateTeachOrderStatus(isDeltaFirst) {
+    const teachOrderStatus = document.getElementById('teach-multiply-order-status');
+    if (!teachOrderStatus) return;
+    teachOrderStatus.textContent = isDeltaFirst
+        ? t('Current Mode: local frame (current × Δ)')
+        : t('Current Mode: world frame (Δ × current)');
+}
+
+function applyTeachOrderPreference(isDeltaFirst) {
+    const teachOrderToggle = document.getElementById('teach-multiply-order-toggle');
+    if (teachOrderToggle) {
+        teachOrderToggle.checked = isDeltaFirst;
+    }
+    updateTeachOrderStatus(isDeltaFirst);
+    if (appState.visualizer?.setTeachMultiplicationOrder) {
+        const order = isDeltaFirst ? 'delta-first' : 'current-first';
+        appState.visualizer.setTeachMultiplicationOrder(order);
+    }
+    try {
+        localStorage.setItem(TEACH_MULTIPLICATION_ORDER_STORAGE_KEY, isDeltaFirst ? '1' : '0');
+    } catch (_) {}
+}
+
 let pendingHumanoidControlModeJointResetMode = null;
 
 function scheduleHumanoidControlModeJointReset(mode) {
+    if (isHumanoidPolishingControlMode(mode)) {
+        applyTeachOrderPreference(true);
+    }
     pendingHumanoidControlModeJointResetMode = mode;
     const reset = () => resetHumanoidJointsForControlMode(mode);
     if (pendingHumanoidControlModeJointResetMode !== mode) return;
@@ -184,32 +211,6 @@ export function setupHumanoidDefaultPoseControls() {
 
 export function setupTeachOrderControls() {
     const teachOrderToggle = document.getElementById('teach-multiply-order-toggle');
-    const teachOrderStatus = document.getElementById('teach-multiply-order-status');
-    const updateTeachOrderStatus = (isDeltaFirst) => {
-        if (!teachOrderStatus) return;
-        teachOrderStatus.textContent = isDeltaFirst
-            ? t('Current Mode: local frame (current × Δ)')
-            : t('Current Mode: world frame (Δ × current)');
-    };
-    const applyTeachOrder = (isDeltaFirst) => {
-        if (appState.visualizer?.setTeachMultiplicationOrder) {
-            const order = isDeltaFirst ? 'delta-first' : 'current-first';
-            appState.visualizer.setTeachMultiplicationOrder(order);
-        }
-    };
-    const persistTeachOrder = (isDeltaFirst) => {
-        try {
-            localStorage.setItem(TEACH_MULTIPLICATION_ORDER_STORAGE_KEY, isDeltaFirst ? '1' : '0');
-        } catch (_) {}
-    };
-    const applyTeachOrderPreference = (isDeltaFirst) => {
-        if (teachOrderToggle) {
-            teachOrderToggle.checked = isDeltaFirst;
-        }
-        updateTeachOrderStatus(isDeltaFirst);
-        applyTeachOrder(isDeltaFirst);
-        persistTeachOrder(isDeltaFirst);
-    };
     if (teachOrderToggle) {
         const saved = (() => {
             try { return localStorage.getItem(TEACH_MULTIPLICATION_ORDER_STORAGE_KEY); } catch (_) { return null; }
@@ -297,6 +298,8 @@ export function setupHumanoidCooperativePolishingObjectPoseControls() {
     const captureBtn = document.getElementById('humanoid-cooperative-polishing-object-capture-btn');
     const exportBtn = document.getElementById('humanoid-cooperative-polishing-export-obj-btn');
     const STORAGE_KEY = 'humanoid-cooperative-polishing-object-pose';
+    const STORAGE_VERSION_KEY = `${STORAGE_KEY}-version`;
+    const STORAGE_VERSION = 'flip-normal-default-v2';
     let currentPose = null;
 
     const asFiniteNumber = (value, fallback = 0) => {
@@ -390,6 +393,7 @@ export function setupHumanoidCooperativePolishingObjectPoseControls() {
         }
         try {
             localStorage.setItem(STORAGE_KEY, JSON.stringify(pose));
+            localStorage.setItem(STORAGE_VERSION_KEY, STORAGE_VERSION);
         } catch (_) {}
         return pose;
     };
@@ -406,7 +410,18 @@ export function setupHumanoidCooperativePolishingObjectPoseControls() {
     const savedPose = (() => {
         try {
             const raw = localStorage.getItem(STORAGE_KEY);
-            return raw ? normalizePose(JSON.parse(raw)) : null;
+            const pose = raw ? normalizePose(JSON.parse(raw)) : null;
+            const version = localStorage.getItem(STORAGE_VERSION_KEY);
+            if (
+                pose
+                && version !== STORAGE_VERSION
+                && !pose.flipNormal
+                && !pose.normalFlipApplied
+            ) {
+                localStorage.removeItem(STORAGE_KEY);
+                return null;
+            }
+            return pose;
         } catch (_) {
             return null;
         }
@@ -417,6 +432,8 @@ export function setupHumanoidCooperativePolishingObjectPoseControls() {
     if (savedPose) {
         persistPose(savedPose);
         syncInputsFromPose(savedPose);
+    } else if (flipNormalToggle) {
+        flipNormalToggle.checked = DEFAULT_HUMANOID_COOPERATIVE_POLISHING_FLIP_NORMAL;
     }
 
     applyBtn?.addEventListener('click', () => {

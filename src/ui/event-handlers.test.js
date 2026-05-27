@@ -336,6 +336,78 @@ test('setupJogOptionBarControls honors the checked flip-normal toggle on the fir
     }
 });
 
+test('setupJogOptionBarControls switches teach jogging to local increment when polishing is selected', () => {
+    const originalDocument = globalThis.document;
+    const originalWindow = globalThis.window;
+    const originalLocalStorage = globalThis.localStorage;
+    const originalVisualizer = appState.visualizer;
+
+    const quickControlModeSelect = createMockSelect('absolute', [
+        'absolute',
+        'cooperative-ruled-surface-polishing-dq-setpoint'
+    ]);
+    const controlModeSelect = createMockSelect('absolute', [
+        'absolute',
+        'cooperative-ruled-surface-polishing-dq-setpoint'
+    ]);
+    const quickJogSolverSelect = createMockSelect('proxqp_w_vfi', ['proxqp_w_vfi']);
+    const jogSolverSelect = createMockSelect('proxqp_w_vfi', ['proxqp_w_vfi']);
+    const teachOrderToggle = createMockElement('');
+    const teachOrderStatus = createMockElement('');
+    const visualizerCalls = [];
+
+    controlModeSelect.dispatchEvent = (event) => {
+        controlModeSelect.trigger(event.type, controlModeSelect.value);
+        return true;
+    };
+    jogSolverSelect.dispatchEvent = () => true;
+
+    globalThis.window = {};
+    globalThis.localStorage = createMockLocalStorage([
+        ['teach-multiply-order-delta-first', '0']
+    ]);
+    appState.visualizer = {
+        setTeachMultiplicationOrder(order) {
+            visualizerCalls.push(order);
+        }
+    };
+    globalThis.document = {
+        getElementById(id) {
+            if (id === 'quick-control-mode-select') return quickControlModeSelect;
+            if (id === 'dual-arm-control-mode-select') return controlModeSelect;
+            if (id === 'quick-jog-solver-select') return quickJogSolverSelect;
+            if (id === 'humanoid-jog-solver-select') return jogSolverSelect;
+            if (id === 'teach-multiply-order-toggle') return teachOrderToggle;
+            if (id === 'teach-multiply-order-status') return teachOrderStatus;
+            return null;
+        }
+    };
+
+    try {
+        setupTeachOrderControls();
+        setupJogOptionBarControls();
+
+        assert.equal(teachOrderToggle.checked, false);
+        assert.equal(teachOrderStatus.textContent, 'Current Mode: world frame (Δ × current)');
+
+        quickControlModeSelect.value = 'cooperative-ruled-surface-polishing-dq-setpoint';
+        quickControlModeSelect.trigger('change', 'cooperative-ruled-surface-polishing-dq-setpoint');
+
+        assert.equal(teachOrderToggle.checked, true);
+        assert.equal(teachOrderStatus.textContent, 'Current Mode: local frame (current × Δ)');
+        assert.equal(globalThis.localStorage.getItem('teach-multiply-order-delta-first'), '1');
+        assert.deepEqual(visualizerCalls, ['current-first', 'delta-first']);
+    } finally {
+        if (originalDocument === undefined) delete globalThis.document;
+        else globalThis.document = originalDocument;
+        if (originalWindow === undefined) delete globalThis.window;
+        else globalThis.window = originalWindow;
+        if (originalLocalStorage === undefined) delete globalThis.localStorage;
+        else globalThis.localStorage = originalLocalStorage;
+        appState.visualizer = originalVisualizer;
+    }
+});
+
 function multiplyQuaternions(a, b) {
     const [aw, ax, ay, az] = a;
     const [bw, bx, by, bz] = b;
@@ -1154,6 +1226,48 @@ test('setupHumanoidCooperativePolishingObjectPoseControls applies a fixed object
         assert.equal(exportCalls[0]?.thicknessMetres, 0.008);
         assert.equal(exportCalls[0]?.segmentsU, 96);
         assert.equal(exportCalls[0]?.segmentsV, 32);
+    } finally {
+        if (originalWindow === undefined) delete globalThis.window;
+        else globalThis.window = originalWindow;
+        if (originalDocument === undefined) delete globalThis.document;
+        else globalThis.document = originalDocument;
+        if (originalLocalStorage === undefined) delete globalThis.localStorage;
+        else globalThis.localStorage = originalLocalStorage;
+        appState.visualizer = originalVisualizer;
+    }
+});
+
+test('setupHumanoidCooperativePolishingObjectPoseControls defaults the workpiece normal flip on for a fresh page', () => {
+    const originalWindow = globalThis.window;
+    const originalDocument = globalThis.document;
+    const originalLocalStorage = globalThis.localStorage;
+    const originalVisualizer = appState.visualizer;
+
+    const xInput = createMockElement('');
+    const yInput = createMockElement('');
+    const zInput = createMockElement('');
+    const yawInput = createMockElement('');
+    const flipNormalToggle = createMockElement('');
+    flipNormalToggle.checked = false;
+
+    globalThis.window = {};
+    globalThis.document = {
+        getElementById(id) {
+            if (id === 'humanoid-cooperative-polishing-object-x-input') return xInput;
+            if (id === 'humanoid-cooperative-polishing-object-y-input') return yInput;
+            if (id === 'humanoid-cooperative-polishing-object-z-input') return zInput;
+            if (id === 'humanoid-cooperative-polishing-object-yaw-input') return yawInput;
+            if (id === 'humanoid-cooperative-polishing-object-flip-normal-toggle') return flipNormalToggle;
+            return null;
+        }
+    };
+    globalThis.localStorage = createMockLocalStorage();
+    appState.visualizer = {};
+
+    try {
+        setupHumanoidCooperativePolishingObjectPoseControls();
+
+        assert.equal(flipNormalToggle.checked, true);
     } finally {
         if (originalWindow === undefined) delete globalThis.window;
         else globalThis.window = originalWindow;
