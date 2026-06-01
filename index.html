@@ -94,20 +94,22 @@
             <div class="narrow-copy">
                 <p class="section-kicker">Abstract</p>
                 <p>
-                    This paper studies humanoid upper-body cooperative jog teaching from the viewpoint of
-                    constraint-aware manipulability and semantic-preserving local control. During repeated
-                    operator-specified increments, the robot must move the commanded cooperative quantity
-                    while preserving mode-dependent invariants and respecting local geometric feasibility.
-                    We formalize each jogging mode as a mode contract that specifies the commanded variable,
-                    the preserved cooperative quantity, the active joint set, and the vector-field-inequality
-                    rows defining feasible local motion. To evaluate dexterity in over-parameterized cooperative
-                    task spaces, we introduce a
-                    twist-extracted manipulability measure and a vector-field-inequality-aware extension
-                    that attenuates motion directions approaching joint-limit and waist-corridor boundaries.
-                    The resulting manipulability signal is then used as a low-priority
-                    posture-quality objective in a safeguarded local update, where commanded and preserved
-                    quantities remain primary. Simulations and hardware demonstrations validate the resulting
-                    semantic preservation, constraint handling, and boundary-aware manipulability behavior.
+                    Humanoid robots require jogging interfaces that go beyond conventional single-arm joint
+                    or end-effector increments, because on-site adjustment often involves coupled arms,
+                    torso participation, task-specific invariants, and nearby geometric limits. This paper
+                    designs semantic jog modes for humanoid upper-body teaching. Each mode defines the
+                    operator command, the task quantity to be preserved, and the waist, joint-limit, and
+                    posture constraints active during human-guided robot adjustment. The resulting mode
+                    contracts include single-arm, bimanual absolute-pose, relative-distance, twisting, and
+                    waist-coupled adjustment primitives, which are converted into a common
+                    residual-and-constraint model for constrained local updates. To keep these modes usable
+                    near kinematic and waist-corridor boundaries, we compute dual-quaternion task
+                    manipulability in the extracted geometric twist space and introduce an availability
+                    weighting based on vector field inequalities. The weighted manipulability is used as a
+                    secondary posture-quality bias, while the commanded jog motion and preserved invariants
+                    remain primary objectives. Hardware experiments on a humanoid robot demonstrate the
+                    effectiveness of the proposed method for semantic jog execution, constraint handling,
+                    boundary-aware posture adjustment, and representative manipulation tasks.
                 </p>
             </div>
         </section>
