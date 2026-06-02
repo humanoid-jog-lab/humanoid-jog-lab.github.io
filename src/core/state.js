@@ -48,7 +48,7 @@ export const appState = {
     humanoidQ: [],
     humanoidJointNames: [],
     humanoidInitialQProfileId: 'default1',
-    humanoidCooperativePolishingSurfaceSource: 'analytic',
+    humanoidCooperativePolishingSurfaceSource: 'cylindrical-patch',
     humanoidCooperativePolishingObjectPose: null,
     humanoidBasePose: { x: 0, y: 0, yaw: 0 },
     humanoidBaseTargetPose: { x: 0, y: 0, yaw: 0 },

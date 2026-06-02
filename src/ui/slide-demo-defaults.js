@@ -9,7 +9,7 @@ export const SLIDE_DEMO_STORAGE_DEFAULTS = Object.freeze({
     'humanoid-test-dual-arm-lock-enabled': '0',
     'teach-speed-percent': '25',
     'teach-multiply-order-delta-first': '0',
-    'humanoid-cooperative-polishing-surface-source': 'analytic'
+    'humanoid-cooperative-polishing-surface-source': 'cylindrical-patch'
 });
 
 export function isSlideDemoLaunch(search = '') {

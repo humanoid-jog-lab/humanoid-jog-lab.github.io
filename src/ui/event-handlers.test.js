@@ -1013,7 +1013,7 @@ test('setupHumanoidJogSolverControls resets legacy JS comparison solvers but kee
     }
 });
 
-test('setupHumanoidCooperativePolishingSurfaceControls falls back to analytic when storage contains the removed shell source', async () => {
+test('setupHumanoidCooperativePolishingSurfaceControls falls back to the cylindrical patch when storage contains the removed shell source', async () => {
     const originalWindow = globalThis.window;
     const originalDocument = globalThis.document;
     const originalLocalStorage = globalThis.localStorage;
@@ -1044,9 +1044,9 @@ test('setupHumanoidCooperativePolishingSurfaceControls falls back to analytic wh
         const controls = setupHumanoidCooperativePolishingSurfaceControls();
         await Promise.resolve();
 
-        assert.equal(globalThis.window.humanoidCooperativeRuledSurfaceSource, 'analytic');
-        assert.equal(analyticBtn.dataset.active, 'true');
-        assert.equal(cylinderBtn.dataset.active, 'false');
+        assert.equal(globalThis.window.humanoidCooperativeRuledSurfaceSource, 'cylindrical-patch');
+        assert.equal(analyticBtn.dataset.active, 'false');
+        assert.equal(cylinderBtn.dataset.active, 'true');
 
         analyticBtn.trigger('click');
         await Promise.resolve();
@@ -1055,7 +1055,7 @@ test('setupHumanoidCooperativePolishingSurfaceControls falls back to analytic wh
         assert.equal(analyticBtn.dataset.active, 'true');
         assert.equal(cylinderBtn.dataset.active, 'false');
         assert.equal(globalThis.localStorage.getItem('humanoid-cooperative-polishing-surface-source'), 'analytic');
-        assert.deepEqual(sourceCalls, ['analytic', 'analytic']);
+        assert.deepEqual(sourceCalls, ['cylindrical-patch', 'analytic']);
         assert.equal(typeof controls.applyHumanoidCooperativePolishingSurfaceSource, 'function');
     } finally {
         if (originalWindow === undefined) delete globalThis.window;
@@ -1068,7 +1068,55 @@ test('setupHumanoidCooperativePolishingSurfaceControls falls back to analytic wh
     }
 });
 
-test('setupHumanoidCooperativePolishingSurfaceControls can switch to the cylindrical patch source', async () => {
+test('setupHumanoidCooperativePolishingSurfaceControls migrates stale analytic defaults to the cylindrical patch', async () => {
+    const originalWindow = globalThis.window;
+    const originalDocument = globalThis.document;
+    const originalLocalStorage = globalThis.localStorage;
+    const originalVisualizer = appState.visualizer;
+
+    const analyticBtn = createMockElement('');
+    const cylinderBtn = createMockElement('');
+    const sourceCalls = [];
+
+    globalThis.window = {};
+    globalThis.document = {
+        getElementById(id) {
+            if (id === 'humanoid-cooperative-polishing-surface-source-analytic-btn') return analyticBtn;
+            if (id === 'humanoid-cooperative-polishing-surface-source-cylinder-btn') return cylinderBtn;
+            return null;
+        }
+    };
+    globalThis.localStorage = createMockLocalStorage([
+        ['humanoid-cooperative-polishing-surface-source', 'analytic']
+    ]);
+    appState.visualizer = {
+        async setHumanoidCooperativeRuledSurfaceSurfaceSource(source) {
+            sourceCalls.push(source);
+        }
+    };
+
+    try {
+        setupHumanoidCooperativePolishingSurfaceControls();
+        await Promise.resolve();
+
+        assert.equal(globalThis.window.humanoidCooperativeRuledSurfaceSource, 'cylindrical-patch');
+        assert.equal(globalThis.localStorage.getItem('humanoid-cooperative-polishing-surface-source'), 'cylindrical-patch');
+        assert.equal(globalThis.localStorage.getItem('humanoid-cooperative-polishing-surface-source-version'), 'cylindrical-patch-default');
+        assert.equal(analyticBtn.dataset.active, 'false');
+        assert.equal(cylinderBtn.dataset.active, 'true');
+        assert.deepEqual(sourceCalls, ['cylindrical-patch']);
+    } finally {
+        if (originalWindow === undefined) delete globalThis.window;
+        else globalThis.window = originalWindow;
+        if (originalDocument === undefined) delete globalThis.document;
+        else globalThis.document = originalDocument;
+        if (originalLocalStorage === undefined) delete globalThis.localStorage;
+        else globalThis.localStorage = originalLocalStorage;
+        appState.visualizer = originalVisualizer;
+    }
+});
+
+test('setupHumanoidCooperativePolishingSurfaceControls defaults to and can switch back to the cylindrical patch source', async () => {
     const originalWindow = globalThis.window;
     const originalDocument = globalThis.document;
     const originalLocalStorage = globalThis.localStorage;
@@ -1095,6 +1143,19 @@ test('setupHumanoidCooperativePolishingSurfaceControls can switch to the cylindr
 
     try {
         setupHumanoidCooperativePolishingSurfaceControls();
+        await Promise.resolve();
+
+        assert.equal(globalThis.window.humanoidCooperativeRuledSurfaceSource, 'cylindrical-patch');
+        assert.equal(cylinderBtn.dataset.active, 'true');
+        assert.equal(analyticBtn.dataset.active, 'false');
+
+        analyticBtn.trigger('click');
+        await Promise.resolve();
+
+        assert.equal(globalThis.window.humanoidCooperativeRuledSurfaceSource, 'analytic');
+        assert.equal(cylinderBtn.dataset.active, 'false');
+        assert.equal(analyticBtn.dataset.active, 'true');
+
         cylinderBtn.trigger('click');
         await Promise.resolve();
 
@@ -1102,7 +1163,7 @@ test('setupHumanoidCooperativePolishingSurfaceControls can switch to the cylindr
         assert.equal(cylinderBtn.dataset.active, 'true');
         assert.equal(analyticBtn.dataset.active, 'false');
         assert.equal(globalThis.localStorage.getItem('humanoid-cooperative-polishing-surface-source'), 'cylindrical-patch');
-        assert.deepEqual(sourceCalls, ['analytic', 'cylindrical-patch']);
+        assert.deepEqual(sourceCalls, ['cylindrical-patch', 'analytic', 'cylindrical-patch']);
     } finally {
         if (originalWindow === undefined) delete globalThis.window;
         else globalThis.window = originalWindow;

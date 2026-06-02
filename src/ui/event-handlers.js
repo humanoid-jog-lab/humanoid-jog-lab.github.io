@@ -234,6 +234,9 @@ export function setupHumanoidCooperativePolishingSurfaceControls() {
     const analyticBtn = document.getElementById('humanoid-cooperative-polishing-surface-source-analytic-btn');
     const cylinderBtn = document.getElementById('humanoid-cooperative-polishing-surface-source-cylinder-btn');
     const STORAGE_KEY = 'humanoid-cooperative-polishing-surface-source';
+    const DEFAULT_VERSION_STORAGE_KEY = 'humanoid-cooperative-polishing-surface-source-version';
+    const DEFAULT_VERSION = 'cylindrical-patch-default';
+    const DEFAULT_SOURCE = 'cylindrical-patch';
     const buttonBySource = {
         analytic: analyticBtn,
         'cylindrical-patch': cylinderBtn
@@ -250,13 +253,14 @@ export function setupHumanoidCooperativePolishingSurfaceControls() {
     };
 
     const applyHumanoidCooperativePolishingSurfaceSource = async (sourceRaw) => {
-        const source = sourceRaw === 'cylindrical-patch' ? 'cylindrical-patch' : 'analytic';
+        const source = sourceRaw === 'analytic' ? 'analytic' : DEFAULT_SOURCE;
         appState.humanoidCooperativePolishingSurfaceSource = source;
         if (typeof window !== 'undefined') {
             window.humanoidCooperativeRuledSurfaceSource = source;
         }
         try {
             localStorage.setItem(STORAGE_KEY, source);
+            localStorage.setItem(DEFAULT_VERSION_STORAGE_KEY, DEFAULT_VERSION);
         } catch (_) {}
         updateButtonState(source);
         if (appState.visualizer?.setHumanoidCooperativeRuledSurfaceSurfaceSource) {
@@ -268,8 +272,13 @@ export function setupHumanoidCooperativePolishingSurfaceControls() {
     const savedSource = (() => {
         try { return localStorage.getItem(STORAGE_KEY); } catch (_) { return null; }
     })();
+    const savedDefaultVersion = (() => {
+        try { return localStorage.getItem(DEFAULT_VERSION_STORAGE_KEY); } catch (_) { return null; }
+    })();
     void applyHumanoidCooperativePolishingSurfaceSource(
-        savedSource ?? appState.humanoidCooperativePolishingSurfaceSource ?? 'analytic'
+        savedDefaultVersion === DEFAULT_VERSION
+            ? (savedSource ?? appState.humanoidCooperativePolishingSurfaceSource ?? DEFAULT_SOURCE)
+            : DEFAULT_SOURCE
     );
 
     analyticBtn?.addEventListener('click', () => {
