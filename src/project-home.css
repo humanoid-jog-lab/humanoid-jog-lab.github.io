@@ -82,6 +82,50 @@ a {
     white-space: nowrap;
 }
 
+.author-line a {
+    color: var(--accent);
+    text-underline-offset: 0.18em;
+}
+
+.author-line a:hover,
+.author-line a:focus-visible {
+    color: var(--accent-strong);
+    text-decoration: underline;
+}
+
+.author-line a:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 4px;
+    border-radius: 2px;
+}
+
+.author-line sup,
+.affiliation-list sup {
+    font-size: 0.7em;
+    line-height: 0;
+}
+
+.author-line sup {
+    margin-left: 0.15em;
+}
+
+.affiliation-list {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 4px 24px;
+    max-width: 960px;
+    margin: 12px auto 0;
+    color: var(--muted);
+    font-size: clamp(0.92rem, 1.6vw, 1.02rem);
+    line-height: 1.5;
+}
+
+.affiliation-list p {
+    max-width: 100%;
+    margin: 0;
+}
+
 .link-block {
     display: flex;
     flex-wrap: wrap;
