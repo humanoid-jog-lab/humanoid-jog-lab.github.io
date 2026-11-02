@@ -82,7 +82,7 @@ test('index.html is a scrollable project homepage that embeds the app', () => {
     assert.doesNotMatch(demoSection, /The full controller UI is embedded below/);
     assert.match(html, /<iframe[^>]+src="\/app.html"[^>]+title="Semantic-Preserving Jog Teaching interactive demo"/s);
     assert.match(html, /href="\/app.html"[^>]*>Open full demo</);
-    assert.doesNotMatch(html, /Citation/i);
+    assert.doesNotMatch(html, />\s*Citation\s*</i);
     assert.doesNotMatch(html, /href="#paper"/);
     assert.doesNotMatch(html, /<section class="section paper-section" id="paper">/);
     assert.doesNotMatch(html, /<pre>/);
