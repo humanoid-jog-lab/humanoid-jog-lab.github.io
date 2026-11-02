@@ -23,9 +23,9 @@ test('project home hardware videos use deterministic autoplay presentation witho
 test('project home links to and embeds the full YouTube project video', () => {
     const html = readFileSync(resolve(ROOT, 'index.html'), 'utf8');
 
-    assert.match(html, /<a href="https:\/\/youtu\.be\/48x7dkDqff4"[^>]*>Video<\/a>/);
+    assert.match(html, /<a href="https:\/\/youtu\.be\/FtjjyPNJ74Y"[^>]*>Video<\/a>/);
     assert.match(html, /<section class="section youtube-section" id="project-video">/);
-    assert.match(html, /src="https:\/\/www\.youtube\.com\/embed\/48x7dkDqff4\?si=qsekM4cIdK1oLGaO"/);
+    assert.match(html, /src="https:\/\/www\.youtube\.com\/embed\/FtjjyPNJ74Y\?si=MJQLKsYJaQsFRuh9"/);
     assert.match(html, /title="YouTube video player"/);
     assert.match(html, /allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"/);
     assert.match(html, /referrerpolicy="strict-origin-when-cross-origin"/);

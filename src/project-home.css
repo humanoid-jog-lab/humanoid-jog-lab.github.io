@@ -70,6 +70,18 @@ a {
     line-height: 1.08;
 }
 
+.author-line {
+    margin: 22px 0 0;
+    color: var(--muted);
+    font-size: clamp(1.1rem, 2vw, 1.3rem);
+    font-weight: 500;
+}
+
+.author-line span {
+    display: inline-block;
+    white-space: nowrap;
+}
+
 .link-block {
     display: flex;
     flex-wrap: wrap;

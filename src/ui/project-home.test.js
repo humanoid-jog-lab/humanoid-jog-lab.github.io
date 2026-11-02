@@ -10,14 +10,14 @@ test('index.html is a scrollable project homepage that embeds the app', () => {
     const css = readFileSync(resolve(ROOT, 'src/project-home.css'), 'utf8');
     const js = readFileSync(resolve(ROOT, 'src/project-home.js'), 'utf8');
 
-    assert.match(html, /<title>Semantic Mode Contracts and VFI-Aware Manipulability for Humanoid Jog Teaching<\/title>/);
+    assert.match(html, /<title>Semantic-Preserving Jog Teaching for Boundary-Aware Humanoid Upper-Body Manipulation<\/title>/);
     assert.match(html, /<link rel="stylesheet" href="\/src\/project-home.css">/);
     assert.match(html, /class="hero"/);
     assert.match(html, /class="publication-title"/);
     assert.match(html, /class="link-block"/);
     const linkBlock = html.match(/<div class="link-block" aria-label="Project links">([\s\S]*?)<\/div>/)?.[1] || '';
     assert.match(html, /Code \(coming soon\)/);
-    assert.match(html, /href="https:\/\/youtu\.be\/48x7dkDqff4"[^>]*>Video<\/a>/);
+    assert.match(html, /href="https:\/\/youtu\.be\/FtjjyPNJ74Y"[^>]*>Video<\/a>/);
     assert.match(html, /target="_blank"/);
     assert.match(html, /rel="noopener noreferrer"/);
     assert.match(html, /href="#interactive-demo"/);
@@ -27,12 +27,12 @@ test('index.html is a scrollable project homepage that embeds the app', () => {
     assert.doesNotMatch(html, /Interactive Robotics Project/);
     assert.doesNotMatch(html, /A project website and interactive browser demo/);
     assert.doesNotMatch(html, /class="publication-subtitle"/);
-    assert.doesNotMatch(html, /class="author-line"/);
+    assert.match(html, /class="author-line"/);
     assert.doesNotMatch(html, /href="#method"/);
     assert.match(html, /<section class="section youtube-section" id="project-video">/);
     assert.match(html, /<p class="section-kicker">Project Video<\/p>/);
     assert.match(html, /class="youtube-frame-shell"/);
-    assert.match(html, /<iframe[\s\S]*src="https:\/\/www\.youtube\.com\/embed\/48x7dkDqff4\?si=qsekM4cIdK1oLGaO"[\s\S]*title="YouTube video player"[\s\S]*allowfullscreen[\s\S]*><\/iframe>/);
+    assert.match(html, /<iframe[\s\S]*src="https:\/\/www\.youtube\.com\/embed\/FtjjyPNJ74Y\?si=MJQLKsYJaQsFRuh9"[\s\S]*title="YouTube video player"[\s\S]*allowfullscreen[\s\S]*><\/iframe>/);
     assert.match(html, /id="video"/);
     assert.match(html, /class="video-grid"/);
     assert.match(html, /<p class="section-kicker">Hardware Demonstrations<\/p>/);
@@ -64,12 +64,11 @@ test('index.html is a scrollable project homepage that embeds the app', () => {
     assert.doesNotMatch(abstractSection, /<h2>/);
     assert.doesNotMatch(abstractSection, /Paper Abstract/);
     assert.equal((abstractSection.match(/<p(?:\s|>)/g) || []).length, 2);
-    assert.match(html, /Semantic Mode Contracts and VFI-Aware Manipulability for Humanoid Jog Teaching/);
-    assert.doesNotMatch(html, /<h1 class="publication-title">[^<]*Semantic-Preserving[^<]*<\/h1>/);
-    assert.match(html, /This paper studies humanoid upper-body cooperative jog teaching from the viewpoint of\s+constraint-aware manipulability and semantic-preserving local control\./);
-    assert.match(abstractSection, /The resulting manipulability signal is then used as a low-priority\s+posture-quality objective in a safeguarded local update/);
+    assert.match(html, /<h1 class="publication-title">Semantic-Preserving Jog Teaching for Boundary-Aware Humanoid Upper-Body Manipulation<\/h1>/);
+    assert.match(abstractSection, /This paper\s+designs semantic jog modes for humanoid upper-body teaching\./);
+    assert.match(abstractSection, /The weighted manipulability is used as a\s+secondary posture-quality bias/);
     assert.doesNotMatch(abstractSection, /\b(?:ProxQP|QP|quadratic programming)\b/i);
-    assert.match(html, /Simulations and hardware demonstrations validate the resulting\s+semantic preservation, constraint handling, and boundary-aware manipulability behavior\./);
+    assert.match(abstractSection, /Hardware experiments on a humanoid robot demonstrate the\s+effectiveness of the proposed method/);
     assert.ok(html.indexOf('id="abstract"') < html.indexOf('id="project-video"'));
     assert.ok(html.indexOf('id="project-video"') < html.indexOf('id="interactive-demo"'));
     assert.doesNotMatch(html, /id="results"/);
@@ -81,7 +80,7 @@ test('index.html is a scrollable project homepage that embeds the app', () => {
     assert.doesNotMatch(demoSection, /<h2>/);
     assert.doesNotMatch(demoSection, /Embedded Humanoid Jog Lab/);
     assert.doesNotMatch(demoSection, /The full controller UI is embedded below/);
-    assert.match(html, /<iframe[^>]+src="\/app.html"[^>]+title="Humanoid Jog Lab interactive demo"/s);
+    assert.match(html, /<iframe[^>]+src="\/app.html"[^>]+title="Semantic-Preserving Jog Teaching interactive demo"/s);
     assert.match(html, /href="\/app.html"[^>]*>Open full demo</);
     assert.doesNotMatch(html, /Citation/i);
     assert.doesNotMatch(html, /href="#paper"/);
@@ -115,7 +114,7 @@ test('index.html is a scrollable project homepage that embeds the app', () => {
     assert.match(css, /@media \(max-width: 820px\)[\s\S]*\.abstract-section\s*\{[\s\S]*padding: 14px 0 10px;/);
     assert.match(css, /@media \(max-width: 820px\)[\s\S]*\.demo-section\s*\{[\s\S]*padding: 8px 0 52px;/);
     assert.doesNotMatch(css, /publication-subtitle/);
-    assert.doesNotMatch(css, /author-line/);
+    assert.match(css, /\.author-line\s*\{/);
     assert.match(css, /\.publication-title\s*\{[\s\S]*font-size: clamp\(2\.1rem, 4vw, 3\.4rem\);/);
     assert.match(css, /@media \(max-width: 820px\)[\s\S]*\.publication-title\s*\{[\s\S]*font-size: clamp\(1\.85rem, 8vw, 2\.45rem\);/);
     assert.match(js, /requestVideoFrameCallback/);
